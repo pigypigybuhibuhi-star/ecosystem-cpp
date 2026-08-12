@@ -1,0 +1,4 @@
+sim
+sim_neat
+*.o
+.DS_Store
