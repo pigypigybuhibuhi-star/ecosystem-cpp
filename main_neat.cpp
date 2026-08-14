@@ -4,6 +4,9 @@
 #include <cmath>
 #include <algorithm>
 #include <chrono>
+#include <fstream>
+#include <filesystem>
+#include <functional>
 #ifdef _OPENMP
 #include <omp.h>
 #endif
@@ -13,7 +16,7 @@ int prof_frames=0;
 auto now=[](){ return std::chrono::high_resolution_clock::now(); };
 auto ms=[](auto a,auto b){ return std::chrono::duration<double,std::milli>(b-a).count(); };
 // 画面と世界を分離
-const float SCREEN_W=2240.f, SCREEN_H=1200.f;
+float SCREEN_W=1920.f, SCREEN_H=1020.f;
 const float WIDTH=6000.f, HEIGHT=6000.f;   // 世界
 const int NUM_PREY=200, NUM_PREDATOR=50, NUM_PLANT=3000;
 const float SPEED=2.0f;
@@ -325,6 +328,7 @@ struct Agent {
     int repro_count, food_count;
     int last_eat_frame;
     int mate_ready_counter;
+    int cluster;
     bool saw_pred, saw_ally;
 };
 struct Plant { float x,y; int repro_counter; };
@@ -398,6 +402,142 @@ int calc_fit(const Agent& a){
     return (int)(a.repro_count*100 + a.food_count*5 + a.age*0.1f);
 }
 
+struct Lineage {
+    int id; Genome rep; int birth_tick; int death_tick; int parent; bool alive; int pop; int max_pop;
+};
+std::vector<Lineage> lineages;
+int next_lineage_id=0;
+
+// ===== セーブ/ロード(遺伝的セーブ: 脳と遺伝子を残す) =====
+void write_genome(std::ofstream& f, const Genome& g){
+    f << "G " << g.sensors.size() << " " << g.actuators.size() << " " << g.nodes.size() << " " << g.conns.size() << "\n";
+    for(const auto& s:g.sensors) f << s.target << " " << s.angle << " " << s.range << "\n";
+    for(const auto& a:g.actuators) f << a.type << "\n";
+    for(const auto& n:g.nodes) f << n.id << " " << n.type << "\n";
+    for(const auto& c:g.conns) f << c.in_node << " " << c.out_node << " " << c.weight << " " << (c.enabled?1:0) << " " << c.innov << "\n";
+}
+Genome read_genome(std::ifstream& f){
+    Genome g; std::string tag; int ns,na,nn,nc;
+    f >> tag >> ns >> na >> nn >> nc;
+    g.sensors.resize(ns); for(auto& s:g.sensors) f >> s.target >> s.angle >> s.range;
+    g.actuators.resize(na); for(auto& a:g.actuators) f >> a.type;
+    g.nodes.resize(nn); for(auto& n:g.nodes) f >> n.id >> n.type;
+    g.conns.resize(nc); for(auto& c:g.conns){ int en; f >> c.in_node >> c.out_node >> c.weight >> en >> c.innov; c.enabled=(en!=0); }
+    g.finalize();
+    return g;
+}
+void save_state(const std::string& fname, std::vector<Agent>& preys, std::vector<Agent>& predators, int frame){
+    std::ofstream f(fname); if(!f){ printf("save failed: %s\n",fname.c_str()); return; }
+    f.precision(9);
+    f << "ECOSAVE 3\n";
+    f << generation << " " << g_innov_counter << " " << g_next_node_id << " " << frame << "\n";
+    int npy=0; for(auto&p:preys) if(p.alive)npy++;
+    f << "PREYS " << npy << "\n";
+    for(auto&p:preys) if(p.alive){ f << p.genes.size << " " << p.genes.vision << " " << p.genes.eat_gain << " " << p.genes.speed << "\n"; write_genome(f,p.genome); }
+    int npd=0; for(auto&pd:predators) if(pd.alive)npd++;
+    f << "PREDATORS " << npd << "\n";
+    for(auto&pd:predators) if(pd.alive){ f << pd.genes.size << " " << pd.genes.vision << " " << pd.genes.eat_gain << " " << pd.genes.speed << "\n"; write_genome(f,pd.genome); }
+    f << "PREYHALL " << prey_hall.size() << "\n";
+    for(auto&r:prey_hall){ f << r.fit << " " << r.genes.size << " " << r.genes.vision << " " << r.genes.eat_gain << " " << r.genes.speed << "\n"; write_genome(f,r.genome); }
+    f << "LINEAGES " << lineages.size() << " " << next_lineage_id << "\n";
+    for(auto& L:lineages){
+        f << L.id << " " << L.birth_tick << " " << L.death_tick << " " << L.parent << " " << (L.alive?1:0) << " " << L.pop << " " << L.max_pop << "\n";
+        write_genome(f, L.rep);
+    }
+    f << "PREDHALL " << pred_hall.size() << "\n";
+    for(auto&r:pred_hall){ f << r.first << "\n"; write_genome(f,r.second); }
+    printf("saved: %s (prey %d, pred %d)\n",fname.c_str(),npy,npd);
+}
+bool load_state(const std::string& fname, std::vector<Agent>& preys, std::vector<Agent>& predators, int& frame){
+    std::ifstream f(fname); if(!f){ printf("load failed (no file): %s\n",fname.c_str()); return false; }
+    std::string tag; int ver; f >> tag >> ver;
+    if(tag!="ECOSAVE"){ printf("load failed (bad format)\n"); return false; }
+    if(ver>3){ printf("load failed (newer version %d)\n",ver); return false; }
+    f >> generation >> g_innov_counter >> g_next_node_id;
+    if(ver>=2) f >> frame; else frame=0;
+    preys.clear(); predators.clear(); prey_hall.clear(); pred_hall.clear();
+    std::string sec; int cnt;
+    f >> sec >> cnt;
+    for(int i=0;i<cnt;i++){ Genes ge; f >> ge.size >> ge.vision >> ge.eat_gain >> ge.speed; Genome g=read_genome(f); Agent a=make_prey(ge); a.genome=g; preys.push_back(std::move(a)); }
+    f >> sec >> cnt;
+    for(int i=0;i<cnt;i++){ Genes ge; f >> ge.size >> ge.vision >> ge.eat_gain >> ge.speed; Genome g=read_genome(f); Agent a=make_predator(); a.genes=ge; a.genome=g; predators.push_back(std::move(a)); }
+    f >> sec >> cnt;
+    for(int i=0;i<cnt;i++){ PreyRec r; f >> r.fit >> r.genes.size >> r.genes.vision >> r.genes.eat_gain >> r.genes.speed; r.genome=read_genome(f); prey_hall.push_back(std::move(r)); }
+    f >> sec >> cnt;
+    for(int i=0;i<cnt;i++){ int fit; f >> fit; Genome g=read_genome(f); pred_hall.push_back({fit,g}); }
+    lineages.clear(); next_lineage_id=0;
+    if(ver>=3){
+        f >> sec >> cnt >> next_lineage_id;
+        for(int i=0;i<cnt;i++){
+            Lineage L; int en;
+            f >> L.id >> L.birth_tick >> L.death_tick >> L.parent >> en >> L.pop >> L.max_pop;
+            L.alive=(en!=0); L.rep=read_genome(f);
+            lineages.push_back(L);
+        }
+    }
+    printf("loaded: %s (prey %d, pred %d)\n",fname.c_str(),(int)preys.size(),(int)predators.size());
+    return true;
+}
+
+sf::Color cluster_color(int i){
+    static const sf::Color pal[16]={
+        {0,120,255},{60,220,60},{200,80,255},{0,220,220},
+        {120,255,160},{255,120,200},{100,140,255},{160,160,160},
+        {80,200,120},{140,100,220},{60,180,255},{200,120,255},
+        {120,220,180},{255,150,220},{100,255,200},{180,180,255}
+    };
+    return pal[((i%16)+16)%16];
+}
+
+// 生きているpreyを種に分け、血統(履歴)を追跡する。観測のみ、行動には影響しない。
+void update_lineages(std::vector<Agent>& preys, float threshold, int tick){
+    // 1. 今回のクラスタを作る(その場)
+    std::vector<Genome> reps;
+    for(auto& p:preys){
+        if(!p.alive) continue;
+        int best=-1; float bestd=1e9f;
+        for(int i=0;i<(int)reps.size();i++){
+            float d=genome_distance(p.genome, reps[i]);
+            if(d<bestd){ bestd=d; best=i; }
+        }
+        if(best<0 || bestd>=threshold){ best=(int)reps.size(); reps.push_back(p.genome); }
+        p.cluster=best;   // 一時的な今回インデックス
+    }
+    // 2. 今回のクラスタを、既存の血統に照合
+    int oldN=(int)lineages.size();
+    std::vector<int> cluster_lineage(reps.size(), -1);
+    std::vector<bool> claimed(oldN, false);
+    for(int c=0;c<(int)reps.size();c++){
+        int best=-1; float bestd=1e9f;
+        for(int L=0;L<oldN;L++){
+            if(!lineages[L].alive) continue;
+            float d=genome_distance(reps[c], lineages[L].rep);
+            if(d<bestd){ bestd=d; best=L; }
+        }
+        if(best>=0 && bestd<threshold && !claimed[best]){
+            cluster_lineage[c]=best; claimed[best]=true; lineages[best].rep=reps[c];  // 継続
+        } else {
+            Lineage nl; nl.id=next_lineage_id++; nl.rep=reps[c];
+            nl.birth_tick=tick; nl.death_tick=-1;
+            nl.parent=(best>=0)?lineages[best].id:-1; nl.alive=true; nl.pop=0; nl.max_pop=0;  // 誕生(分岐)
+            cluster_lineage[c]=(int)lineages.size(); lineages.push_back(nl);
+        }
+    }
+    // 3. 今回どのクラスタにも一致しなかった血統 → 絶滅
+    for(int L=0;L<oldN;L++){
+        if(lineages[L].alive && !claimed[L]){ lineages[L].alive=false; lineages[L].death_tick=tick; }
+    }
+    // 4. preyに血統IDを割り当て + 個体数を数える
+    for(auto& lin:lineages) lin.pop=0;
+    for(auto& p:preys){
+        if(!p.alive) continue;
+        int Lidx=cluster_lineage[p.cluster];
+        p.cluster=lineages[Lidx].id;      // ← p.cluster に"消えない血統ID"が入る
+        lineages[Lidx].pop++;
+    }
+    for(auto& lin:lineages) if(lin.pop>lin.max_pop) lin.max_pop=lin.pop;
+}
+
 int main(){
 // === 段階5a-1(改)テスト: 交叉 + 流産検査 ===
     // === OpenMP 動作確認 ===
@@ -406,9 +546,15 @@ int main(){
     #else
         printf("OpenMP is NOT enabled\n");
     #endif
-
-    sf::RenderWindow window(sf::VideoMode({2240,1200}),"Ecosystem C++",sf::Style::Titlebar|sf::Style::Close);
+    
+    sf::VideoMode desktop = sf::VideoMode::getDesktopMode();
+    SCREEN_W = (float)desktop.size.x;
+    SCREEN_H = (float)desktop.size.y;
+    zoom = SCREEN_H/HEIGHT;   // 新しい画面高さに合わせて初期ズームを再計算
+    sf::RenderWindow window(desktop,"Ecosystem C++",sf::State::Fullscreen);
     sf::Font font;
+    bool font_ok = font.openFromFile("/System/Library/Fonts/Helvetica.ttc");
+    if(!font_ok) font_ok = font.openFromFile("/System/Library/Fonts/Supplemental/Arial.ttf");
     if(!font_ok) font_ok = font.openFromFile("C:\\Windows\\Fonts\\arial.ttf");
     if(!font_ok) font_ok = font.openFromFile("C:\\Windows\\Fonts\\segoeui.ttf");
     window.setFramerateLimit(60);
@@ -432,12 +578,22 @@ int main(){
     bool show_nutrient=false, show_phero=false, dragging=false;
     float drag_sx=0,drag_sy=0,cam_sx=0,cam_sy=0;
     int frame=0;
+    int autosave_timer=0;
+    int autosave_slot=0;
+    const int AUTOSAVE_INTERVAL=7200;   // 2分ごと(60fps×120秒)
     int selected_id=-1;
+    float species_threshold=0.35f;
+    bool show_tree=false;
+    int ui_mode=0;                    // 0=通常, 1=セーブ名入力, 2=ロード選択
+    std::string input_text="";
+    std::vector<std::string> save_files;
 
     float measured_fps=60.f;   // 実測FPS(初期値60)
     auto last_time=std::chrono::high_resolution_clock::now();
 
     int peak_prey=0, peak_pred=0, peak_plant=0, peak_meat=0;
+
+    long prey_starve=0, prey_killed=0, pred_starve=0;
     
     std::vector<int> hist_prey, hist_pred, hist_plant, hist_meat;
     
@@ -450,16 +606,61 @@ int main(){
         }
     };
     bool paused=false;
+    bool is_fullscreen=true;   // 起動時は全画面
 
     char prof_str[256]="";
 
     while(window.isOpen()){
         while(const std::optional event=window.pollEvent()){
             if(event->is<sf::Event::Closed>())window.close();
+            // 文字入力(セーブ名/ロード名)
+            if(const auto* te=event->getIf<sf::Event::TextEntered>()){
+                if(ui_mode!=0){
+                    char32_t u=te->unicode;
+                    if(u==8){ if(!input_text.empty()) input_text.pop_back(); }         // Backspace
+                    else if(u>=32 && u<127){ if(input_text.size()<40) input_text+=(char)u; }
+                }
+            }
             if(const auto* k=event->getIf<sf::Event::KeyPressed>()){
-                if(k->code==sf::Keyboard::Key::G)show_nutrient=!show_nutrient;
-                if(k->code==sf::Keyboard::Key::F)show_phero=!show_phero;
-                if(k->code==sf::Keyboard::Key::Space)paused=!paused;
+                if(ui_mode!=0){
+                    // 入力モード中: Enterで確定, Escでキャンセル
+                    if(k->code==sf::Keyboard::Key::Enter){
+                        if(!input_text.empty()){
+                            if(ui_mode==1) save_state(input_text+".txt", preys, predators, frame);
+                            else if(ui_mode==2) load_state(input_text+".txt", preys, predators, frame);
+                        }
+                        ui_mode=0; input_text="";
+                    }
+                    if(k->code==sf::Keyboard::Key::Escape){ ui_mode=0; input_text=""; }
+                } else {
+                    if(k->code==sf::Keyboard::Key::G)show_nutrient=!show_nutrient;
+                    if(k->code==sf::Keyboard::Key::F)show_phero=!show_phero;
+                    if(k->code==sf::Keyboard::Key::T)show_tree=!show_tree;
+                    if(k->code==sf::Keyboard::Key::Space)paused=!paused;
+                    if(k->code==sf::Keyboard::Key::Escape){
+                    is_fullscreen=!is_fullscreen;
+                    if(is_fullscreen){
+                        window.create(desktop,"Ecosystem C++",sf::State::Fullscreen);
+                        SCREEN_W=(float)desktop.size.x; SCREEN_H=(float)desktop.size.y;
+                    }else{
+                        window.create(sf::VideoMode({1600,900}),"Ecosystem C++",sf::Style::Titlebar|sf::Style::Close);
+                        SCREEN_W=1600.f; SCREEN_H=900.f;
+                    }
+                    window.setFramerateLimit(60);
+                    }
+                    if(k->code==sf::Keyboard::Key::K){ ui_mode=1; input_text=""; }
+                    if(k->code==sf::Keyboard::Key::L){
+                        ui_mode=2; input_text="";
+                        save_files.clear();
+                        try{
+                            for(auto& e: std::filesystem::directory_iterator(".")){
+                                if(e.is_regular_file() && e.path().extension().string()==".txt")
+                                    save_files.push_back(e.path().stem().string());
+                            }
+                            std::sort(save_files.begin(),save_files.end());
+                        }catch(...){}
+                    }
+                }
             }
             if(const auto* mb=event->getIf<sf::Event::MouseButtonPressed>()){
                 if(mb->button==sf::Mouse::Button::Left){
@@ -600,7 +801,7 @@ int main(){
             p.age++;
             float sp=std::sqrt(p.vx*p.vx+p.vy*p.vy);
             p.energy-=p.genes.size*METABOLISM_COEF+0.5f*p.genes.size*sp*sp*MOVE_COEF+p.genome.cached_active_conns*BRAIN_COST_COEF;
-            if(p.energy<=0){p.alive=false;meats.push_back({p.x,p.y,p.genes.size*MEAT_SIZE_COEF+std::max(0.f,p.energy)});continue;}
+            if(p.energy<=0){p.alive=false;prey_starve++;meats.push_back({p.x,p.y,p.genes.size*MEAT_SIZE_COEF+std::max(0.f,p.energy)});continue;}
             bool pred_sight=p.saw_pred, ally_sight=p.saw_ally;   // NNで計算済みを使う
             if(pred_sight)p.fear+=FEAR_RISE;else p.fear-=FEAR_DECAY;p.fear=clamp01(p.fear);
             if(ally_sight)p.affinity+=AFFINITY_RISE;else p.affinity-=AFFINITY_DECAY;p.affinity=clamp01(p.affinity);
@@ -618,7 +819,7 @@ int main(){
             pd.x+=pd.vx;pd.y+=pd.vy;
             if(pd.x<0)pd.x+=WIDTH;if(pd.x>=WIDTH)pd.x-=WIDTH;if(pd.y<0)pd.y+=HEIGHT;if(pd.y>=HEIGHT)pd.y-=HEIGHT;
             pd.age++;pd.energy-=METABOLISM;
-            if(pd.energy<=0){pd.alive=false;meats.push_back({pd.x,pd.y,pd.genes.size*MEAT_SIZE_COEF+std::max(0.f,pd.energy)});}
+            if(pd.energy<=0){pd.alive=false;pred_starve++;meats.push_back({pd.x,pd.y,pd.genes.size*MEAT_SIZE_COEF+std::max(0.f,pd.energy)});}
         }
         t_move += ms(_t2,now());
 
@@ -648,7 +849,7 @@ int main(){
                     if(!preys[pi].alive)continue;
                     float ddx=torus_delta(pd.x,preys[pi].x,WIDTH),ddy=torus_delta(pd.y,preys[pi].y,HEIGHT);
                     if(ddx*ddx+ddy*ddy<EAT_DISTANCE*EAT_DISTANCE){
-                        preys[pi].alive=false; pd.food_count++;prey_hall.push_back({calc_fit(preys[pi]),preys[pi].genome,preys[pi].genes});
+                        preys[pi].alive=false; prey_killed++; pd.food_count++;prey_hall.push_back({calc_fit(preys[pi]),preys[pi].genome,preys[pi].genes});
                         meats.push_back({preys[pi].x,preys[pi].y,preys[pi].genes.size*MEAT_SIZE_COEF+std::max(0.f,preys[pi].energy)});
                     }
                 }
@@ -673,6 +874,7 @@ int main(){
         auto _t4=now();
         if(frame%3==0){ nutrient.update();ph_fear.update();ph_aff.update(); }
         t_field += ms(_t4,now());
+        if(frame%180==0) update_lineages(preys, species_threshold, frame);
 
         std::vector<Agent> babies;
         for(auto& p:preys){
@@ -758,11 +960,13 @@ int main(){
         }
     }
         // WASDでカメラ移動
-        float pan=15.f/zoom;   // ズームに応じて移動量調整
-        if(sf::Keyboard::isKeyPressed(sf::Keyboard::Key::W))cam_y-=pan;
-        if(sf::Keyboard::isKeyPressed(sf::Keyboard::Key::S))cam_y+=pan;
-        if(sf::Keyboard::isKeyPressed(sf::Keyboard::Key::A))cam_x-=pan;
-        if(sf::Keyboard::isKeyPressed(sf::Keyboard::Key::D))cam_x+=pan;
+        float pan=15.f/zoom;
+        if(ui_mode==0){
+            if(sf::Keyboard::isKeyPressed(sf::Keyboard::Key::W))cam_y-=pan;
+            if(sf::Keyboard::isKeyPressed(sf::Keyboard::Key::S))cam_y+=pan;
+            if(sf::Keyboard::isKeyPressed(sf::Keyboard::Key::A))cam_x-=pan;
+            if(sf::Keyboard::isKeyPressed(sf::Keyboard::Key::D))cam_x+=pan;
+        }
         if(cam_x<0)cam_x=0; if(cam_x>WIDTH)cam_x=WIDTH;
         if(cam_y<0)cam_y=0; if(cam_y>HEIGHT)cam_y=HEIGHT;
 
@@ -840,7 +1044,7 @@ int main(){
                 if(!on_screen(p.x,p.y))continue;
                 float r=std::max(1.f,p.genes.size*zoom);
                 float x=w2s_x(p.x),y=w2s_y(p.y);
-                sf::Color col(0,100,255);
+                sf::Color col=cluster_color(p.cluster);
                 sf::Vertex a,b,c,d;
                 a.position={x-r,y-r};a.color=col; b.position={x+r,y-r};b.color=col;
                 c.position={x+r,y+r};c.color=col; d.position={x-r,y+r};d.color=col;
@@ -916,19 +1120,66 @@ int main(){
                 {
                     float pv = sel->is_prey ? sel->genes.vision : PREDATOR_VISION;
                     float sx=w2s_x(sel->x), sy=w2s_y(sel->y);
+                    float rFood[NUM_RAYS]={0}, rEnemy[NUM_RAYS]={0}, rAlly[NUM_RAYS]={0}, rMeat[NUM_RAYS]={0};
+                    int scx=(int)sel->x/CELL_SIZE, scy=(int)sel->y/CELL_SIZE;
+                    int cr=(int)std::ceil(pv/CELL_SIZE);
+                    auto rayIndex=[&](float ddx,float ddy)->int{
+                        if(sel->is_prey){
+                            float rel=std::fmod(std::atan2(ddy,ddx)-facing+TWO_PI*2,TWO_PI);
+                            return (int)(rel/TWO_PI*NUM_RAYS+0.5f)%NUM_RAYS;
+                        }else{
+                            float rel=std::fmod(std::atan2(ddy,ddx)-facing+PI*3,TWO_PI)-PI;
+                            if(rel<-PREDATOR_FOV/2||rel>PREDATOR_FOV/2)return -1;
+                            int ri=(int)((rel+PREDATOR_FOV/2)/PREDATOR_FOV*(NUM_RAYS-1)+0.5f);
+                            if(ri<0)ri=0; if(ri>=NUM_RAYS)ri=NUM_RAYS-1; return ri;
+                        }
+                    };
+                    for(int dx=-cr;dx<=cr;dx++)for(int dy=-cr;dy<=cr;dy++){
+                        int cx=scx+dx,cy=scy+dy; if(cx<0||cx>=GRID_COLS||cy<0||cy>=GRID_ROWS)continue;
+                        int ci=cell_index(cx,cy);
+                        if(sel->is_prey){
+                            for(int pi:plant_grid[ci]){
+                                float ddx=torus_delta(sel->x,plants[pi].x,WIDTH),ddy=torus_delta(sel->y,plants[pi].y,HEIGHT);
+                                float d2=ddx*ddx+ddy*ddy; if(d2>pv*pv||d2<1)continue;
+                                int ri=rayIndex(ddx,ddy); if(ri<0)continue; float val=1.f-std::sqrt(d2)/pv; if(val>rFood[ri])rFood[ri]=val;
+                            }
+                            for(int pi:pred_grid[ci]){ if(!predators[pi].alive)continue;
+                                float ddx=torus_delta(sel->x,predators[pi].x,WIDTH),ddy=torus_delta(sel->y,predators[pi].y,HEIGHT);
+                                float d2=ddx*ddx+ddy*ddy; if(d2>pv*pv||d2<1)continue;
+                                int ri=rayIndex(ddx,ddy); if(ri<0)continue; float val=1.f-std::sqrt(d2)/pv; if(val>rEnemy[ri])rEnemy[ri]=val;
+                            }
+                            for(int pi:prey_grid[ci]){ if(!preys[pi].alive||preys[pi].id==sel->id)continue;
+                                float ddx=torus_delta(sel->x,preys[pi].x,WIDTH),ddy=torus_delta(sel->y,preys[pi].y,HEIGHT);
+                                float d2=ddx*ddx+ddy*ddy; if(d2>pv*pv||d2<1)continue;
+                                int ri=rayIndex(ddx,ddy); if(ri<0)continue; float val=1.f-std::sqrt(d2)/pv; if(val>rAlly[ri])rAlly[ri]=val;
+                            }
+                        } else {
+                            for(int pi:prey_grid[ci]){ if(!preys[pi].alive)continue;
+                                float ddx=torus_delta(sel->x,preys[pi].x,WIDTH),ddy=torus_delta(sel->y,preys[pi].y,HEIGHT);
+                                float d2=ddx*ddx+ddy*ddy; if(d2>pv*pv||d2<1)continue;
+                                int ri=rayIndex(ddx,ddy); if(ri<0)continue; float val=1.f-std::sqrt(d2)/pv; if(val>rFood[ri])rFood[ri]=val;
+                            }
+                            for(int pi:meat_grid[ci]){ if(meats[pi].energy<=0)continue;
+                                float ddx=torus_delta(sel->x,meats[pi].x,WIDTH),ddy=torus_delta(sel->y,meats[pi].y,HEIGHT);
+                                float d2=ddx*ddx+ddy*ddy; if(d2>pv*pv||d2<1)continue;
+                                int ri=rayIndex(ddx,ddy); if(ri<0)continue; float val=1.f-std::sqrt(d2)/pv; if(val>rMeat[ri])rMeat[ri]=val;
+                            }
+                            for(int pi:pred_grid[ci]){ if(!predators[pi].alive||predators[pi].id==sel->id)continue;
+                                float ddx=torus_delta(sel->x,predators[pi].x,WIDTH),ddy=torus_delta(sel->y,predators[pi].y,HEIGHT);
+                                float d2=ddx*ddx+ddy*ddy; if(d2>pv*pv||d2<1)continue;
+                                int ri=rayIndex(ddx,ddy); if(ri<0)continue; float val=1.f-std::sqrt(d2)/pv; if(val>rAlly[ri])rAlly[ri]=val;
+                            }
+                        }
+                    }
                     for(int i=0;i<NUM_RAYS;i++){
                         float ang;
                         if(sel->is_prey) ang = facing + TWO_PI*((float)i/NUM_RAYS);
                         else ang = facing - PREDATOR_FOV/2 + PREDATOR_FOV*((float)i/(NUM_RAYS-1));
-                        // このレイに映ってるもの(prey視覚:植物in[i], 捕食者in[12+i])
-                        sf::Color rc2(60,60,60,120);
-                        if(sel->is_prey){
-                            float plantv=in[i], predv=in[NUM_RAYS+i];
-                            if(predv>plantv && predv>0.01f) rc2=sf::Color(255,60,60,200);
-                            else if(plantv>0.01f) rc2=sf::Color(60,255,60,200);
-                        } else {
-                            if(in[i]>0.01f) rc2=sf::Color(255,120,60,200);
-                        }
+                        float mx=0.01f; sf::Color rc2(60,60,60,120);
+                        if(rFood[i]>mx){ mx=rFood[i]; rc2=sf::Color(60,255,60,200); }
+                        if(rEnemy[i]>mx){ mx=rEnemy[i]; rc2=sf::Color(255,60,60,200); }
+                        if(rMeat[i]>mx){ mx=rMeat[i]; rc2=sf::Color(230,200,40,200); }
+                        if(rAlly[i]>mx){ mx=rAlly[i]; rc2=sf::Color(60,160,255,200); }
                         float ex=sx+std::cos(ang)*pv*zoom, ey=sy+std::sin(ang)*pv*zoom;
                         sf::VertexArray line(sf::PrimitiveType::Lines,2);
                         line[0].position={sx,sy}; line[0].color=rc2;
@@ -1214,11 +1465,115 @@ int main(){
             ft.setPosition({cx-fw/2.f, boxY+8.f+th+6.f-b2.position.y});
             window.draw(ft);
         }
-       
+        
+        // 脳の複雑さ(平均) prey vs predator
+        if(font_ok){
+            double pH=0,pC=0,dH=0,dC=0; int npy=0,npd=0;
+            int pHmax=0,pCmax=0,dHmax=0,dCmax=0;
+            for(const auto& p:preys){ if(!p.alive)continue;
+                int h=(int)p.genome.nodes.size()-p.genome.cached_n_in-(int)p.genome.actuators.size();
+                int c=p.genome.cached_active_conns;
+                pH+=h; pC+=c; if(h>pHmax)pHmax=h; if(c>pCmax)pCmax=c; npy++; }
+            for(const auto& pd:predators){ if(!pd.alive)continue;
+                int h=(int)pd.genome.nodes.size()-pd.genome.cached_n_in-(int)pd.genome.actuators.size();
+                int c=pd.genome.cached_active_conns;
+                dH+=h; dC+=c; if(h>dHmax)dHmax=h; if(c>dCmax)dCmax=c; npd++; }
+            char bs[240];
+            snprintf(bs,240,"Brain | Prey: hidden %.1f (max %d), conns %.0f (max %d)   Predator: hidden %.1f (max %d), conns %.0f (max %d)",
+                     npy?pH/npy:0.0, pHmax, npy?pC/npy:0.0, pCmax, npd?dH/npd:0.0, dHmax, npd?dC/npd:0.0, dCmax);
+            sf::Text bt(font,bs,14); bt.setFillColor(sf::Color(180,220,255));
+            bt.setPosition({12.f, SCREEN_H-46.f});
+            window.draw(bt);
+        }
+
+        if(font_ok){
+            long ptot=prey_starve+prey_killed;
+            char ds[220];
+            snprintf(ds,220,"Prey deaths: starved %.0f%% / eaten %.0f%% (total %ld)   Pred starved: %ld",
+                     ptot?100.0*prey_starve/ptot:0.0, ptot?100.0*prey_killed/ptot:0.0, ptot, pred_starve);
+            sf::Text dt(font,ds,14); dt.setFillColor(sf::Color(255,210,150));
+            dt.setPosition({12.f, SCREEN_H-66.f});
+            window.draw(dt);
+        }
+        
+        if(font_ok){
+            int alive_lin=0; for(auto&l:lineages) if(l.alive)alive_lin++;
+            char cs[160];
+            snprintf(cs,160,"Species alive: %d   lineages ever: %d   threshold %.2f", alive_lin, (int)lineages.size(), species_threshold);
+            sf::Text ct(font,cs,14); ct.setFillColor(sf::Color(200,255,200));
+            ct.setPosition({12.f, SCREEN_H-86.f});
+            window.draw(ct);
+        }
+
         if(font_ok && prof_str[0]!='\0'){
             sf::Text pt(font,prof_str,14); pt.setFillColor(sf::Color::White);
             pt.setPosition({12.f, SCREEN_H-26.f});
             window.draw(pt);
+        }
+        if(font_ok && ui_mode!=0){
+            float bw=640.f, bh=(ui_mode==2?220.f:70.f);
+            float bx=SCREEN_W/2.f-bw/2.f, by=SCREEN_H/2.f-bh/2.f;
+            sf::RectangleShape box({bw,bh}); box.setPosition({bx,by});
+            box.setFillColor(sf::Color(0,0,0,220)); box.setOutlineColor(sf::Color(200,200,200)); box.setOutlineThickness(2.f);
+            window.draw(box);
+            char pr[128];
+            snprintf(pr,128,"%s  %s_", ui_mode==1?"Save as:":"Load (type name, Enter):", input_text.c_str());
+            sf::Text t(font,pr,18); t.setFillColor(sf::Color::White); t.setPosition({bx+14.f,by+12.f});
+            window.draw(t);
+            if(ui_mode==2){
+                float ly=by+44.f;
+                for(int i=0;i<(int)save_files.size() && i<8;i++){
+                    sf::Text ft(font,save_files[i],14); ft.setFillColor(sf::Color(180,220,255));
+                    ft.setPosition({bx+18.f,ly}); window.draw(ft); ly+=20.f;
+                }
+            }
+        }
+        // ===== 系統樹(Tキーで表示。上=過去, 下=現在)=====
+        if(show_tree && font_ok){
+            int N=(int)lineages.size();
+            float panelX=SCREEN_W*0.08f, panelY=SCREEN_H*0.10f;
+            float panelW=SCREEN_W*0.42f, panelH=SCREEN_H*0.80f;
+            sf::RectangleShape bg({panelW,panelH}); bg.setPosition({panelX,panelY});
+            bg.setFillColor(sf::Color(0,0,0,225)); bg.setOutlineColor(sf::Color(150,150,150)); bg.setOutlineThickness(2.f);
+            window.draw(bg);
+            float inX=panelX+20.f, inY=panelY+45.f, inW=panelW-40.f, inH=panelH-75.f;
+            if(N>0){
+                // x位置: 葉=順番に並べ, 内部=子の平均(枝が重ならないように)
+                std::vector<float> lx(N,-1.f);
+                int leafc=0;
+                std::function<float(int)> assign=[&](int i)->float{
+                    std::vector<int> ch;
+                    for(int j=0;j<N;j++) if(lineages[j].parent==lineages[i].id) ch.push_back(j);
+                    if(ch.empty()){ lx[i]=(float)(leafc++); return lx[i]; }
+                    float s=0; for(int c:ch) s+=assign(c); lx[i]=s/ch.size(); return lx[i];
+                };
+                for(int i=0;i<N;i++) if(lineages[i].parent<0) assign(i);
+                float xspan=(leafc>1)?(float)(leafc-1):1.f;
+                float T1=(float)std::max(1,frame);
+                auto sx=[&](float slot){ return inX + (leafc>1 ? slot/xspan : 0.5f)*inW; };
+                auto ty=[&](int tick){ return inY + ((float)tick/T1)*inH; };   // 上=tick小=過去, 下=現在
+                sf::VertexArray va(sf::PrimitiveType::Lines);
+                for(int i=0;i<N;i++){
+                    float x=sx(lx[i]);
+                    int bt=lineages[i].birth_tick;
+                    int dt=lineages[i].alive?frame:lineages[i].death_tick;
+                    sf::Color col=cluster_color(lineages[i].id);
+                    sf::Vertex a,b; a.position={x,ty(bt)}; a.color=col; b.position={x,ty(dt)}; b.color=col;
+                    va.append(a); va.append(b);                       // 縦線=生存期間
+                    if(lineages[i].parent>=0){
+                        float px=sx(lx[lineages[i].parent]);
+                        sf::Color pc=col; pc.a=150;
+                        sf::Vertex c,d; c.position={px,ty(bt)}; c.color=pc; d.position={x,ty(bt)}; d.color=pc;
+                        va.append(c); va.append(d);                   // 横線=親からの分岐
+                    }
+                }
+                window.draw(va);
+            }
+            int alive_lin=0; for(auto&l:lineages) if(l.alive)alive_lin++;
+            char tt[128]; snprintf(tt,128,"Phylogeny   alive %d / ever %d   (T to close)", alive_lin, N);
+            sf::Text ttl(font,tt,16); ttl.setFillColor(sf::Color::White); ttl.setPosition({panelX+14.f,panelY+12.f}); window.draw(ttl);
+            sf::Text pastT(font,"past",12); pastT.setFillColor(sf::Color(150,150,150)); pastT.setPosition({panelX+panelW-48.f,panelY+40.f}); window.draw(pastT);
+            sf::Text nowT(font,"now",12); nowT.setFillColor(sf::Color(150,150,150)); nowT.setPosition({panelX+panelW-48.f,panelY+panelH-22.f}); window.draw(nowT);
         }
         window.display();
         t_draw += ms(_t5,now());
@@ -1239,6 +1594,12 @@ int main(){
             if((int)plants.size()>peak_plant)peak_plant=(int)plants.size();
             if((int)meats.size()>peak_meat)peak_meat=(int)meats.size();
             frame++;
+            if(++autosave_timer >= AUTOSAVE_INTERVAL){
+                autosave_timer=0;
+                char afn[32]; snprintf(afn,32,"autosave%d.txt",autosave_slot);
+                save_state(afn, preys, predators, frame);
+                autosave_slot=(autosave_slot+1)%3;   // autosave0→1→2→0 と回す
+            }
         }
         prof_frames++;
         if(prof_frames>=60){
