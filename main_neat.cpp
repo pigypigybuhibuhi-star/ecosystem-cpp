@@ -417,8 +417,10 @@ void write_genome(std::ofstream& f, const Genome& g){
     for(const auto& c:g.conns) f << c.in_node << " " << c.out_node << " " << c.weight << " " << (c.enabled?1:0) << " " << c.innov << "\n";
 }
 Genome read_genome(std::ifstream& f){
-    Genome g; std::string tag; int ns,na,nn,nc;
+    Genome g; std::string tag; int ns=0,na=0,nn=0,nc=0;
     f >> tag >> ns >> na >> nn >> nc;
+    if(!f || tag!="G" || ns<0||ns>10000 || na<0||na>1000 || nn<0||nn>200000 || nc<0||nc>2000000)
+        throw std::runtime_error("bad genome record");
     g.sensors.resize(ns); for(auto& s:g.sensors) f >> s.target >> s.angle >> s.range;
     g.actuators.resize(na); for(auto& a:g.actuators) f >> a.type;
     g.nodes.resize(nn); for(auto& n:g.nodes) f >> n.id >> n.type;
@@ -452,6 +454,7 @@ bool load_state(const std::string& fname, std::vector<Agent>& preys, std::vector
     std::ifstream f(fname); if(!f){ printf("load failed (no file): %s\n",fname.c_str()); return false; }
     std::string tag; int ver; f >> tag >> ver;
     if(tag!="ECOSAVE"){ printf("load failed (bad format)\n"); return false; }
+    try {
     if(ver>3){ printf("load failed (newer version %d)\n",ver); return false; }
     f >> generation >> g_innov_counter >> g_next_node_id;
     if(ver>=2) f >> frame; else frame=0;
@@ -463,8 +466,6 @@ bool load_state(const std::string& fname, std::vector<Agent>& preys, std::vector
     for(int i=0;i<cnt;i++){ Genes ge; f >> ge.size >> ge.vision >> ge.eat_gain >> ge.speed; Genome g=read_genome(f); Agent a=make_predator(); a.genes=ge; a.genome=g; predators.push_back(std::move(a)); }
     f >> sec >> cnt;
     for(int i=0;i<cnt;i++){ PreyRec r; f >> r.fit >> r.genes.size >> r.genes.vision >> r.genes.eat_gain >> r.genes.speed; r.genome=read_genome(f); prey_hall.push_back(std::move(r)); }
-    f >> sec >> cnt;
-    for(int i=0;i<cnt;i++){ int fit; f >> fit; Genome g=read_genome(f); pred_hall.push_back({fit,g}); }
     lineages.clear(); next_lineage_id=0;
     if(ver>=3){
         f >> sec >> cnt >> next_lineage_id;
@@ -475,8 +476,15 @@ bool load_state(const std::string& fname, std::vector<Agent>& preys, std::vector
             lineages.push_back(L);
         }
     }
+    f >> sec >> cnt;
+    for(int i=0;i<cnt;i++){ int fit; f >> fit; Genome g=read_genome(f); pred_hall.push_back({fit,g}); }
     printf("loaded: %s (prey %d, pred %d)\n",fname.c_str(),(int)preys.size(),(int)predators.size());
     return true;
+    } catch(const std::exception& e){
+        printf("load failed (corrupt/incompatible): %s\n", e.what());
+        preys.clear(); predators.clear(); lineages.clear();
+        return false;
+    }
 }
 
 sf::Color cluster_color(int i){
@@ -586,6 +594,7 @@ int main(){
     bool show_tree=false;
     int ui_mode=0;                    // 0=通常, 1=セーブ名入力, 2=ロード選択
     std::string input_text="";
+    bool ui_skip_char=false;
     std::vector<std::string> save_files;
 
     float measured_fps=60.f;   // 実測FPS(初期値60)
@@ -617,7 +626,8 @@ int main(){
             if(const auto* te=event->getIf<sf::Event::TextEntered>()){
                 if(ui_mode!=0){
                     char32_t u=te->unicode;
-                    if(u==8){ if(!input_text.empty()) input_text.pop_back(); }         // Backspace
+                    if(ui_skip_char){ ui_skip_char=false; }                          // モード開始のk/lを捨てる
+                    else if(u==8){ if(!input_text.empty()) input_text.pop_back(); }
                     else if(u>=32 && u<127){ if(input_text.size()<40) input_text+=(char)u; }
                 }
             }
@@ -648,9 +658,9 @@ int main(){
                     }
                     window.setFramerateLimit(60);
                     }
-                    if(k->code==sf::Keyboard::Key::K){ ui_mode=1; input_text=""; }
+                    if(k->code==sf::Keyboard::Key::K){ ui_mode=1; input_text=""; ui_skip_char=true; }
                     if(k->code==sf::Keyboard::Key::L){
-                        ui_mode=2; input_text="";
+                        ui_mode=2; input_text=""; ui_skip_char=true;
                         save_files.clear();
                         try{
                             for(auto& e: std::filesystem::directory_iterator(".")){
@@ -909,6 +919,7 @@ int main(){
                     } else {
                         Agent c=make_prey(mutate_genes(p.genes,p.stress));
                         c.genome=child_genome;
+                        c.cluster=p.cluster;   // 母の血統を継ぐ(次のクラスタリングまで正しい色)
                         c.x=p.x+frand(-10,10);c.y=p.y+frand(-10,10);c.energy=cost*0.5f;babies.push_back(std::move(c));
                     }
                 }
@@ -1528,22 +1539,20 @@ int main(){
                 }
             }
         }
-        // ===== 系統樹(Tキーで表示。上=過去, 下=現在)=====
+        // ===== 系統樹(Tキーで表示。上=過去, 下=現在。画面いっぱい)=====
         if(show_tree && font_ok){
             int N=(int)lineages.size();
-            float panelX=SCREEN_W*0.08f, panelY=SCREEN_H*0.10f;
-            float panelW=SCREEN_W*0.42f, panelH=SCREEN_H*0.80f;
+            float panelX=SCREEN_W*0.02f, panelY=SCREEN_H*0.03f;
+            float panelW=SCREEN_W*0.96f, panelH=SCREEN_H*0.94f;
             sf::RectangleShape bg({panelW,panelH}); bg.setPosition({panelX,panelY});
-            bg.setFillColor(sf::Color(0,0,0,225)); bg.setOutlineColor(sf::Color(150,150,150)); bg.setOutlineThickness(2.f);
+            bg.setFillColor(sf::Color(0,0,0,235)); bg.setOutlineColor(sf::Color(150,150,150)); bg.setOutlineThickness(2.f);
             window.draw(bg);
-            float inX=panelX+20.f, inY=panelY+45.f, inW=panelW-40.f, inH=panelH-75.f;
+            float inX=panelX+30.f, inY=panelY+55.f, inW=panelW-60.f, inH=panelH-95.f;
+            std::vector<float> sxpos(N,0.f), sy0(N,0.f), sy1(N,0.f);
             if(N>0){
-                // x位置: 葉=順番に並べ, 内部=子の平均(枝が重ならないように)
-                std::vector<float> lx(N,-1.f);
-                int leafc=0;
+                std::vector<float> lx(N,-1.f); int leafc=0;
                 std::function<float(int)> assign=[&](int i)->float{
-                    std::vector<int> ch;
-                    for(int j=0;j<N;j++) if(lineages[j].parent==lineages[i].id) ch.push_back(j);
+                    std::vector<int> ch; for(int j=0;j<N;j++) if(lineages[j].parent==lineages[i].id) ch.push_back(j);
                     if(ch.empty()){ lx[i]=(float)(leafc++); return lx[i]; }
                     float s=0; for(int c:ch) s+=assign(c); lx[i]=s/ch.size(); return lx[i];
                 };
@@ -1551,29 +1560,65 @@ int main(){
                 float xspan=(leafc>1)?(float)(leafc-1):1.f;
                 float T1=(float)std::max(1,frame);
                 auto sx=[&](float slot){ return inX + (leafc>1 ? slot/xspan : 0.5f)*inW; };
-                auto ty=[&](int tick){ return inY + ((float)tick/T1)*inH; };   // 上=tick小=過去, 下=現在
+                auto ty=[&](int tick){ return inY + ((float)tick/T1)*inH; };
                 sf::VertexArray va(sf::PrimitiveType::Lines);
                 for(int i=0;i<N;i++){
                     float x=sx(lx[i]);
                     int bt=lineages[i].birth_tick;
                     int dt=lineages[i].alive?frame:lineages[i].death_tick;
+                    sxpos[i]=x; sy0[i]=ty(bt); sy1[i]=ty(dt);
                     sf::Color col=cluster_color(lineages[i].id);
                     sf::Vertex a,b; a.position={x,ty(bt)}; a.color=col; b.position={x,ty(dt)}; b.color=col;
-                    va.append(a); va.append(b);                       // 縦線=生存期間
+                    va.append(a); va.append(b);
                     if(lineages[i].parent>=0){
-                        float px=sx(lx[lineages[i].parent]);
-                        sf::Color pc=col; pc.a=150;
-                        sf::Vertex c,d; c.position={px,ty(bt)}; c.color=pc; d.position={x,ty(bt)}; d.color=pc;
-                        va.append(c); va.append(d);                   // 横線=親からの分岐
+                        int pj=-1; for(int j=0;j<N;j++) if(lineages[j].id==lineages[i].parent){pj=j;break;}
+                        if(pj>=0){
+                            float px=sx(lx[pj]); sf::Color pc=col; pc.a=150;
+                            sf::Vertex c,d; c.position={px,ty(bt)}; c.color=pc; d.position={x,ty(bt)}; d.color=pc;
+                            va.append(c); va.append(d);
+                        }
                     }
                 }
                 window.draw(va);
+                sf::VertexArray xm(sf::PrimitiveType::Lines);
+                for(int i=0;i<N;i++){
+                    if(lineages[i].alive) continue;
+                    float x=sxpos[i], y=sy1[i], r=5.f; sf::Color col=cluster_color(lineages[i].id);
+                    sf::Vertex a,b,c,d;
+                    a.position={x-r,y-r}; a.color=col; b.position={x+r,y+r}; b.color=col;
+                    c.position={x-r,y+r}; c.color=col; d.position={x+r,y-r}; d.color=col;
+                    xm.append(a);xm.append(b);xm.append(c);xm.append(d);
+                }
+                window.draw(xm);
             }
             int alive_lin=0; for(auto&l:lineages) if(l.alive)alive_lin++;
-            char tt[128]; snprintf(tt,128,"Phylogeny   alive %d / ever %d   (T to close)", alive_lin, N);
-            sf::Text ttl(font,tt,16); ttl.setFillColor(sf::Color::White); ttl.setPosition({panelX+14.f,panelY+12.f}); window.draw(ttl);
-            sf::Text pastT(font,"past",12); pastT.setFillColor(sf::Color(150,150,150)); pastT.setPosition({panelX+panelW-48.f,panelY+40.f}); window.draw(pastT);
-            sf::Text nowT(font,"now",12); nowT.setFillColor(sf::Color(150,150,150)); nowT.setPosition({panelX+panelW-48.f,panelY+panelH-22.f}); window.draw(nowT);
+            char tt[128]; snprintf(tt,128,"Phylogeny   alive %d / ever %d   (T close)", alive_lin, N);
+            sf::Text ttl(font,tt,18); ttl.setFillColor(sf::Color::White); ttl.setPosition({panelX+16.f,panelY+14.f}); window.draw(ttl);
+            sf::Text pastT(font,"past",13); pastT.setFillColor(sf::Color(150,150,150)); pastT.setPosition({panelX+6.f,inY-4.f}); window.draw(pastT);
+            sf::Text nowT(font,"now",13); nowT.setFillColor(sf::Color(150,150,150)); nowT.setPosition({panelX+6.f,inY+inH-4.f}); window.draw(nowT);
+            sf::Vector2i mp=sf::Mouse::getPosition(window);
+            int hit=-1; float bestdx=8.f;
+            for(int i=0;i<N;i++){
+                if(mp.y>=sy0[i]-3 && mp.y<=sy1[i]+3){
+                    float dx=std::fabs((float)mp.x - sxpos[i]);
+                    if(dx<bestdx){ bestdx=dx; hit=i; }
+                }
+            }
+            if(hit>=0){
+                char hb[128];
+                snprintf(hb,128,"species #%d   now %d   max %d%s", lineages[hit].id, lineages[hit].pop, lineages[hit].max_pop, lineages[hit].alive?"":"  (extinct)");
+                sf::Text ht(font,hb,14); ht.setFillColor(sf::Color::White);
+                sf::FloatRect hbnd=ht.getLocalBounds();
+                float boxW=hbnd.size.x+14.f, boxH=24.f;
+                float bx=(float)mp.x+12.f, by=(float)mp.y+12.f;
+                if(bx+boxW > SCREEN_W-10.f) bx=(float)mp.x-12.f-boxW;   // 右端 → 左に出す
+                if(by+boxH > SCREEN_H-10.f) by=(float)mp.y-12.f-boxH;   // 下端 → 上に出す
+                if(bx<10.f) bx=10.f;
+                sf::RectangleShape hbg({boxW,boxH}); hbg.setPosition({bx-4.f,by-2.f});
+                hbg.setFillColor(sf::Color(20,20,20,235)); hbg.setOutlineColor(cluster_color(lineages[hit].id)); hbg.setOutlineThickness(1.5f);
+                window.draw(hbg);
+                ht.setPosition({bx+2.f,by}); window.draw(ht);
+            }
         }
         window.display();
         t_draw += ms(_t5,now());
