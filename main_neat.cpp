@@ -403,7 +403,7 @@ int calc_fit(const Agent& a){
 }
 
 struct Lineage {
-    int id; Genome rep; int birth_tick; int death_tick; int parent; bool alive; int pop; int max_pop;
+    int id; Genome rep; int birth_tick; int death_tick; int parent; bool alive; int pop; int max_pop; int fused_into;
 };
 std::vector<Lineage> lineages;
 int next_lineage_id=0;
@@ -488,13 +488,15 @@ bool load_state(const std::string& fname, std::vector<Agent>& preys, std::vector
 }
 
 sf::Color cluster_color(int i){
-    static const sf::Color pal[16]={
-        {0,120,255},{60,220,60},{200,80,255},{0,220,220},
-        {120,255,160},{255,120,200},{100,140,255},{160,160,160},
-        {80,200,120},{140,100,220},{60,180,255},{200,120,255},
-        {120,220,180},{255,150,220},{100,255,200},{180,180,255}
-    };
-    return pal[((i%16)+16)%16];
+    // 色相を黄金比(0.618)で回す → 何種でも隣が別色になる
+    float h = std::fmod(0.60f + (float)i*0.61803399f, 1.0f) * 360.f;   // 0..360°
+    float s = 0.72f, v = 1.0f;
+    float c = v*s, x = c*(1.f - std::fabs(std::fmod(h/60.f, 2.f) - 1.f)), m = v-c;
+    float r,g,b;
+    if(h<60){ r=c; g=x; b=0; } else if(h<120){ r=x; g=c; b=0; }
+    else if(h<180){ r=0; g=c; b=x; } else if(h<240){ r=0; g=x; b=c; }
+    else if(h<300){ r=x; g=0; b=c; } else { r=c; g=0; b=x; }
+    return sf::Color((int)((r+m)*255),(int)((g+m)*255),(int)((b+m)*255));
 }
 
 // 生きているpreyを種に分け、血統(履歴)を追跡する。観測のみ、行動には影響しない。
@@ -527,13 +529,22 @@ void update_lineages(std::vector<Agent>& preys, float threshold, int tick){
         } else {
             Lineage nl; nl.id=next_lineage_id++; nl.rep=reps[c];
             nl.birth_tick=tick; nl.death_tick=-1;
-            nl.parent=(best>=0)?lineages[best].id:-1; nl.alive=true; nl.pop=0; nl.max_pop=0;  // 誕生(分岐)
+            nl.parent=(best>=0)?lineages[best].id:-1; nl.alive=true; nl.pop=0; nl.max_pop=0; nl.fused_into=-1;  // 誕生(分岐)
             cluster_lineage[c]=(int)lineages.size(); lineages.push_back(nl);
         }
     }
-    // 3. 今回どのクラスタにも一致しなかった血統 → 絶滅
+    // 3. 今回どのクラスタにも一致しなかった血統 → 融合(近い存続血統がある)or 絶滅
     for(int L=0;L<oldN;L++){
-        if(lineages[L].alive && !claimed[L]){ lineages[L].alive=false; lineages[L].death_tick=tick; }
+        if(!lineages[L].alive || claimed[L]) continue;
+        int near=-1; float nd=1e9f;
+        for(int M=0;M<(int)lineages.size();M++){
+            if(M==L || !lineages[M].alive) continue;
+            float d=genome_distance(lineages[L].rep, lineages[M].rep);
+            if(d<nd){ nd=d; near=M; }
+        }
+        lineages[L].alive=false; lineages[L].death_tick=tick;
+        if(near>=0 && nd<threshold) lineages[L].fused_into=lineages[near].id;  // ← 融合
+        else lineages[L].fused_into=-1;                                        // ← 純粋な絶滅
     }
     // 4. preyに血統IDを割り当て + 個体数を数える
     for(auto& lin:lineages) lin.pop=0;
@@ -592,6 +603,7 @@ int main(){
     int selected_id=-1;
     float species_threshold=0.35f;
     bool show_tree=false;
+    std::string tree_search="";
     int ui_mode=0;                    // 0=通常, 1=セーブ名入力, 2=ロード選択
     std::string input_text="";
     bool ui_skip_char=false;
@@ -624,11 +636,14 @@ int main(){
             if(event->is<sf::Event::Closed>())window.close();
             // 文字入力(セーブ名/ロード名)
             if(const auto* te=event->getIf<sf::Event::TextEntered>()){
+                char32_t u=te->unicode;
                 if(ui_mode!=0){
-                    char32_t u=te->unicode;
-                    if(ui_skip_char){ ui_skip_char=false; }                          // モード開始のk/lを捨てる
+                    if(ui_skip_char){ ui_skip_char=false; }
                     else if(u==8){ if(!input_text.empty()) input_text.pop_back(); }
                     else if(u>=32 && u<127){ if(input_text.size()<40) input_text+=(char)u; }
+                } else if(show_tree){
+                    if(u==8){ if(!tree_search.empty()) tree_search.pop_back(); }        // Backspaceで消す
+                    else if(u>='0' && u<='9'){ if(tree_search.size()<6) tree_search+=(char)u; }
                 }
             }
             if(const auto* k=event->getIf<sf::Event::KeyPressed>()){
@@ -1307,6 +1322,7 @@ int main(){
 
                     // 接続(線)を描く
                     sf::VertexArray va(sf::PrimitiveType::Lines);
+                    sf::VertexArray va2(sf::PrimitiveType::Lines);
                     for(const auto& c:gen.conns){
                         if(!c.enabled)continue;
                         float aw=std::fabs(c.weight); if(aw<0.15f)continue;
@@ -1514,8 +1530,9 @@ int main(){
         
         if(font_ok){
             int alive_lin=0; for(auto&l:lineages) if(l.alive)alive_lin++;
-            char cs[160];
-            snprintf(cs,160,"Species alive: %d   lineages ever: %d   threshold %.2f", alive_lin, (int)lineages.size(), species_threshold);
+            int nfuse=0, next=0; for(auto&l:lineages){ if(l.fused_into>=0)nfuse++; else if(!l.alive)next++; }
+            char cs[200];
+            snprintf(cs,200,"Species alive: %d   ever: %d   fused: %d   extinct: %d   threshold %.2f", alive_lin, (int)lineages.size(), nfuse, next, species_threshold);
             sf::Text ct(font,cs,14); ct.setFillColor(sf::Color(200,255,200));
             ct.setPosition({12.f, SCREEN_H-86.f});
             window.draw(ct);
@@ -1575,6 +1592,7 @@ int main(){
                 auto sx=[&](float slot){ return inX + (leafc>1 ? slot/xspan : 0.5f)*inW; };
                 auto ty=[&](int tick){ return inY + ((float)tick/T1)*inH; };
                 sf::VertexArray va(sf::PrimitiveType::Lines);
+                sf::VertexArray va2(sf::PrimitiveType::Lines);
                 for(int i=0;i<N;i++){
                     float x=sx(lx[i]);
                     int bt=lineages[i].birth_tick;
@@ -1592,7 +1610,46 @@ int main(){
                         }
                     }
                 }
+                // 融合線(reticulation): 消えた血統の先端 → 融合先へ、斜めの合流線
+                for(int i=0;i<N;i++){
+                    if(lineages[i].fused_into<0) continue;
+                    int mj=-1; for(int j=0;j<N;j++) if(lineages[j].id==lineages[i].fused_into){mj=j;break;}
+                    if(mj<0) continue;
+                    float fx=sxpos[i], fy=sy1[i];                          // 融合した血統の先端(死亡点)
+                    float tx=sxpos[mj], tyy=ty(lineages[i].death_tick);    // 融合先の、同じ時刻の点
+                    sf::Color col=cluster_color(lineages[i].id); col.a=180;
+                    // 破線っぽく、2本の色で(融合元→先)
+                    sf::Vertex a,b; a.position={fx,fy}; a.color=col;
+                    sf::Color col2=cluster_color(lineages[mj].id); col2.a=180;
+                    b.position={tx,tyy}; b.color=col2;
+                    va2.append(a); va2.append(b);
+                }
+                window.draw(va2);
                 window.draw(va);
+                // 種検索: ヒットした血統の線を点滅ハイライト
+                if(!tree_search.empty()){
+                    static int anim=0; anim++;
+                    int sid=0; for(char ch:tree_search) sid=sid*10+(ch-'0');
+                    int hi=-1; for(int i=0;i<N;i++) if(lineages[i].id==sid){ hi=i; break; }
+                    if(hi>=0){
+                        float pulse=0.55f+0.45f*std::sin(anim*0.25f);
+                        int A=(int)(pulse*255);
+                        float x=sxpos[hi], y0=sy0[hi], y1=sy1[hi];
+                        sf::RectangleShape hl({9.f, std::max(2.f,y1-y0)});
+                        hl.setPosition({x-4.5f, y0}); hl.setFillColor(sf::Color(255,255,255,(int)(A*0.45f)));
+                        window.draw(hl);
+                        for(float yy : {y0,y1}){
+                            float r=6.f+4.f*pulse;
+                            sf::CircleShape ring(r); ring.setOrigin({r,r}); ring.setPosition({x,yy});
+                            ring.setFillColor(sf::Color::Transparent);
+                            ring.setOutlineColor(sf::Color(255,255,80,A)); ring.setOutlineThickness(2.5f);
+                            window.draw(ring);
+                        }
+                        char lbl[24]; snprintf(lbl,24,"#%d",sid);
+                        sf::Text lt(font,lbl,16); lt.setFillColor(sf::Color(255,255,80,A));
+                        lt.setPosition({x+9.f,y0-6.f}); window.draw(lt);
+                    }
+                }
                 sf::VertexArray xm(sf::PrimitiveType::Lines);
                 for(int i=0;i<N;i++){
                     if(lineages[i].alive) continue;
@@ -1607,6 +1664,13 @@ int main(){
             int alive_lin=0; for(auto&l:lineages) if(l.alive)alive_lin++;
             char tt[128]; snprintf(tt,128,"Phylogeny   alive %d / ever %d   (T close)", alive_lin, N);
             sf::Text ttl(font,tt,18); ttl.setFillColor(sf::Color::White); ttl.setPosition({panelX+16.f,panelY+14.f}); window.draw(ttl);
+            {
+                int sid=0; bool has=!tree_search.empty(); for(char ch:tree_search) sid=sid*10+(ch-'0');
+                bool found=false; if(has) for(int i=0;i<N;i++) if(lineages[i].id==sid){found=true;break;}
+                char sb2[80]; snprintf(sb2,80,"search #: %s_%s", tree_search.c_str(), has?(found?"  (found)":"  (no match)"):"  (type digits)");
+                sf::Text st2(font,sb2,14); st2.setFillColor(found?sf::Color(255,255,80):sf::Color(180,180,180));
+                st2.setPosition({panelX+16.f,panelY+38.f}); window.draw(st2);
+            }
             sf::Text pastT(font,"past",13); pastT.setFillColor(sf::Color(150,150,150)); pastT.setPosition({panelX+6.f,inY-4.f}); window.draw(pastT);
             sf::Text nowT(font,"now",13); nowT.setFillColor(sf::Color(150,150,150)); nowT.setPosition({panelX+6.f,inY+inH-4.f}); window.draw(nowT);
             sf::Vector2i mp=sf::Mouse::getPosition(window);
@@ -1619,7 +1683,10 @@ int main(){
             }
             if(hit>=0){
                 char hb[128];
-                snprintf(hb,128,"species #%d   now %d   max %d%s", lineages[hit].id, lineages[hit].pop, lineages[hit].max_pop, lineages[hit].alive?"":"  (extinct)");
+                if(lineages[hit].fused_into>=0)
+                    snprintf(hb,128,"species #%d   max %d   -> fused into #%d", lineages[hit].id, lineages[hit].max_pop, lineages[hit].fused_into);
+                else
+                    snprintf(hb,128,"species #%d   now %d   max %d%s", lineages[hit].id, lineages[hit].pop, lineages[hit].max_pop, lineages[hit].alive?"":"  (extinct)");
                 sf::Text ht(font,hb,14); ht.setFillColor(sf::Color::White);
                 sf::FloatRect hbnd=ht.getLocalBounds();
                 float boxW=hbnd.size.x+14.f, boxH=24.f;
