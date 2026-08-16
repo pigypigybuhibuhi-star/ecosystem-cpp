@@ -1222,6 +1222,11 @@ int main(){
                     snprintf(buf,sizeof(buf),"Age: %.1fs", sel->age/60.f);
                     { sf::Text t(font,buf,13); t.setPosition({SX,by}); t.setFillColor(sf::Color::White); window.draw(t); by+=lh; }
                     if(sel->is_prey){
+                        sf::RectangleShape sq({12.f,12.f}); sq.setPosition({SX,by+1.f}); sq.setFillColor(cluster_color(sel->cluster)); window.draw(sq);
+                        char sb2[64]; snprintf(sb2,64,"    Species #%d", sel->cluster);
+                        sf::Text t(font,sb2,13); t.setPosition({SX,by}); t.setFillColor(sf::Color::White); window.draw(t); by+=lh;
+                    }
+                    if(sel->is_prey){
                         snprintf(buf,sizeof(buf),"Size x%.2f  Vision x%.2f", sel->genes.size/BASE_SIZE, sel->genes.vision/PREY_VISION);
                         { sf::Text t(font,buf,13); t.setPosition({SX,by}); t.setFillColor(sf::Color::White); window.draw(t); by+=lh; }
                         snprintf(buf,sizeof(buf),"Eat x%.2f   Speed x%.2f", sel->genes.eat_gain/EAT_GAIN, sel->genes.speed/SPEED);
@@ -1522,20 +1527,28 @@ int main(){
             window.draw(pt);
         }
         if(font_ok && ui_mode!=0){
-            float bw=640.f, bh=(ui_mode==2?220.f:70.f);
+            int nf=(int)save_files.size();
+            float bw=700.f;
+            float bh=(ui_mode==1)?70.f : std::min(SCREEN_H*0.9f, 58.f+std::max(1,nf)*18.f);
             float bx=SCREEN_W/2.f-bw/2.f, by=SCREEN_H/2.f-bh/2.f;
             sf::RectangleShape box({bw,bh}); box.setPosition({bx,by});
-            box.setFillColor(sf::Color(0,0,0,220)); box.setOutlineColor(sf::Color(200,200,200)); box.setOutlineThickness(2.f);
+            box.setFillColor(sf::Color(0,0,0,225)); box.setOutlineColor(sf::Color(200,200,200)); box.setOutlineThickness(2.f);
             window.draw(box);
-            char pr[128];
-            snprintf(pr,128,"%s  %s_", ui_mode==1?"Save as:":"Load (type name, Enter):", input_text.c_str());
+            char pr[160];
+            snprintf(pr,160,"%s  %s_", ui_mode==1?"Save as:":"Load (type name, Enter):", input_text.c_str());
             sf::Text t(font,pr,18); t.setFillColor(sf::Color::White); t.setPosition({bx+14.f,by+12.f});
             window.draw(t);
             if(ui_mode==2){
                 float ly=by+44.f;
-                for(int i=0;i<(int)save_files.size() && i<8;i++){
+                int maxshow=(int)((bh-50.f)/18.f);
+                for(int i=0;i<nf && i<maxshow;i++){
                     sf::Text ft(font,save_files[i],14); ft.setFillColor(sf::Color(180,220,255));
-                    ft.setPosition({bx+18.f,ly}); window.draw(ft); ly+=20.f;
+                    ft.setPosition({bx+18.f,ly}); window.draw(ft); ly+=18.f;
+                }
+                if(nf>maxshow){
+                    char more[48]; snprintf(more,48,"...and %d more",nf-maxshow);
+                    sf::Text mt(font,more,12); mt.setFillColor(sf::Color(150,150,150));
+                    mt.setPosition({bx+18.f,ly}); window.draw(mt);
                 }
             }
         }
