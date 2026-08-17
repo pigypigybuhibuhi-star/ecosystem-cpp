@@ -11,7 +11,7 @@
 #include <omp.h>
 #endif
 // 計測用
-double t_prey_nn=0,t_pred_nn=0,t_move=0,t_eat=0,t_field=0,t_draw=0,t_grid=0;
+double t_prey_nn=0,t_pred_nn=0,t_move=0,t_eat=0,t_field=0,t_draw=0,t_grid=0,t_lineage=0;
 int prof_frames=0;
 auto now=[](){ return std::chrono::high_resolution_clock::now(); };
 auto ms=[](auto a,auto b){ return std::chrono::duration<double,std::milli>(b-a).count(); };
@@ -328,6 +328,7 @@ struct Agent {
     int repro_count, food_count;
     int last_eat_frame;
     int mate_ready_counter;
+    std::vector<float> cached_sv;   // 視覚の隔フレーム再利用
     int cluster;
     bool saw_pred, saw_ally;
 };
@@ -521,17 +522,20 @@ sf::Color cluster_color(int i){
 
 // 生きているpreyを種に分け、血統(履歴)を追跡する。観測のみ、行動には影響しない。
 void update_lineages(std::vector<Agent>& preys, float threshold, int tick){
-    // 1. 今回のクラスタを作る(その場)
+    // 1. 今回のクラスタを作る(サンプリング: 全個体でなく間引いて種を発見)
     std::vector<Genome> reps;
+    int alive_count=0; for(auto&p:preys) if(p.alive) alive_count++;
+    int stride = std::max(1, alive_count/1500);   // 最大1500匹をサンプル
+    int seen=0;
     for(auto& p:preys){
         if(!p.alive) continue;
+        if((seen++ % stride)!=0) continue;         // 間引く
         int best=-1; float bestd=1e9f;
         for(int i=0;i<(int)reps.size();i++){
             float d=genome_distance(p.genome, reps[i]);
             if(d<bestd){ bestd=d; best=i; }
         }
         if(best<0 || bestd>=threshold){ best=(int)reps.size(); reps.push_back(p.genome); }
-        p.cluster=best;   // 一時的な今回インデックス
     }
     // 2. 今回のクラスタを、既存の血統に照合
     int oldN=(int)lineages.size();
@@ -574,8 +578,15 @@ void update_lineages(std::vector<Agent>& preys, float threshold, int tick){
     for(auto& lin:lineages) lin.pop=0;
     for(auto& p:preys){
         if(!p.alive) continue;
-        int Lidx=cluster_lineage[p.cluster];
-        p.cluster=lineages[Lidx].id;      // ← p.cluster に"消えない血統ID"が入る
+        // 全preyを、今回見つかった代表(reps)の中で一番近いものに割り当てる
+        int best=-1; float bestd=1e9f;
+        for(int i=0;i<(int)reps.size();i++){
+            float d=genome_distance(p.genome, reps[i]);
+            if(d<bestd){ bestd=d; best=i; }
+        }
+        if(best<0){ continue; }            // reps が空(prey全滅寸前)なら飛ばす
+        int Lidx=cluster_lineage[best];
+        p.cluster=lineages[Lidx].id;       // 消えない血統IDを振る
         lineages[Lidx].pop++;
     }
     for(auto& lin:lineages) if(lin.pop>lin.max_pop) lin.max_pop=lin.pop;
@@ -781,41 +792,48 @@ int main(){
         for(int idx=0; idx<(int)preys.size(); idx++){
             Agent& p = preys[idx];
             if(!p.alive)continue;
-            float vp[NUM_RAYS]={0},vpr[NUM_RAYS]={0},vself[NUM_RAYS]={0};   // vself追加
-            float facing=std::atan2(p.vy,p.vx); float pv=p.genes.vision;
-            int cr=(int)std::ceil(pv/CELL_SIZE); int scx=(int)p.x/CELL_SIZE,scy=(int)p.y/CELL_SIZE;
-            for(int dx=-cr;dx<=cr;dx++)for(int dy=-cr;dy<=cr;dy++){
-                int cx=scx+dx,cy=scy+dy; if(cx<0||cx>=GRID_COLS||cy<0||cy>=GRID_ROWS)continue;
-                for(int pi:plant_grid[cell_index(cx,cy)]){
-                    float ddx=torus_delta(p.x,plants[pi].x,WIDTH),ddy=torus_delta(p.y,plants[pi].y,HEIGHT);
-                    float d2=ddx*ddx+ddy*ddy; if(d2>pv*pv||d2<1)continue;
-                    float d=std::sqrt(d2);float rel=std::fmod(std::atan2(ddy,ddx)-facing+TWO_PI*2,TWO_PI);
-                    int ri=(int)(rel/TWO_PI*NUM_RAYS+0.5f)%NUM_RAYS;float val=1.f-d/pv;if(val>vp[ri])vp[ri]=val;
+            static thread_local std::vector<float> sv(37, 0.f);
+            // 視覚は2フレームに1回だけ更新(idと frame の偶奇で分散)。他フレームは前回の視覚を再利用
+            bool do_vision = (p.cached_sv.size()!=37) || ((frame + p.id) % 2 == 0);
+            if(do_vision){
+                float vp[NUM_RAYS]={0},vpr[NUM_RAYS]={0},vself[NUM_RAYS]={0};
+                float facing=std::atan2(p.vy,p.vx); float pv=p.genes.vision;
+                int cr=(int)std::ceil(pv/CELL_SIZE); int scx=(int)p.x/CELL_SIZE,scy=(int)p.y/CELL_SIZE;
+                for(int dx=-cr;dx<=cr;dx++)for(int dy=-cr;dy<=cr;dy++){
+                    int cx=scx+dx,cy=scy+dy; if(cx<0||cx>=GRID_COLS||cy<0||cy>=GRID_ROWS)continue;
+                    for(int pi:plant_grid[cell_index(cx,cy)]){
+                        float ddx=torus_delta(p.x,plants[pi].x,WIDTH),ddy=torus_delta(p.y,plants[pi].y,HEIGHT);
+                        float d2=ddx*ddx+ddy*ddy; if(d2>pv*pv||d2<1)continue;
+                        float d=std::sqrt(d2);float rel=std::fmod(std::atan2(ddy,ddx)-facing+TWO_PI*2,TWO_PI);
+                        int ri=(int)(rel/TWO_PI*NUM_RAYS+0.5f)%NUM_RAYS;float val=1.f-d/pv;if(val>vp[ri])vp[ri]=val;
+                    }
+                    for(int pi:pred_grid[cell_index(cx,cy)]){
+                        if(!predators[pi].alive)continue;
+                        float ddx=torus_delta(p.x,predators[pi].x,WIDTH),ddy=torus_delta(p.y,predators[pi].y,HEIGHT);
+                        float d2=ddx*ddx+ddy*ddy; if(d2>pv*pv||d2<1)continue;
+                        float d=std::sqrt(d2);float rel=std::fmod(std::atan2(ddy,ddx)-facing+TWO_PI*2,TWO_PI);
+                        int ri=(int)(rel/TWO_PI*NUM_RAYS+0.5f)%NUM_RAYS;float val=1.f-d/pv;if(val>vpr[ri])vpr[ri]=val;
+                    }
+                    for(int pi:prey_grid[cell_index(cx,cy)]){
+                        if(!preys[pi].alive || preys[pi].id==p.id)continue;
+                        float ddx=torus_delta(p.x,preys[pi].x,WIDTH),ddy=torus_delta(p.y,preys[pi].y,HEIGHT);
+                        float d2=ddx*ddx+ddy*ddy; if(d2>pv*pv||d2<1)continue;
+                        float d=std::sqrt(d2);float rel=std::fmod(std::atan2(ddy,ddx)-facing+TWO_PI*2,TWO_PI);
+                        int ri=(int)(rel/TWO_PI*NUM_RAYS+0.5f)%NUM_RAYS;float val=1.f-d/pv;if(val>vself[ri])vself[ri]=val;
+                    }
                 }
-                for(int pi:pred_grid[cell_index(cx,cy)]){
-                    if(!predators[pi].alive)continue;
-                    float ddx=torus_delta(p.x,predators[pi].x,WIDTH),ddy=torus_delta(p.y,predators[pi].y,HEIGHT);
-                    float d2=ddx*ddx+ddy*ddy; if(d2>pv*pv||d2<1)continue;
-                    float d=std::sqrt(d2);float rel=std::fmod(std::atan2(ddy,ddx)-facing+TWO_PI*2,TWO_PI);
-                    int ri=(int)(rel/TWO_PI*NUM_RAYS+0.5f)%NUM_RAYS;float val=1.f-d/pv;if(val>vpr[ri])vpr[ri]=val;
-                }
-                for(int pi:prey_grid[cell_index(cx,cy)]){
-                    if(!preys[pi].alive || preys[pi].id==p.id)continue;   // 自分は除く
-                    float ddx=torus_delta(p.x,preys[pi].x,WIDTH),ddy=torus_delta(p.y,preys[pi].y,HEIGHT);
-                    float d2=ddx*ddx+ddy*ddy; if(d2>pv*pv||d2<1)continue;
-                    float d=std::sqrt(d2);float rel=std::fmod(std::atan2(ddy,ddx)-facing+TWO_PI*2,TWO_PI);
-                    int ri=(int)(rel/TWO_PI*NUM_RAYS+0.5f)%NUM_RAYS;float val=1.f-d/pv;if(val>vself[ri])vself[ri]=val;
-                }
+                std::fill(sv.begin(), sv.end(), 0.f);
+                for(int i=0;i<12;i++){ sv[i]=vp[i]; sv[12+i]=vpr[i]; sv[24+i]=vself[i]; }
+                sv[36]=p.energy/p.max_energy;
+                bool sp=false, sa=false;
+                for(int i=0;i<12;i++){ if(vpr[i]>0.01f)sp=true; if(vself[i]>0.01f)sa=true; }
+                p.saw_pred=sp; p.saw_ally=sa;
+                p.cached_sv=sv;                       // 今回の視覚を保存
+            } else {
+                sv = p.cached_sv;                     // 前回の視覚を再利用(スキャンをスキップ)
+                sv[36]=p.energy/p.max_energy;         // エネルギーだけ最新に
             }
-            // Genome用のセンサー値(37個)を作る
-            std::vector<float> sv(37, 0.f);
-            for(int i=0;i<12;i++){ sv[i]=vp[i]; sv[12+i]=vpr[i]; sv[24+i]=vself[i]; }   // 同種も入れる
-            sv[36]=p.energy/p.max_energy;
-            // 感情用の記録
-            bool sp=false, sa=false;
-            for(int i=0;i<12;i++){ if(vpr[i]>0.01f)sp=true; if(vself[i]>0.01f)sa=true; }
-            p.saw_pred=sp; p.saw_ally=sa;
-            std::vector<float> out;
+            static thread_local std::vector<float> out;
             p.genome.forward(sv, out);
             p.vx=out[0]*p.genes.speed; p.vy=out[1]*p.genes.speed;
         }
@@ -882,15 +900,20 @@ int main(){
         auto _t3=now();
         for(auto& p:preys){
             if(!p.alive)continue;
+            if(frame - p.last_eat_frame < 18)continue;   // ← クールタイム中はスキャン自体スキップ(最大の軽量化)
             int cxmin=(int)(p.x-EAT_DISTANCE)/CELL_SIZE, cxmax=(int)(p.x+EAT_DISTANCE)/CELL_SIZE;
             int cymin=(int)(p.y-EAT_DISTANCE)/CELL_SIZE, cymax=(int)(p.y+EAT_DISTANCE)/CELL_SIZE;
-            for(int cx=cxmin;cx<=cxmax;cx++)for(int cy=cymin;cy<=cymax;cy++){
+            bool ate=false;
+            for(int cx=cxmin;cx<=cxmax && !ate;cx++)for(int cy=cymin;cy<=cymax && !ate;cy++){
                 if(cx<0||cx>=GRID_COLS||cy<0||cy>=GRID_ROWS)continue;
                 for(int pi:plant_grid[cell_index(cx,cy)]){
                     if(plants[pi].x<0)continue;
-                    if(frame - p.last_eat_frame < 18)continue;   // 0.3秒(18フレーム)クールタイム
                     float ddx=torus_delta(p.x,plants[pi].x,WIDTH),ddy=torus_delta(p.y,plants[pi].y,HEIGHT);
-                    if(ddx*ddx+ddy*ddy<EAT_DISTANCE*EAT_DISTANCE){p.energy+=p.genes.eat_gain; if(p.energy>p.max_energy)p.energy=p.max_energy; plants[pi].x=-1; p.food_count++; p.last_eat_frame=frame;}
+                    if(ddx*ddx+ddy*ddy<EAT_DISTANCE*EAT_DISTANCE){
+                        p.energy+=p.genes.eat_gain; if(p.energy>p.max_energy)p.energy=p.max_energy;
+                        plants[pi].x=-1; p.food_count++; p.last_eat_frame=frame;
+                        ate=true; break;   // ← 1個食べたら、このpreyのスキャン終了
+                    }
                 }
             }
         }
@@ -930,7 +953,7 @@ int main(){
         auto _t4=now();
         if(frame%3==0){ nutrient.update();ph_fear.update();ph_aff.update(); }
         t_field += ms(_t4,now());
-        if(frame%180==0) update_lineages(preys, species_threshold, world_tick);
+        if(frame%180==0){ auto _tl=now(); update_lineages(preys, species_threshold, world_tick); t_lineage += ms(_tl,now()); }
 
         std::vector<Agent> babies;
         for(auto& p:preys){
@@ -1769,9 +1792,9 @@ float ms_per_frame=1000.f/measured_fps;
         }
         prof_frames++;
         if(prof_frames>=60){
-            snprintf(prof_str,256,"preyNN=%.2f predNN=%.2f move=%.2f eat=%.2f field=%.2f draw=%.2f",
-                     t_prey_nn/prof_frames,t_pred_nn/prof_frames,t_move/prof_frames,t_eat/prof_frames,t_field/prof_frames,t_draw/prof_frames);
-            t_prey_nn=t_pred_nn=t_move=t_eat=t_field=t_draw=0; prof_frames=0;
+            snprintf(prof_str,256,"preyNN=%.2f predNN=%.2f move=%.2f eat=%.2f field=%.2f draw=%.2f grid=%.2f lineage=%.2f",
+                     t_prey_nn/prof_frames,t_pred_nn/prof_frames,t_move/prof_frames,t_eat/prof_frames,t_field/prof_frames,t_draw/prof_frames,t_grid/prof_frames,t_lineage/prof_frames);
+            t_prey_nn=t_pred_nn=t_move=t_eat=t_field=t_draw=t_grid=t_lineage=0; prof_frames=0;
         }
     }
     return 0;
