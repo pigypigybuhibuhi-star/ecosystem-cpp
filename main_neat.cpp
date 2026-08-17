@@ -357,6 +357,7 @@ std::vector<PreyRec> prey_hall;
 std::vector<std::pair<int,Genome>> pred_hall;
 int generation=1;
 long prey_starve=0, prey_killed=0, pred_starve=0;
+int world_tick=0;   // 世界時計: リスタートしても0に戻らない総tick
 std::vector<int> hist_prey, hist_pred, hist_plant, hist_meat;
 
 // preyのセンサー37個を作る(植物12 + 敵12 + 同種12 + energy1)
@@ -433,8 +434,8 @@ Genome read_genome(std::ifstream& f){
 void save_state(const std::string& fname, std::vector<Agent>& preys, std::vector<Agent>& predators, int frame){
     std::ofstream f(fname); if(!f){ printf("save failed: %s\n",fname.c_str()); return; }
     f.precision(9);
-    f << "ECOSAVE 6\n";
-    f << generation << " " << g_innov_counter << " " << g_next_node_id << " " << frame << "\n";
+    f << "ECOSAVE 7\n";
+    f << generation << " " << g_innov_counter << " " << g_next_node_id << " " << frame << " " << world_tick << "\n";
     int npy=0; for(auto&p:preys) if(p.alive)npy++;
     f << "PREYS " << npy << "\n";
     for(auto&p:preys) if(p.alive){ f << p.genes.size << " " << p.genes.vision << " " << p.genes.eat_gain << " " << p.genes.speed << "\n"; write_genome(f,p.genome); }
@@ -461,9 +462,10 @@ bool load_state(const std::string& fname, std::vector<Agent>& preys, std::vector
     std::string tag; int ver; f >> tag >> ver;
     if(tag!="ECOSAVE"){ printf("load failed (bad format)\n"); return false; }
     try {
-    if(ver>6){ printf("load failed (newer version %d)\n",ver); return false; }
+    if(ver>7){ printf("load failed (newer version %d)\n",ver); return false; }
     f >> generation >> g_innov_counter >> g_next_node_id;
     if(ver>=2) f >> frame; else frame=0;
+    if(ver>=7) f >> world_tick; else world_tick=frame;
     preys.clear(); predators.clear(); prey_hall.clear(); pred_hall.clear();
     std::string sec; int cnt;
     f >> sec >> cnt;
@@ -626,6 +628,9 @@ int main(){
     float species_threshold=0.35f;
     bool show_tree=false;
     std::string tree_search="";
+    float tree_zoom=1.f;       // ホイールで拡大縮小(縦横両方)
+    float tree_off_x=0.f;      // WASD横移動
+    float tree_off_y=0.f;      // WASD縦移動
     int ui_mode=0;                    // 0=通常, 1=セーブ名入力, 2=ロード選択
     std::string input_text="";
     bool ui_skip_char=false;
@@ -681,6 +686,7 @@ int main(){
                     if(k->code==sf::Keyboard::Key::G)show_nutrient=!show_nutrient;
                     if(k->code==sf::Keyboard::Key::F)show_phero=!show_phero;
                     if(k->code==sf::Keyboard::Key::T)show_tree=!show_tree;
+                    
                     if(k->code==sf::Keyboard::Key::Space)paused=!paused;
                     if(k->code==sf::Keyboard::Key::Escape){
                     is_fullscreen=!is_fullscreen;
@@ -720,12 +726,17 @@ int main(){
                 if(mb->button==sf::Mouse::Button::Left)dragging=false;
             }
             if(const auto* mw=event->getIf<sf::Event::MouseWheelScrolled>()){
-                sf::Vector2i mp=sf::Mouse::getPosition(window);
-                float mx=(float)mp.x,my=(float)mp.y;
-                float wbx=s2w_x(mx),wby=s2w_y(my);
-                if(mw->delta>0.f)zoom*=1.25f; else if(mw->delta<0.f)zoom/=1.25f;
-                float zmin=SCREEN_H/HEIGHT*0.5f; if(zoom<zmin)zoom=zmin; if(zoom>5.f)zoom=5.f;
-                cam_x+=wbx-s2w_x(mx); cam_y+=wby-s2w_y(my);
+                if(show_tree){
+                    if(mw->delta>0.f) tree_zoom=std::min(30.f,tree_zoom*1.2f);
+                    else if(mw->delta<0.f) tree_zoom=std::max(1.f,tree_zoom/1.2f);
+                } else {
+                    sf::Vector2i mp=sf::Mouse::getPosition(window);
+                    float mx=(float)mp.x,my=(float)mp.y;
+                    float wbx=s2w_x(mx),wby=s2w_y(my);
+                    if(mw->delta>0.f)zoom*=1.25f; else if(mw->delta<0.f)zoom/=1.25f;
+                    float zmin=SCREEN_H/HEIGHT*0.5f; if(zoom<zmin)zoom=zmin; if(zoom>5.f)zoom=5.f;
+                    cam_x+=wbx-s2w_x(mx); cam_y+=wby-s2w_y(my);
+                }
             }
         }
         if(dragging){
@@ -863,7 +874,7 @@ int main(){
             if(!pd.alive)continue;
             pd.x+=pd.vx;pd.y+=pd.vy;
             if(pd.x<0)pd.x+=WIDTH;if(pd.x>=WIDTH)pd.x-=WIDTH;if(pd.y<0)pd.y+=HEIGHT;if(pd.y>=HEIGHT)pd.y-=HEIGHT;
-            pd.age++;pd.energy-=METABOLISM;
+            pd.age++;pd.energy-=METABOLISM+pd.genome.cached_active_conns*BRAIN_COST_COEF;
             if(pd.energy<=0){pd.alive=false;pred_starve++;meats.push_back({pd.x,pd.y,pd.genes.size*MEAT_SIZE_COEF+std::max(0.f,pd.energy)});}
         }
         t_move += ms(_t2,now());
@@ -919,7 +930,7 @@ int main(){
         auto _t4=now();
         if(frame%3==0){ nutrient.update();ph_fear.update();ph_aff.update(); }
         t_field += ms(_t4,now());
-        if(frame%180==0) update_lineages(preys, species_threshold, frame);
+        if(frame%180==0) update_lineages(preys, species_threshold, world_tick);
 
         std::vector<Agent> babies;
         for(auto& p:preys){
@@ -1007,7 +1018,13 @@ int main(){
     }
         // WASDでカメラ移動
         float pan=15.f/zoom;
-        if(ui_mode==0){
+        if(ui_mode==0 && show_tree){
+            float tpan=18.f;
+            if(sf::Keyboard::isKeyPressed(sf::Keyboard::Key::W))tree_off_y+=tpan;
+            if(sf::Keyboard::isKeyPressed(sf::Keyboard::Key::S))tree_off_y-=tpan;
+            if(sf::Keyboard::isKeyPressed(sf::Keyboard::Key::A))tree_off_x+=tpan;
+            if(sf::Keyboard::isKeyPressed(sf::Keyboard::Key::D))tree_off_x-=tpan;
+        } else if(ui_mode==0){
             if(sf::Keyboard::isKeyPressed(sf::Keyboard::Key::W))cam_y-=pan;
             if(sf::Keyboard::isKeyPressed(sf::Keyboard::Key::S))cam_y+=pan;
             if(sf::Keyboard::isKeyPressed(sf::Keyboard::Key::A))cam_x-=pan;
@@ -1487,8 +1504,8 @@ int main(){
         }
         if(font_ok){
 float ms_per_frame=1000.f/measured_fps;
-            char sb[160];
-            snprintf(sb,160,"Gen: %d    Tick: %d    %.1f ms/frame",generation,frame,ms_per_frame);
+            char sb[192];
+            snprintf(sb,180,"Gen: %d    Gen tick: %d    Total tick: %d    %.1f ms/frame",generation,frame,world_tick,ms_per_frame);
             sf::Text st(font,sb,20); st.setFillColor(sf::Color::White);
             sf::FloatRect b1=st.getLocalBounds();
             float tw=b1.size.x, th=b1.size.y;
@@ -1608,15 +1625,17 @@ float ms_per_frame=1000.f/measured_fps;
                 };
                 for(int i=0;i<N;i++) if(lineages[i].parent<0) assign(i);
                 float xspan=(leafc>1)?(float)(leafc-1):1.f;
-                float T1=(float)std::max(1,frame);
-                auto sx=[&](float slot){ return inX + (leafc>1 ? slot/xspan : 0.5f)*inW; };
-                auto ty=[&](int tick){ return inY + ((float)tick/T1)*inH; };
+                int minb=world_tick; for(int i=0;i<N;i++) if(lineages[i].birth_tick<minb) minb=lineages[i].birth_tick;
+                float Tspan=(float)std::max(1, world_tick-minb);
+                float cxp=inX+inW/2.f, cyp=inY+inH/2.f;
+                auto sx=[&](float slot){ float bx=inX + (leafc>1 ? slot/xspan : 0.5f)*inW; return cxp + (bx-cxp)*tree_zoom + tree_off_x; };
+                auto ty=[&](int tick){ float by=inY + ((float)(tick-minb)/Tspan)*inH; return cyp + (by-cyp)*tree_zoom + tree_off_y; };
                 sf::VertexArray va(sf::PrimitiveType::Lines);
                 sf::VertexArray va2(sf::PrimitiveType::Lines);
                 for(int i=0;i<N;i++){
                     float x=sx(lx[i]);
                     int bt=lineages[i].birth_tick;
-                    int dt=lineages[i].alive?frame:lineages[i].death_tick;
+                    int dt=lineages[i].alive?world_tick:lineages[i].death_tick;
                     sxpos[i]=x; sy0[i]=ty(bt); sy1[i]=ty(dt);
                     sf::Color col=cluster_color(lineages[i].id);
                     sf::Vertex a,b; a.position={x,ty(bt)}; a.color=col; b.position={x,ty(dt)}; b.color=col;
@@ -1682,7 +1701,7 @@ float ms_per_frame=1000.f/measured_fps;
                 window.draw(xm);
             }
             int alive_lin=0; for(auto&l:lineages) if(l.alive)alive_lin++;
-            char tt[128]; snprintf(tt,128,"Phylogeny   alive %d / ever %d   (T close)", alive_lin, N);
+            char tt[160]; snprintf(tt,160,"Phylogeny   alive %d / ever %d   [wheel zoom  WASD move  T close]", alive_lin, N);
             sf::Text ttl(font,tt,18); ttl.setFillColor(sf::Color::White); ttl.setPosition({panelX+16.f,panelY+14.f}); window.draw(ttl);
             {
                 int sid=0; bool has=!tree_search.empty(); for(char ch:tree_search) sid=sid*10+(ch-'0');
@@ -1693,6 +1712,7 @@ float ms_per_frame=1000.f/measured_fps;
             }
             sf::Text pastT(font,"past",13); pastT.setFillColor(sf::Color(150,150,150)); pastT.setPosition({panelX+6.f,inY-4.f}); window.draw(pastT);
             sf::Text nowT(font,"now",13); nowT.setFillColor(sf::Color(150,150,150)); nowT.setPosition({panelX+6.f,inY+inH-4.f}); window.draw(nowT);
+            
             sf::Vector2i mp=sf::Mouse::getPosition(window);
             int hit=-1; float bestdx=8.f;
             for(int i=0;i<N;i++){
@@ -1739,6 +1759,7 @@ float ms_per_frame=1000.f/measured_fps;
             if((int)plants.size()>peak_plant)peak_plant=(int)plants.size();
             if((int)meats.size()>peak_meat)peak_meat=(int)meats.size();
             frame++;
+            world_tick++;
             if(++autosave_timer >= AUTOSAVE_INTERVAL){
                 autosave_timer=0;
                 char afn[32]; snprintf(afn,32,"autosave%d.txt",autosave_slot);
