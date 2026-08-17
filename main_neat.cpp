@@ -356,6 +356,8 @@ struct PreyRec { int fit; Genome genome; Genes genes; };
 std::vector<PreyRec> prey_hall;
 std::vector<std::pair<int,Genome>> pred_hall;
 int generation=1;
+long prey_starve=0, prey_killed=0, pred_starve=0;
+std::vector<int> hist_prey, hist_pred, hist_plant, hist_meat;
 
 // preyのセンサー37個を作る(植物12 + 敵12 + 同種12 + energy1)
 std::vector<Sensor> make_prey_sensors(){
@@ -403,7 +405,7 @@ int calc_fit(const Agent& a){
 }
 
 struct Lineage {
-    int id; Genome rep; int birth_tick; int death_tick; int parent; bool alive; int pop; int max_pop; int fused_into;
+    int id; Genome rep; int birth_tick; int death_tick; int parent; bool alive; int pop; int max_pop; int fused_into; int parent2;
 };
 std::vector<Lineage> lineages;
 int next_lineage_id=0;
@@ -431,7 +433,7 @@ Genome read_genome(std::ifstream& f){
 void save_state(const std::string& fname, std::vector<Agent>& preys, std::vector<Agent>& predators, int frame){
     std::ofstream f(fname); if(!f){ printf("save failed: %s\n",fname.c_str()); return; }
     f.precision(9);
-    f << "ECOSAVE 3\n";
+    f << "ECOSAVE 6\n";
     f << generation << " " << g_innov_counter << " " << g_next_node_id << " " << frame << "\n";
     int npy=0; for(auto&p:preys) if(p.alive)npy++;
     f << "PREYS " << npy << "\n";
@@ -443,9 +445,13 @@ void save_state(const std::string& fname, std::vector<Agent>& preys, std::vector
     for(auto&r:prey_hall){ f << r.fit << " " << r.genes.size << " " << r.genes.vision << " " << r.genes.eat_gain << " " << r.genes.speed << "\n"; write_genome(f,r.genome); }
     f << "LINEAGES " << lineages.size() << " " << next_lineage_id << "\n";
     for(auto& L:lineages){
-        f << L.id << " " << L.birth_tick << " " << L.death_tick << " " << L.parent << " " << (L.alive?1:0) << " " << L.pop << " " << L.max_pop << "\n";
+        f << L.id << " " << L.birth_tick << " " << L.death_tick << " " << L.parent << " " << (L.alive?1:0) << " " << L.pop << " " << L.max_pop << " " << L.fused_into << " " << L.parent2 << "\n";
         write_genome(f, L.rep);
     }
+    f << "DEATHS " << prey_starve << " " << prey_killed << " " << pred_starve << "\n";
+    f << "HISTORY " << hist_prey.size() << "\n";
+    for(size_t i=0;i<hist_prey.size();i++)
+        f << hist_prey[i] << " " << hist_pred[i] << " " << hist_plant[i] << " " << hist_meat[i] << "\n";
     f << "PREDHALL " << pred_hall.size() << "\n";
     for(auto&r:pred_hall){ f << r.first << "\n"; write_genome(f,r.second); }
     printf("saved: %s (prey %d, pred %d)\n",fname.c_str(),npy,npd);
@@ -455,7 +461,7 @@ bool load_state(const std::string& fname, std::vector<Agent>& preys, std::vector
     std::string tag; int ver; f >> tag >> ver;
     if(tag!="ECOSAVE"){ printf("load failed (bad format)\n"); return false; }
     try {
-    if(ver>3){ printf("load failed (newer version %d)\n",ver); return false; }
+    if(ver>6){ printf("load failed (newer version %d)\n",ver); return false; }
     f >> generation >> g_innov_counter >> g_next_node_id;
     if(ver>=2) f >> frame; else frame=0;
     preys.clear(); predators.clear(); prey_hall.clear(); pred_hall.clear();
@@ -472,9 +478,21 @@ bool load_state(const std::string& fname, std::vector<Agent>& preys, std::vector
         for(int i=0;i<cnt;i++){
             Lineage L; int en;
             f >> L.id >> L.birth_tick >> L.death_tick >> L.parent >> en >> L.pop >> L.max_pop;
-            L.alive=(en!=0); L.rep=read_genome(f);
+            L.alive=(en!=0); L.fused_into=-1; L.parent2=-1;
+            if(ver>=4){ f >> L.fused_into >> L.parent2; }   // ver4以降だけ読む(ver3は-1のまま)
+            L.rep=read_genome(f);
             lineages.push_back(L);
         }
+    }
+    prey_starve=prey_killed=pred_starve=0;
+    if(ver>=5){
+        std::string dsec; f >> dsec >> prey_starve >> prey_killed >> pred_starve;
+    }
+    hist_prey.clear(); hist_pred.clear(); hist_plant.clear(); hist_meat.clear();
+    if(ver>=6){
+        std::string hsec; int hn=0; f >> hsec >> hn;
+        if(hn<0||hn>HIST_MAX) hn=0;   // 安全弁
+        for(int i=0;i<hn;i++){ int a,b,c,d; f >> a >> b >> c >> d; hist_prey.push_back(a); hist_pred.push_back(b); hist_plant.push_back(c); hist_meat.push_back(d); }
     }
     f >> sec >> cnt;
     for(int i=0;i<cnt;i++){ int fit; f >> fit; Genome g=read_genome(f); pred_hall.push_back({fit,g}); }
@@ -518,18 +536,22 @@ void update_lineages(std::vector<Agent>& preys, float threshold, int tick){
     std::vector<int> cluster_lineage(reps.size(), -1);
     std::vector<bool> claimed(oldN, false);
     for(int c=0;c<(int)reps.size();c++){
-        int best=-1; float bestd=1e9f;
+        int best=-1,best2=-1; float bestd=1e9f,bestd2=1e9f;
         for(int L=0;L<oldN;L++){
             if(!lineages[L].alive) continue;
             float d=genome_distance(reps[c], lineages[L].rep);
-            if(d<bestd){ bestd=d; best=L; }
+            if(d<bestd){ bestd2=bestd; best2=best; bestd=d; best=L; }
+            else if(d<bestd2){ bestd2=d; best2=L; }
         }
         if(best>=0 && bestd<threshold && !claimed[best]){
-            cluster_lineage[c]=best; claimed[best]=true; lineages[best].rep=reps[c];  // 継続
+            cluster_lineage[c]=best; claimed[best]=true; lineages[best].rep=reps[c];
         } else {
             Lineage nl; nl.id=next_lineage_id++; nl.rep=reps[c];
             nl.birth_tick=tick; nl.death_tick=-1;
-            nl.parent=(best>=0)?lineages[best].id:-1; nl.alive=true; nl.pop=0; nl.max_pop=0; nl.fused_into=-1;  // 誕生(分岐)
+            nl.parent=(best>=0)?lineages[best].id:-1; nl.alive=true; nl.pop=0; nl.max_pop=0; nl.fused_into=-1;
+            nl.parent2=-1;
+            // 雑種形成: 2つの既存種の"間"に生まれた新種は、両方を親に持つ(お前が想像した3種目)
+            if(best2>=0 && bestd<threshold*1.5f && bestd2<threshold*1.5f) nl.parent2=lineages[best2].id;
             cluster_lineage[c]=(int)lineages.size(); lineages.push_back(nl);
         }
     }
@@ -614,9 +636,7 @@ int main(){
 
     int peak_prey=0, peak_pred=0, peak_plant=0, peak_meat=0;
 
-    long prey_starve=0, prey_killed=0, pred_starve=0;
     
-    std::vector<int> hist_prey, hist_pred, hist_plant, hist_meat;
     
     auto build=[&](std::vector<std::vector<int>>& g, auto& items){
         for(auto&c:g)c.clear();
@@ -976,7 +996,7 @@ int main(){
             for(auto&pd:predators)pred_hall.push_back({calc_fit(pd),pd.genome});
             trim_prey();trim_pred();
             int bf=prey_hall.empty()?0:prey_hall[0].fit,bpf=pred_hall.empty()?0:pred_hall[0].first;
-            printf("Gen %d: survived %ds, prey fit %d, pred fit %d\n",generation,frame/60,bf,bpf);
+            printf("Gen %d: survived %d ticks, prey fit %d, pred fit %d\n",generation,frame,bf,bpf);
             generation++;preys.clear();predators.clear();meats.clear();
             nutrient.grid.assign(NUT_COLS*NUT_ROWS,0.f);ph_fear.grid.assign(PH_COLS*PH_ROWS,0.f);ph_aff.grid.assign(PH_COLS*PH_ROWS,0.f);
             for(int i=0;i<NUM_PREY;i++){if(!prey_hall.empty()){int ix=(int)(dist01(rng)*prey_hall.size());if(ix>=(int)prey_hall.size())ix=prey_hall.size()-1;Agent na=make_prey(prey_hall[ix].genes);na.genome=mutate_genome(prey_hall[ix].genome);preys.push_back(std::move(na));}else preys.push_back(make_prey(random_genes()));}
@@ -1234,7 +1254,7 @@ int main(){
                     lab(by,"Affin");  snprintf(bb,64,"%.2f / 1.00",sel->affinity); drawBar(bx,by,bw,sel->affinity,sf::Color(0,120,255),bb); by+=lh;
                     // 数値情報
                     char buf[256];
-                    snprintf(buf,sizeof(buf),"Age: %.1fs", sel->age/60.f);
+                    snprintf(buf,sizeof(buf),"Age: %d ticks", sel->age);
                     { sf::Text t(font,buf,13); t.setPosition({SX,by}); t.setFillColor(sf::Color::White); window.draw(t); by+=lh; }
                     if(sel->is_prey){
                         sf::RectangleShape sq({12.f,12.f}); sq.setPosition({SX,by+1.f}); sq.setFillColor(cluster_color(sel->cluster)); window.draw(sq);
@@ -1450,13 +1470,15 @@ int main(){
                 snprintf(buf,80,"%s: %d  (max %d)",graphs[g].label,cur,graphs[g].peak);
                 sf::Text t(font,buf,13); t.setPosition({GX+6.f,GY+5.f}); t.setFillColor(col);
                 window.draw(t);
-                // --- 横軸(時間、4分割)---
-                float total_sec=HIST_MAX/measured_fps;
+                // --- 横軸(tick, 4分割。右端=現在, 左へ遡る)---
                 for(int xi=0;xi<4;xi++){
                     float ratio=xi/3.f;
                     float px=plotX+plotW*ratio;
-                    float sec_ago=total_sec*(1.f-ratio);
-                    char tb[32]; snprintf(tb,32,"%.0fs",sec_ago);
+                    int ticks_ago=(int)(HIST_MAX*(1.f-ratio));
+                    char tb[32];
+                    if(ticks_ago==0) snprintf(tb,32,"now");
+                    else if(ticks_ago>=1000) snprintf(tb,32,"-%.1fk",ticks_ago/1000.f);
+                    else snprintf(tb,32,"-%d",ticks_ago);
                     sf::Text tt(font,tb,10); tt.setFillColor(sf::Color(150,150,150));
                     tt.setPosition({px-((xi==3)?16.f:0.f),GY+GH+3.f});
                     window.draw(tt);
@@ -1464,11 +1486,9 @@ int main(){
             }
         }
         if(font_ok){
-            float ms_per_frame=1000.f/measured_fps;
-            float elapsed_sec=frame/measured_fps;
-            // 上段:世代・tick・時間・ms
+float ms_per_frame=1000.f/measured_fps;
             char sb[160];
-            snprintf(sb,160,"Gen: %d    Tick: %d    Time: %.1fs    %.1f ms/frame",generation,frame,elapsed_sec,ms_per_frame);
+            snprintf(sb,160,"Gen: %d    Tick: %d    %.1f ms/frame",generation,frame,ms_per_frame);
             sf::Text st(font,sb,20); st.setFillColor(sf::Color::White);
             sf::FloatRect b1=st.getLocalBounds();
             float tw=b1.size.x, th=b1.size.y;
@@ -1530,9 +1550,9 @@ int main(){
         
         if(font_ok){
             int alive_lin=0; for(auto&l:lineages) if(l.alive)alive_lin++;
-            int nfuse=0, next=0; for(auto&l:lineages){ if(l.fused_into>=0)nfuse++; else if(!l.alive)next++; }
-            char cs[200];
-            snprintf(cs,200,"Species alive: %d   ever: %d   fused: %d   extinct: %d   threshold %.2f", alive_lin, (int)lineages.size(), nfuse, next, species_threshold);
+            int nfuse=0, next=0, nhyb=0; for(auto&l:lineages){ if(l.fused_into>=0)nfuse++; else if(!l.alive)next++; if(l.parent2>=0)nhyb++; }
+            char cs[220];
+            snprintf(cs,220,"Species alive: %d   ever: %d   hybrid: %d   fused: %d   extinct: %d   thr %.2f", alive_lin, (int)lineages.size(), nhyb, nfuse, next, species_threshold);
             sf::Text ct(font,cs,14); ct.setFillColor(sf::Color(200,255,200));
             ct.setPosition({12.f, SCREEN_H-86.f});
             window.draw(ct);
@@ -1601,12 +1621,12 @@ int main(){
                     sf::Color col=cluster_color(lineages[i].id);
                     sf::Vertex a,b; a.position={x,ty(bt)}; a.color=col; b.position={x,ty(dt)}; b.color=col;
                     va.append(a); va.append(b);
-                    if(lineages[i].parent>=0){
-                        int pj=-1; for(int j=0;j<N;j++) if(lineages[j].id==lineages[i].parent){pj=j;break;}
-                        if(pj>=0){
-                            float px=sx(lx[pj]); sf::Color pc=col; pc.a=150;
-                            sf::Vertex c,d; c.position={px,ty(bt)}; c.color=pc; d.position={x,ty(bt)}; d.color=pc;
-                            va.append(c); va.append(d);
+                    if(lineages[i].parent2>=0){
+                        int pj2=-1; for(int j=0;j<N;j++) if(lineages[j].id==lineages[i].parent2){pj2=j;break;}
+                        if(pj2>=0){
+                            float px2=sx(lx[pj2]); sf::Color pc2=cluster_color(lineages[i].parent2); pc2.a=170;
+                            sf::Vertex c2,d2; c2.position={px2,ty(bt)}; c2.color=pc2; d2.position={x,ty(bt)}; d2.color=pc2;
+                            va.append(c2); va.append(d2);
                         }
                     }
                 }
