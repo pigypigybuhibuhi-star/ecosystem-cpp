@@ -1,0 +1,10 @@
+*.txt
+phase3
+evosim
+main_neat
+*_old*.cpp
+*_backup.cpp
+*.o
+*.dSYM/
+old/
+.DS_Store
