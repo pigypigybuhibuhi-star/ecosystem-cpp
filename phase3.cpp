@@ -18,7 +18,10 @@
 #elif defined(_WIN32)
   #include <windows.h>
 #endif
-
+#include <thread>
+#include <mutex>
+#include <condition_variable>
+#include <functional>
 // ==========================================================
 //  パラメータ
 // ==========================================================
@@ -244,10 +247,12 @@ const float DETRITUS_COST   = 0.008f;  // 分解酵素の維持費
 // 分解者。動かず、死骸だけを食い、炭素と窒素を土に返す
 const float MICROBE_COST    = 0.0004f; // 微生物の代謝は極小。休眠に近い状態で待てる
 const float MICROBE_EFF     = 0.60f;
-const float MICROBE_DIV     = 0.70f;   // 分裂の閾値を下げ、立ち上がりを速くする
+const float MICROBE_BOOST   = 2.0f;    // 間引いたぶん、一回の分解量を増やす
+const float MICROBE_DIV     = 1.40f;   // 分裂の閾値を上げ、個体数を抑える
 const float MICROBE_RETURN  = 0.55f;   // 分解して大気と土に返す割合
 const float MICROBE_DISP    = 2.0f;    // 胞子が飛ぶ距離
 const int   MICROBE_INIT    = 3000;
+const int   MICROBE_STRIDE  = 4;       // 個体数が桁違いに多い。4tickに分けて処理する
 const float BODY_GROW_RATE  = 0.010f;
 const float BODY_GROW_COST  = 4.00f;
 const float CORPSE_RETURN   = 2.50f;
@@ -351,8 +356,9 @@ const int   LINEAGE_INTERVAL  = 300;
 const int   LINEAGE_SAMPLE    = 5000;
 const int   LINEAGE_GRACE     = 3;      // 連続でこの回数見失って初めて絶滅とする
 // --- 記録 ---
-const int   HIST_MAX        = 4000;
-const int   PLANT_STRIDE    = 2;       // 植物の更新を何tickに分けるか
+const int   HIST_MAX        = 200;   // 300tick刻みで6万tick。直近の変化が見える
+const int   PLANT_STRIDE    = 3;
+const int   ANIMAL_STRIDE   = 2;       // 動物も2tickに分けて処理する
 const int   SEED_STRIDE     = 8;       // 土中の種子はさらに間引く
 const float SENESCE_START   = 0.55f;   // 寿命のこの割合を過ぎると衰えが始まる
 const float SENESCE_RATE    = 2.4f;    // 衰えの速さ
@@ -412,6 +418,10 @@ std::vector<float> cur_v(GRID_W*GRID_H, 0.f);     // 海流の南北成分
 inline int idx(int x,int y){ return y*GRID_W + x; }
 
 std::mt19937 rng(12344);
+// 夜間の自動実行用。起動引数で上書きする
+long   g_stop_at  = -1;     // この tick に達したら終了する(-1 で無制限)
+double g_fps_time = 0.0;    // t>=50000 の経過時間の合計
+long   g_fps_n    = 0;      // t>=50000 のフレーム数
 std::uniform_real_distribution<float> dist01(0.f,1.f);
 inline float frand(float a,float b){ return a + (b-a)*dist01(rng); }
 inline float clampf(float v,float lo,float hi){ return v<lo?lo:(v>hi?hi:v); }
@@ -502,6 +512,8 @@ struct Animal {
     float w[N_W];
     float ngain[N_NODE];
     float mut_rate;   // 遺伝子: 自分の変異率。環境が荒れると上がりうる
+    float bite_size;  // 遺伝子: 一口の大きさ。大きいと速いが、咀嚼が雑になる
+    float digest;     // 遺伝子: 消化効率。腸が長いほど高いが、体が重くなる
     float rec[N_REC];
     // 本当の系譜。形質による分類(lin)とは別に、実際の親子関係を持つ
     int   mother, father;   // 親の id。無性なら father=-1
@@ -602,7 +614,8 @@ struct Series {
     }
 };
 // 拡大表示用の系列
-Series s_plant, s_animal, s_maxh, s_reach, s_temp, s_co2, s_o2, s_soil, s_nut,
+Series s_corpse, s_defense, s_tough, s_jaw, s_micro,
+       s_plant, s_animal, s_maxh, s_reach, s_temp, s_co2, s_o2, s_soil, s_nut,
        s_shade, s_diet, s_coldP, s_coldA;
 int peak_plant=1, peak_animal=1, peak_corpse=1;
 
@@ -830,7 +843,13 @@ void update_lineages(int kind,int tick){
     }
     for(auto& L:lineages){
         if(L.kind!=kind) continue;
-        if(L.pop>0) for(int k=0;k<REP_N;k++) L.mean[k]/=(float)L.pop;
+        if(L.pop>0){
+            for(int k=0;k<REP_N;k++) L.mean[k]/=(float)L.pop;
+            // 生きている間、最後の姿を常に控えておく。
+            // 絶滅が確定した時点では mean が既に0になっているため
+            for(int k=0;k<REP_N;k++) L.final_mean[k]=L.mean[k];
+            L.final_pop=L.pop;
+        }
         if(L.pop>L.max_pop) L.max_pop=L.pop;
     }
 }
@@ -839,7 +858,86 @@ void update_lineages(int kind,int tick){
 inline const float* view_mean(const Lineage& L){
     return L.alive ? L.mean : L.final_mean;
 }
-
+// 集団平均。レーダー図に重ねて「どこが尖っているか」を見せる
+float g_pavg[13], g_aavg[13];
+void compute_averages(){
+    for(int k=0;k<13;k++){ g_pavg[k]=0.f; g_aavg[k]=0.f; }
+    int np=0;
+    for(const auto& p:plants){
+        if(!p.alive||p.seed_wait>0) continue;
+        g_pavg[0]+=p.max_height/5.f; g_pavg[1]+=p.absorb;    g_pavg[2]+=p.shade_tol;
+        g_pavg[3]+=p.tough;          g_pavg[4]+=p.clonal;    g_pavg[5]+=p.disperse;
+        g_pavg[6]+=p.cold_tol;       g_pavg[7]+=p.aquatic;   g_pavg[8]+=p.drought_tol;
+        g_pavg[9]+=p.climb;          g_pavg[10]+=p.fire_tol;
+        g_pavg[11]+=p.store_cap/STORE_MAX; g_pavg[12]+=p.lifespan;
+        np++;
+    }
+    if(np) for(int k=0;k<13;k++) g_pavg[k]/=np;
+    int na=0;
+    for(const auto& a:animals){
+        if(!a.alive) continue;
+        float sr=0.f; for(int k=0;k<N_SENSOR;k++) sr+=a.sen[k].range;
+        g_aavg[0]+=a.diet;       g_aavg[1]+=a.body/4.f;  g_aavg[2]+=a.reach/5.f;
+        g_aavg[3]+=a.speed;      g_aavg[4]+=a.jaw/2.f;   g_aavg[5]+=a.cold_tol;
+        g_aavg[6]+=a.aquatic;    g_aavg[7]+=a.detritus;
+        g_aavg[8]+=sr/(SENSOR_MAX*N_SENSOR);
+        g_aavg[9]+=a.arboreal;   g_aavg[10]+=a.resp;
+        g_aavg[11]+=a.brood;     g_aavg[12]+=a.lifespan;
+        na++;
+    }
+    if(na) for(int k=0;k<13;k++) g_aavg[k]/=na;
+}
+// その個体が何者かを一文で言う。レーダー図が読めない人にも伝わる
+std::string plant_summary(const Plant& p){
+    std::vector<std::string> t;
+    if(p.aquatic>0.5f)      t.push_back("水生");
+    if(p.parasite>0.35f)    t.push_back("寄生");
+    if(p.carnivory>0.30f)   t.push_back("食虫");
+    if(p.climb>0.45f)       t.push_back("つる");
+    if(p.max_height>1.5f)   t.push_back("高木");
+    else if(p.max_height<0.4f) t.push_back("低木");
+    if(p.shade_tol>0.6f)    t.push_back("陰生");
+    else if(p.shade_tol<0.2f) t.push_back("陽生");
+    if(p.tough>0.5f)        t.push_back("硬い");
+    if(p.cold_tol>0.5f)     t.push_back("耐寒");
+    if(p.drought_tol>0.5f)  t.push_back("耐乾");
+    if(p.n_fix>0.4f)        t.push_back("窒素固定");
+    if(p.clonal>0.5f)       t.push_back("地下茎");
+    if(t.empty()) t.push_back("ふつうの草");
+    std::string s;
+    for(size_t i=0;i<t.size()&&i<5;i++){ if(i) s+="・"; s+=t[i]; }
+    // 生き方を一言で
+    if(p.parasite>0.35f)      s+="  — 他人から奪う型";
+    else if(p.climb>0.45f)    s+="  — 他人に登る型";
+    else if(p.max_height>1.5f)s+="  — 競争で勝つ型";
+    else if(p.brood>0.5f)     s+="  — 数で押す型";
+    else if(p.cold_tol>0.5f||p.drought_tol>0.5f) s+="  — 端で耐える型";
+    return s;
+}
+std::string animal_summary(const Animal& a){
+    std::vector<std::string> t;
+    if(a.aquatic>0.5f)      t.push_back("水生");
+    if(a.body>1.5f)         t.push_back("大型");
+    else if(a.body<0.5f)    t.push_back("小型");
+    if(a.diet>0.6f)         t.push_back("肉食");
+    else if(a.diet<0.2f)    t.push_back("草食");
+    else                    t.push_back("雑食");
+    if(a.detritus>0.4f)     t.push_back("腐肉食");
+    if(a.nocturnal>0.5f)    t.push_back("夜行性");
+    if(a.burrow>0.4f)       t.push_back("穴掘り");
+    if(a.arboreal>0.4f)     t.push_back("樹上性");
+    if(a.toxin>0.3f)        t.push_back("有毒");
+    if(a.speed>0.8f)        t.push_back("俊足");
+    if(t.empty()) t.push_back("ふつうの動物");
+    std::string s;
+    for(size_t i=0;i<t.size()&&i<5;i++){ if(i) s+="・"; s+=t[i]; }
+    if(a.diet>0.6f&&a.speed>0.7f)      s+="  — 追いかける型";
+    else if(a.diet>0.6f)               s+="  — 待ち伏せ型";
+    else if(a.detritus>0.4f)           s+="  — 掃除する型";
+    else if(a.burrow>0.4f)             s+="  — 隠れる型";
+    else                               s+="  — 食べて逃げる型";
+    return s;
+}
 // フィルタ
 const int FILTER_N = 10;
 const char* FILTER_NAME[FILTER_N] = {
@@ -873,6 +971,68 @@ bool filter_single(const Lineage& L,int f){
     }
     return true;
 }
+
+// スレッドを毎回作ると、生成だけで数ミリ秒かかる。
+// 起動時に作って寝かせておき、仕事があるときだけ起こす
+class Pool {
+    std::vector<std::thread> th;
+    std::mutex mx;
+    std::condition_variable cv, done_cv;
+    std::function<void(int,int)> job;
+    std::vector<std::pair<int,int>> ranges;
+    int next_task=0, running=0, epoch=0;
+    bool quit=false;
+public:
+    int n;
+    Pool(){
+        n=(int)std::thread::hardware_concurrency();
+        if(n<2) n=1; if(n>8) n=8;
+        for(int k=0;k<n;k++) th.emplace_back([this]{ worker(); });
+    }
+    ~Pool(){
+        { std::lock_guard<std::mutex> lk(mx); quit=true; }
+        cv.notify_all();
+        for(auto& t:th) t.join();
+    }
+    void worker(){
+        int my_epoch=0;
+        for(;;){
+            std::unique_lock<std::mutex> lk(mx);
+            cv.wait(lk,[&]{ return quit || epoch!=my_epoch; });
+            if(quit) return;
+            my_epoch=epoch;
+            for(;;){
+                if(next_task>=(int)ranges.size()) break;
+                auto r=ranges[next_task++];
+                lk.unlock();
+                job(r.first,r.second);
+                lk.lock();
+            }
+            if(--running==0) done_cv.notify_one();
+        }
+    }
+    template<class F> void run(int a,int b,F f){
+        if(n<2||b-a<32){ f(a,b); return; }
+        {
+            std::lock_guard<std::mutex> lk(mx);
+            job=f;
+            ranges.clear();
+            int span=(b-a+n-1)/n;
+            for(int k=0;k<n;k++){
+                int s=a+k*span, e=std::min(b,s+span);
+                if(s<e) ranges.push_back({s,e});
+            }
+            next_task=0; running=n; epoch++;
+        }
+        cv.notify_all();
+        std::unique_lock<std::mutex> lk(mx);
+        done_cv.wait(lk,[&]{ return running==0; });
+    }
+};
+Pool g_pool;
+struct PoolReport { PoolReport(){ printf("thread pool: %d workers\n",g_pool.n); } };
+PoolReport g_pool_report;
+template<class F> void parallel_for(int a,int b,F f){ g_pool.run(a,b,f); }
 
 // 分離型ボックスブラー(累積和を使うので半径に関係なく速い)
 void box_blur(std::vector<float>& f,int R,int passes){
@@ -1750,7 +1910,7 @@ void update_gases(){
         std::vector<float>& g=(pass==0)?co2:o2;
         float base=(pass==0)?CO2_BASE:O2_BASE;
         for(int y=0;y<GRID_H;y++) for(int x=0;x<GRID_W;x++){
-            float s=0; int c=0;
+            float s=0.f; int c=0;
             for(int dy=-1;dy<=1;dy++) for(int dx=-1;dx<=1;dx++){
                 int nx=x+dx,ny=y+dy;
                 if(nx<0) nx+=GRID_W; if(nx>=GRID_W) nx-=GRID_W;
@@ -1895,7 +2055,8 @@ void update_odor(){
             for(int x=0;x<GRID_W;x++) g[idx(x,y)]=odor_buf[idx(x,y)];
         }
         // 拡散して散逸する
-        for(int y=0;y<GRID_H;y++) for(int x=0;x<GRID_W;x++){
+        parallel_for(0,GRID_H,[&](int ya,int yb){
+        for(int y=ya;y<yb;y++) for(int x=0;x<GRID_W;x++){
             float s=0.f; int c=0;
             for(int dy=-1;dy<=1;dy++) for(int dx=-1;dx<=1;dx++){
                 int nx=x+dx, ny=y+dy;
@@ -1908,6 +2069,7 @@ void update_odor(){
             v*=(1.f-ODOR_DECAY);
             odor_buf[i]=(v<1e-5f)?0.f:v;
         }
+        });
         g.swap(odor_buf);
         double t=0; for(int i=0;i<GRID_W*GRID_H;i++) t+=g[i];
         odor_total[k]=t/(GRID_W*GRID_H);
@@ -1931,12 +2093,32 @@ void update_slides(){
     }
 }
 
-// 分解者。死骸を食い、炭素と窒素を還す
+// 索引は、生物が生まれたり死んだりするたびに古くなる。
+// 使う直前に作り直す。添字のずれが範囲外アクセスになるのを防ぐ
+void rebuild_cgrid(){
+    cgrid.reset();
+    for(const auto& c:corpses){
+        int gx=(int)c.x, gy=(int)c.y;
+        if(gx>=0&&gx<GRID_W&&gy>=0&&gy<GRID_H) cgrid.count(idx(gx,gy));
+    }
+    cgrid.finalize();
+    for(int i=0;i<(int)corpses.size();i++){
+        int gx=(int)corpses[i].x, gy=(int)corpses[i].y;
+        if(gx>=0&&gx<GRID_W&&gy>=0&&gy<GRID_H) cgrid.put(idx(gx,gy),i);
+    }
+}
 void update_microbes(){
+    static int mphase=0;
+    mphase=(mphase+1)%MICROBE_STRIDE;
+    // cgrid は update_animals が同じtickで作っている。
+    // そこから死骸が増えるのは植物の枯死ぶんだけなので、添字の上限だけ守ればよい
     std::vector<Microbe> babies;
-    for(auto& m:microbes){
+    // 添字で飛ばす。全件を舐めるのをやめ、該当するものだけに触れる
+    int n_mic=(int)microbes.size();
+    for(int midx=mphase;midx<n_mic;midx+=MICROBE_STRIDE){
+        Microbe& m=microbes[midx];
         if(!m.alive) continue;
-        m.age++;
+        m.age+=MICROBE_STRIDE;
         int gx=(int)m.x, gy=(int)m.y;
         if(gx<0||gx>=GRID_W||gy<0||gy>=GRID_H){ m.alive=false; continue; }
         int ci=idx(gx,gy);
@@ -1950,7 +2132,7 @@ void update_microbes(){
         int cb=cgrid.b(ci), ce=cgrid.e(ci);
         if(cb<ce){
             int pk=cgrid.items[cb+(int)(frand(0.f,(float)(ce-cb)-0.001f))];
-            float dec=corpses[pk].energy*m.rate*0.10f*act;
+            float dec=corpses[pk].energy*m.rate*0.10f*act*MICROBE_STRIDE*MICROBE_BOOST;
             corpses[pk].energy-=dec;
             m.energy+=dec*MICROBE_EFF;
             // 残りは大気と土へ
@@ -1958,9 +2140,9 @@ void update_microbes(){
             soil_n[ci]+= dec*(1.f-MICROBE_EFF)*MICROBE_RETURN*N_MINERALIZE*3.f;
             if(soil_n[ci]>3.f) soil_n[ci]=3.f;
         }
-        m.energy -= MICROBE_COST*(0.5f+m.rate) + m.cold_tol*0.0015f;
+        m.energy -= (MICROBE_COST*(0.5f+m.rate)+m.cold_tol*0.0015f)*MICROBE_STRIDE;
         if(m.energy<=0.f){ m.alive=false; d_micro++; continue; }
-        if(m.energy>=MICROBE_DIV){
+        if(m.energy>=MICROBE_DIV && (int)microbes.size()<800000){
             m.energy*=0.5f;
             Microbe c=m;
             c.energy=m.energy;
@@ -2065,8 +2247,13 @@ void update_plants(){
         fuel[idx(gx,gy)]+=plants[i].height*1.2f;
     }
     std::fill(canopy_h.begin(),canopy_h.end(),0.f);
-    static std::vector<int> order;
-    for(int ci=0;ci<GRID_W*GRID_H;ci++){
+    auto t_a=std::chrono::steady_clock::now();
+    // マスごとに独立しているので、マスを分けて並列に処理できる。
+    // order はスレッドごとに持つ必要がある(static のままだと競合する)
+    parallel_for(0,GRID_W*GRID_H,[&](int cs,int cee){
+    std::vector<int> order;            // スレッドごとに持つ。static だと競合する
+    double t_gain=0,t_light=0,t_tf=0,t_wf=0,t_co2=0; long t_n=0;
+    for(int ci=cs;ci<cee;ci++){
         int b0=pgrid.start[ci], e0=pgrid.start[ci+1];
         if(b0==e0) continue;
         const int* use=&pgrid.items[b0];
@@ -2124,11 +2311,21 @@ void update_plants(){
             if(need>1e-9f) gain*=avail/need;
             co2[ci]-=avail; o2[ci]+=avail*O2_PER_CO2;
             p.energy+=gain;
-            dbg_gain+=gain; dbg_n++;
-            dbg_light+=got; dbg_tf+=tf; dbg_wf+=wf;
-            dbg_co2+=(need>1e-9f? avail/need : 1.f);
+            t_gain+=gain; t_n++;
+            t_light+=got; t_tf+=tf; t_wf+=wf;
+            t_co2+=(need>1e-9f? avail/need : 1.f);
         }
     }
+    // 各スレッドの集計を、最後に一度だけ足し合わせる
+    { static std::mutex dbg_mx;
+      std::lock_guard<std::mutex> lk(dbg_mx);
+      dbg_gain+=t_gain; dbg_n+=t_n;
+      dbg_light+=t_light; dbg_tf+=t_tf; dbg_wf+=t_wf; dbg_co2+=t_co2; }
+    });
+    { auto t_b=std::chrono::steady_clock::now();
+      static double acc=0; static int cnt=0;
+      acc+=std::chrono::duration<double,std::milli>(t_b-t_a).count();
+      if(++cnt>=60){ printf("  [prof] 光合成ループ %.1f ms\n",acc/cnt); acc=0; cnt=0; } }
     // 寄生: 吸器を同じマスの最も大きな株に刺し、エネルギーを直接奪う。
     // 宿主の tough が防御として働く
     static int para_tick=0;
@@ -2439,10 +2636,13 @@ void update_animals(){
     }
     std::vector<Animal> babies;
     int n0=(int)animals.size();
-    for(int i=0;i<n0;i++){
+    static int aphase=0;
+    aphase=(aphase+1)%ANIMAL_STRIDE;
+    // 2tickに分けて処理する。個体数が多いので走査自体を半分にする
+    for(int i=aphase;i<n0;i+=ANIMAL_STRIDE){
         Animal& a=animals[i];
         if(!a.alive) continue;
-        a.age++;
+        a.age+=ANIMAL_STRIDE;
         // それぞれの感覚器が、自分の向いた方角に、自分の射程だけ探る
         float in[N_IN];
         float sensor_span=0.f;
@@ -2668,12 +2868,15 @@ void update_animals(){
                     Plant& p=plants[pi];
                     if(!p.alive||p.eff_height>a.perch+a.reach) continue;
                     float chew=a.jaw/(a.jaw+p.defense*2.0f);
-                    float bite=p.energy*A_BITE*chew*act;
+                    // 一口が大きいほど速いが、噛み砕きが雑になって効率が落ちる
+                    float bs=0.4f+1.2f*a.bite_size;
+                    float bite=p.energy*A_BITE*bs*chew*act;
                     p.energy-=bite;
                     // 齧られれば葉を失う。光合成能力が落ち、回復に時間がかかる。
                     // これがあって初めて、その場が枯れ、探す必要が生まれる
-                    p.height=std::max(0.03f,p.height-bite*GRAZE_DEFOLIATE);
-                    a.energy+=bite*(1.f-A_EAT_LOSS)*plant_dig;
+                    p.height=std::max(0.03f,p.height-bite*GRAZE_DEFOLIATE*bs);
+                    float eff=(1.f-A_EAT_LOSS)*(0.6f+0.8f*a.digest)/std::max(0.5f,bs);
+                    a.energy+=bite*eff*plant_dig;
                     odor[2][ci]+=ODOR_WOUND*bite;   // 傷ついた植物が匂いを放つ
                     a.eaten++; bites++;
                     if(p.energy<=0.f) p.alive=false;
@@ -2761,6 +2964,7 @@ void update_animals(){
                    +brain_use*SYN_COST
                    +a.sexual*SEX_COST+a.arboreal*ARBOREAL_COST
                    +(1.f-a.mut_rate)*MUT_RATE_COST   // 精密な修復は高くつく
+                   +a.digest*0.018f                   // 長い腸は重い
                    +a.toxin*TOXIN_COST+a.tox_resist*TOXRES_COST
                    +a.burrow*BURROW_COST+a.nocturnal*NOCTURNAL_COST
                    +a.fat*FAT_COST;
@@ -2869,7 +3073,9 @@ void update_animals(){
             for(int k=0;k<N_IMMUNE;k++) c.im[k]=mutate(a.im[k],0.0f,1.0f);
             // 変異率そのものが遺伝する。環境が荒れた後に上がりうる
             float mr=0.4f+a.mut_rate*MUT_RATE_MAX;
-            c.mut_rate=mutate_r(a.mut_rate,0.f,1.f,mr);
+            c.mut_rate =mutate_r(a.mut_rate, 0.f,1.f,mr);
+            c.bite_size=mutate_r(a.bite_size,0.f,1.f,mr);
+            c.digest   =mutate_r(a.digest,   0.f,1.f,mr);
             for(int k=0;k<N_REC;k++) c.rec[k]=0.f;   // 記憶は引き継がない
             c.mother=a.id; c.father=mate?mate->id:-1; c.gen=a.gen+1;
             life_note(a.id,g_frame,mate?"有性繁殖":"無性繁殖",(float)nb);
@@ -3000,6 +3206,8 @@ std::vector<Fld<Animal>> animal_schema(){
     for(int k=0;k<N_NODE;k++)
         s.push_back(FA("ng"+std::to_string(k),&Animal::ngain,k,k<3?1.0:0.05));
     s.push_back(F("mut_rate",&Animal::mut_rate,0.3));
+    s.push_back(F("bite_size",&Animal::bite_size,0.5));
+    s.push_back(F("digest",&Animal::digest,0.5));
     s.push_back(F("mother",&Animal::mother,-1));
     s.push_back(F("father",&Animal::father,-1));
     s.push_back(F("gen",&Animal::gen,0));
@@ -3715,10 +3923,21 @@ void draw_plant_form(sf::RenderWindow& win,int form,float x,float baseY,
 void draw_radar(sf::RenderWindow& win,const sf::Font& font,
                 float cx,float cy,float R,
                 const char* const* names,const float* vals,
-                const float* raw,int n,sf::Color col)
+                const float* raw,int n,sf::Color col,
+                const float* avg=nullptr)
 {
     const float TAU=6.2831853f, TOP=-1.5707963f;
     auto vtx=[&](float a,float r){ return sf::Vector2f{cx+std::cos(a)*r,cy+std::sin(a)*r}; };
+    // 世界平均を灰色で重ねる。どこが尖っているかが一目で分かる
+    if(avg){
+        sf::VertexArray ag(sf::PrimitiveType::LineStrip);
+        for(int k=0;k<=n;k++){
+            sf::Vertex v;
+            v.position=vtx(TOP+TAU*(k%n)/n,R*clamp01(avg[k%n]));
+            v.color=sf::Color(140,140,150,170); ag.append(v);
+        }
+        win.draw(ag);
+    }
 
     // 目盛りの環
     for(int g=1;g<=4;g++){
@@ -3769,11 +3988,17 @@ void draw_radar(sf::RenderWindow& win,const sf::Font& font,
         char lb[48];
         if(raw) snprintf(lb,48,"%s %.2f",names[k],raw[k]);
         else    snprintf(lb,48,"%s",names[k]);
-        sf::Text t(font,jp(lb),11);
-        t.setFillColor(sf::Color(206,206,214));
+        // 軸が13本あると中央揃えでは隣と重なる。
+        // 左半分は右端を、右半分は左端を基準にして外側へ逃がす
+        sf::Text t(font,jp(lb),13);
+        t.setFillColor(sf::Color(222,222,230));
         sf::FloatRect bb=t.getLocalBounds();
-        sf::Vector2f lp=vtx(a,R+17.f);
-        t.setPosition({lp.x-bb.size.x*0.5f,lp.y-7.f});
+        sf::Vector2f lp=vtx(a,R+26.f);
+        float ox=lp.x-cx;
+        float tx = (ox<-R*0.3f) ? lp.x-bb.size.x
+                 : (ox> R*0.3f) ? lp.x
+                                : lp.x-bb.size.x*0.5f;
+        t.setPosition({tx,lp.y-8.f});
         win.draw(t);
     }
 }
@@ -3807,7 +4032,13 @@ std::string save_summary(const std::string& fn){
     return std::string(b2);
 }
 
-int main(){
+int main(int argc,char** argv){
+    // 起動引数: --seed N  --stop-at N
+    for(int i=1;i<argc;i++){
+        std::string a=argv[i];
+        if(a=="--seed"    && i+1<argc) rng.seed((unsigned)std::stoul(argv[++i]));
+        if(a=="--stop-at" && i+1<argc) g_stop_at=std::stol(argv[++i]);
+    }
     prevent_sleep_begin();
     for(int k=0;k<N_ODOR;k++) odor[k].assign(GRID_W*GRID_H,0.f);
     odor_buf.assign(GRID_W*GRID_H,0.f);
@@ -3893,6 +4124,8 @@ int main(){
 
     float zoom=std::min(SCREEN_W/(float)GRID_W,SCREEN_H/(float)GRID_H);
     float cam_x=GRID_W/2.f, cam_y=GRID_H/2.f;
+    float cam_vx=0.f, cam_vy=0.f;   // カメラの速度。慣性で滑らかに動く
+    bool show_help=false;           // 左上の「?」で操作一覧を開く
     // 東西は無限にループする。一番近い複製の位置を返す
     auto w2sx=[&](float wx){
         float dx=wx-cam_x;
@@ -3938,6 +4171,7 @@ int main(){
     bool sort_by_time=false;
     bool show_tree=false, color_species=false;
     float tree_zoom=1.f, tree_ox=0.f, tree_oy=0.f;
+    float tree_vx=0.f, tree_vy=0.f;   // 系統樹の移動も慣性で滑らかにする
     std::string tree_search;
     int filter_mode=0;
     // --- 下部バーと拡大グラフ ---
@@ -3961,6 +4195,12 @@ int main(){
     std::vector<FilterHit> filter_hits;
 
     while(window.isOpen()){
+        // 1フレームの実時間を測る。t>=50000 の平均 fps を夜間の比較に使う
+        { static auto last=std::chrono::steady_clock::now();
+          auto now=std::chrono::steady_clock::now();
+          double dt=std::chrono::duration<double>(now-last).count();
+          last=now;
+          if(frame>=50000){ g_fps_time+=dt; g_fps_n++; } }
         while(const std::optional event=window.pollEvent()){
             if(event->is<sf::Event::Closed>()) window.close();
 
@@ -4019,7 +4259,7 @@ int main(){
                     }
                 } else if(show_tree){
                     if(k->code==sf::Keyboard::Key::T){ show_tree=false; tree_search.clear(); }
-                    if(k->code==sf::Keyboard::Key::Z) tree_zoom=std::min(12.f,tree_zoom*1.2f);
+                    if(k->code==sf::Keyboard::Key::Z) tree_zoom=std::max(0.6f,tree_zoom/1.2f);
                     if(k->code==sf::Keyboard::Key::X){
                         tree_zoom=std::max(1.f,tree_zoom/1.2f);
                         if(tree_zoom<=1.01f){ tree_ox=0.f; tree_oy=0.f; }
@@ -4075,8 +4315,8 @@ int main(){
                     }
                     if(k->code==sf::Keyboard::Key::N){ show_night=!show_night; g_last_view=-1; }
                     if(k->code==sf::Keyboard::Key::T){ show_tree=true; sel_lineage=-1; }
-                    if(k->code==sf::Keyboard::Key::Z) zoom_at(1.25f,SCREEN_W/2.f,SCREEN_H/2.f);
-                    if(k->code==sf::Keyboard::Key::X) zoom_at(0.80f,SCREEN_W/2.f,SCREEN_H/2.f);
+                    if(k->code==sf::Keyboard::Key::Z) zoom_at(0.80f,SCREEN_W/2.f,SCREEN_H/2.f);
+                    if(k->code==sf::Keyboard::Key::X) zoom_at(1.25f,SCREEN_W/2.f,SCREEN_H/2.f);
                     if(k->code==sf::Keyboard::Key::K){ ui_mode=1; input_text.clear(); ui_skip_char=true; }
                     if(k->code==sf::Keyboard::Key::L){
                         ui_mode=2; input_text.clear(); ui_skip_char=true;
@@ -4144,6 +4384,14 @@ int main(){
                         if(h.id==101){ view_mode=(view_mode+1)%11;  g_last_view=-1; }
                         if(h.id==102){ show_tree=true; }
                         if(h.id==103){ show_tree=false; tree_search.clear(); }
+                        if(h.id==104){ show_help=!show_help; }
+                        if(h.id>=500&&h.id<600){
+                            int row=h.id-500;
+                            if(row<(int)save_files.size()){
+                                input_text=save_files[row];
+                                del_confirm=-1;
+                            }
+                        }
                         if(h.id>=300&&h.id<400){
                             int row=h.id-300;
                             if(del_confirm==row){
@@ -4217,21 +4465,39 @@ int main(){
 
         if(ui_mode==0 && show_tree){
             float tp=14.f;
-            if(key_w) tree_oy+=tp;
-            if(key_s) tree_oy-=tp;
-            if(key_a) tree_ox+=tp;
-            if(key_d) tree_ox-=tp;
+            float ttx=0.f, tty=0.f;
+            if(key_w) tty+=tp;
+            if(key_s) tty-=tp;
+            if(key_a) ttx+=tp;
+            if(key_d) ttx-=tp;
+            tree_vx += (ttx-tree_vx)*0.55f;
+            tree_vy += (tty-tree_vy)*0.55f;
+            if(ttx==0.f) tree_vx*=0.65f;
+            if(tty==0.f) tree_vy*=0.65f;
+            tree_ox += tree_vx;
+            tree_oy += tree_vy;
             float lx=SCREEN_W*0.5f*(tree_zoom-1.f)+40.f;
             float ly=SCREEN_H*0.5f*(tree_zoom-1.f)+40.f;
             if(tree_ox> lx) tree_ox= lx;  if(tree_ox<-lx) tree_ox=-lx;
             if(tree_oy> ly) tree_oy= ly;  if(tree_oy<-ly) tree_oy=-ly;
         } else if(ui_mode==0){
+            // 速度として持つ。キーを離しても滑らかに減速する
             float pan=12.f/zoom*6.f;
+            const float CAM_ACCEL=0.55f, CAM_FRICTION=0.65f;
             if(ui_mode==0){
-                if(key_w) cam_y-=pan;
-                if(key_s) cam_y+=pan;
-                if(key_a) cam_x-=pan;
-                if(key_d) cam_x+=pan;
+                float tx=0.f, ty=0.f;
+                if(key_w) ty-=pan;
+                if(key_s) ty+=pan;
+                if(key_a) tx-=pan;
+                if(key_d) tx+=pan;
+                cam_vx += (tx-cam_vx)*CAM_ACCEL;
+                cam_vy += (ty-cam_vy)*CAM_ACCEL;
+                if(tx==0.f) cam_vx*=CAM_FRICTION;   // 離したら摩擦で止まる
+                if(ty==0.f) cam_vy*=CAM_FRICTION;
+                if(std::fabs(cam_vx)<0.01f) cam_vx=0.f;
+                if(std::fabs(cam_vy)<0.01f) cam_vy=0.f;
+                cam_x += cam_vx;
+                cam_y += cam_vy;
             }
             clamp_cam();
         }
@@ -4246,14 +4512,42 @@ int main(){
             prof_begin(); update_animals();                           prof_end(3);
             prof_begin();
             if(frame%PATH_INTERVAL==0) update_pathogens();
-            update_plants(); update_microbes(); update_fire(frame);
-            if(frame%ODOR_INTERVAL==0) update_odor();
-            update_slides();
+            update_plants();
             prof_end(4);
+            { // 微生物は個体数が桁違いに多い。独立して測る
+              auto ta=std::chrono::steady_clock::now();
+              update_microbes();
+              auto tb=std::chrono::steady_clock::now();
+              static double am=0,af=0,ao=0,as=0; static int cm=0;
+              am+=std::chrono::duration<double,std::milli>(tb-ta).count();
+              auto tc=std::chrono::steady_clock::now();
+              update_fire(frame);
+              auto td=std::chrono::steady_clock::now();
+              af+=std::chrono::duration<double,std::milli>(td-tc).count();
+              auto te=std::chrono::steady_clock::now();
+              if(frame%ODOR_INTERVAL==0) update_odor();
+              auto tf2=std::chrono::steady_clock::now();
+              ao+=std::chrono::duration<double,std::milli>(tf2-te).count();
+              auto tg=std::chrono::steady_clock::now();
+              update_slides();
+              auto th2=std::chrono::steady_clock::now();
+              as+=std::chrono::duration<double,std::milli>(th2-tg).count();
+              if(++cm>=60){
+                  printf("  [prof] 微生物 %.1f  火 %.1f  匂い %.1f  崖崩れ %.1f ms (個体 %zu)\n",
+                         am/cm,af/cm,ao/cm,as/cm,microbes.size());
+                  am=af=ao=as=0; cm=0;
+              }
+            }
             prof_begin();
             if(frame%4==0) update_gases();      // 拡散は4tickに一度で足りる
             prof_end(5);
             frame++;
+            if(g_stop_at>0 && frame>=g_stop_at){
+                printf("=== stop at t=%d  mean fps (t>=50000) %.2f over %ld frames ===\n",
+                       frame, g_fps_time>0? g_fps_n/g_fps_time : 0.0, g_fps_n);
+                fflush(stdout);
+                window.close();
+            }
 
             if((int)plants.size() >peak_plant)  peak_plant =(int)plants.size();
             if((int)animals.size()>peak_animal) peak_animal=(int)animals.size();
@@ -4277,7 +4571,7 @@ int main(){
                     a.size=0.5f; a.diet=0.0f; a.jaw=1.0f; a.cold_tol=0.3f;
                     a.body=0.10f; a.aquatic=1.0f; a.resp=0.3f; a.detritus=0.0f;
                     a.sexual=0.2f; a.arboreal=0.0f; a.perch=0.0f; a.aerobic=1.0f;
-                    a.mut_rate=0.3f;                    a.mother=-1; a.father=-1; a.gen=0;
+                    a.mut_rate=0.3f; a.bite_size=0.5f; a.digest=0.5f;                    a.mother=-1; a.father=-1; a.gen=0;
                     for(int k=0;k<N_REC;k++) a.rec[k]=0.f;
                     for(int k=0;k<N_IMMUNE;k++) a.im[k]=frand(0.f,1.f);
                     a.brood=0.1f; a.lifespan=0.2f;
@@ -4367,6 +4661,16 @@ int main(){
             if(!h_nut.empty())   s_nut.push(h_nut.back());
             if(!h_shade.empty()) s_shade.push(h_shade.back());
             if(!h_diet.empty())  s_diet.push(h_diet.back());
+            s_corpse.push((float)corpses.size());
+            s_micro.push((float)microbes.size());
+            if(!h_tough.empty()) s_tough.push(h_tough.back());
+            if(!h_jaw.empty())   s_jaw.push(h_jaw.back());
+            { double sd=0; int nd=0;
+              for(const auto& p:plants){ if(!p.alive||p.seed_wait>0) continue;
+                  sd+=p.defense; nd++; }
+              s_defense.push(nd?(float)(sd/nd):0.f); }
+            if(!h_coldP.empty()) s_coldP.push(h_coldP.back());
+            if(!h_coldA.empty()) s_coldA.push(h_coldA.back());
             if(!h_coldP.empty()) s_coldP.push(h_coldP.back());
             if(!h_coldA.empty()) s_coldA.push(h_coldA.back());
             { double sw=0,sn=0,sp=0,so=0,ss=0; int nl=0,ni=0,nse=0;
@@ -4521,6 +4825,10 @@ int main(){
                   printf("      sun dec %+.1f deg | land in day %d / night %d | polar day: %s\n",
                          dd, pd, pn,
                          dd>0.5f?"north":(dd<-0.5f?"south":"none")); }
+                  { double sbs=0,sdg=0; int na7=(int)animals.size();
+                    for(const auto& a:animals){ sbs+=a.bite_size; sdg+=a.digest; }
+                    printf("      feeding: bite %.3f  digest %.3f\n",
+                           na7?sbs/na7:0.0, na7?sdg/na7:0.0); }
                   printf("      animal: toxin %.3f resist %.3f burrow %.3f nocturn %.3f fat %.2f repro %.2f | day %.2f\n",
                          na5?atx/na5:0.0,na5?atr/na5:0.0,na5?abu/na5:0.0,
                          na5?anc/na5:0.0,na5?afa/na5:0.0,na5?ara/na5:0.0,day_light);
@@ -4636,6 +4944,7 @@ int main(){
                   for(const auto& m:microbes){ mr2+=m.rate; mc2+=m.cold_tol; }
                   printf("      microbe: %d  rate %.3f  cold %.3f  deaths %ld\n",
                          nm, nm?mr2/nm:0.0, nm?mc2/nm:0.0, d_micro); }
+                compute_averages();   // レーダー図に重ねる集団平均
                 printf("      deaths: starve %ld  cold %ld  preyed %ld\n",
                        d_starve,d_cold,d_preyed);
             }
@@ -4858,10 +5167,29 @@ int main(){
         // 画面の外にある株は、はじめから並べない
         float vy0=cam_y-SCREEN_H/(2.f*zoom)-2.f;
         float vy1=cam_y+SCREEN_H/(2.f*zoom)+2.f;
-        for(int i=0;i<(int)plants.size();i++){
-            if(plants[i].seed_wait>0) continue;       // 土中の種子は見えない
-            if(plants[i].y<vy0||plants[i].y>vy1) continue;
-            dorder.push_back(i);
+        // 引いた画面では1マスが数ピクセルしかない。
+        // 同じマスの株は重なって見えないので、代表だけを描く
+        if(zoom<3.f){
+            static std::vector<int> seen;
+            seen.assign(GRID_W*GRID_H,-1);
+            for(int i=0;i<(int)plants.size();i++){
+                const Plant& p=plants[i];
+                if(p.seed_wait>0) continue;
+                if(p.y<vy0||p.y>vy1) continue;
+                int gx=(int)p.x, gy=(int)p.y;
+                if(gx<0||gx>=GRID_W||gy<0||gy>=GRID_H) continue;
+                int ci=idx(gx,gy);
+                // 同じマスでは、最も背の高い株を代表にする
+                if(seen[ci]<0||p.height>plants[seen[ci]].height) seen[ci]=i;
+            }
+            for(int ci=0;ci<GRID_W*GRID_H;ci++)
+                if(seen[ci]>=0) dorder.push_back(seen[ci]);
+        } else {
+            for(int i=0;i<(int)plants.size();i++){
+                if(plants[i].seed_wait>0) continue;
+                if(plants[i].y<vy0||plants[i].y>vy1) continue;
+                dorder.push_back(i);
+            }
         }
         // 1セルが数ピクセルしかない引きの画面では、重なりの順序は見えない
         if(zoom>=4.f)
@@ -4923,7 +5251,7 @@ int main(){
                 ring.setPosition({mx,my}); ring.setFillColor(sf::Color::Transparent);
                 ring.setOutlineColor(sf::Color::Yellow); ring.setOutlineThickness(2.f);
                 window.draw(ring);
-                float PX=18.f,PY=18.f,PW=330.f,PH=sa?520.f:560.f;
+                float PX=18.f,PY=18.f,PW=400.f,PH=sa?620.f:660.f;
                 sf::RectangleShape bg({PW,PH}); bg.setPosition({PX,PY});
                 bg.setFillColor(sf::Color(0,0,0,212));
                 bg.setOutlineColor(sf::Color(150,150,150)); bg.setOutlineThickness(2.f);
@@ -4965,9 +5293,9 @@ int main(){
                                        sa->jaw, sa->cold_tol, sa->aquatic,
                                        sa->detritus, sr, sa->arboreal,
                                        sa->resp, sa->brood, sa->lifespan };
-                        draw_radar(window,font,PX+PW*0.5f,by+100.f,82.f,
+                        draw_radar(window,font,PX+PW*0.5f,by+104.f,70.f,
                                    AN,av,ar,13,sf::Color(255,190,110));
-                        by+=208.f;
+                        by+=248.f;   // 13軸はラベルが外へ張り出すので余白を広く取る
                         sf::Text nt(font,jp("神経網"),12);
                         nt.setFillColor(sf::Color(200,210,230));
                         nt.setPosition({PX+10.f,by}); window.draw(nt);
@@ -4975,6 +5303,9 @@ int main(){
                         draw_nn(window,font,*sa,PX+6.f,by,PW-12.f,116.f);
                         by+=124.f;
                     }
+                    { sf::Text t(font,jp(animal_summary(*sa).c_str()),13);
+                      t.setFillColor(sf::Color(255,215,140));
+                      t.setPosition({PX+10.f,by}); window.draw(t); by+=lh; }
                     snprintf(b,120,"齢 %d   捕食回数 %d",sa->age,sa->eaten);
                     { sf::Text t(font,jp(b),12); t.setPosition({PX+10.f,by});
                       t.setFillColor(sf::Color::White); window.draw(t); by+=lh; }
@@ -5033,9 +5364,9 @@ int main(){
                                        sp2->cold_tol, sp2->aquatic, sp2->drought_tol,
                                        sp2->climb, sp2->fire_tol,
                                        sp2->store_cap, sp2->lifespan };
-                        draw_radar(window,font,PX+PW*0.5f,by+100.f,82.f,
+                        draw_radar(window,font,PX+PW*0.5f,by+104.f,70.f,
                                    PN,pv,pr,13,sf::Color(140,235,140));
-                        by+=208.f;
+                        by+=248.f;   // 13軸はラベルが外へ張り出すので余白を広く取る
                         // 同じ型の、世界で最小・最大の個体と並べて姿を見せる
                         int fm=plant_form(*sp2);
                         float lo=form_min[fm], hi=form_max[fm];
@@ -5120,6 +5451,8 @@ int main(){
             auto lineF=[&](float py0,const std::vector<float>& v,float lo,float hi,sf::Color col){
                 sf::VertexArray ln(sf::PrimitiveType::LineStrip);
                 float px0=GX+6, pw=GW-12;
+                // 指定の上限を超えたら、実際の最大に合わせて伸ばす。振り切れない
+                for(int i=0;i<N&&i<(int)v.size();i++) if(v[i]>hi) hi=v[i]*1.08f;
                 for(int i=0;i<N&&i<(int)v.size();i++){
                     float t=(v[i]-lo)/std::max(1e-6f,hi-lo);
                     sf::Vertex vt;
@@ -5130,10 +5463,11 @@ int main(){
             auto lineI=[&](float py0,const std::vector<int>& v,int pk,sf::Color col){
                 sf::VertexArray ln(sf::PrimitiveType::LineStrip);
                 float px0=GX+6, pw=GW-12;
+                for(int i=0;i<N&&i<(int)v.size();i++) if(v[i]>pk) pk=v[i];
                 for(int i=0;i<N&&i<(int)v.size();i++){
                     sf::Vertex vt;
                     vt.position={px0+pw*i/(float)(N-1),
-                                 py0+ph*(1.f-(float)v[i]/std::max(1,pk))};
+                                 py0+ph*(1.f-clamp01((float)v[i]/std::max(1,pk)))};
                     vt.color=col; ln.append(vt);
                 }
                 window.draw(ln); };
@@ -5214,22 +5548,6 @@ int main(){
                 int span=N*SAMPLE_INTERVAL;
                 snprintf(b,240,"span -%.1fk .. now   t %d   zoom %.1fx   [V] %s%s",
                          span/1000.f,frame,zoom,vm[view_mode],paused?"   [PAUSED]":"");
-                // 今どの地図を見ているかを、画面上部にはっきり出す
-                if(font_ok){
-                    char mb[64];
-                    snprintf(mb,64,"[V]  %s",vm[view_mode]);
-                    sf::Text mt(font,jp(mb),17);
-                    sf::FloatRect mr=mt.getLocalBounds();
-                    sf::RectangleShape mbg({mr.size.x+24.f,28.f});
-                    mbg.setPosition({SCREEN_W*0.5f-(mr.size.x+24.f)*0.5f,8.f});
-                    mbg.setFillColor(sf::Color(0,0,0,200));
-                    mbg.setOutlineColor(sf::Color(150,170,190));
-                    mbg.setOutlineThickness(1.f);
-                    window.draw(mbg);
-                    mt.setFillColor(sf::Color(235,240,250));
-                    mt.setPosition({SCREEN_W*0.5f-mr.size.x*0.5f,11.f});
-                    window.draw(mt);
-                }
                 sf::Text t(font,b,11); t.setFillColor(sf::Color(190,190,190));
                 sf::FloatRect b3=t.getLocalBounds();
                 sf::RectangleShape bp2({b3.size.x+10.f,16.f});
@@ -5504,7 +5822,7 @@ int main(){
             // 選択した種の平均ステータス
             if(sel_lineage>=0 && sel_lineage<(int)lineages.size()){
                 const Lineage& L=lineages[sel_lineage];
-                float PX=18.f,PY=110.f,PW=330.f,PH=330.f;
+                float PX=18.f,PY=110.f,PW=400.f,PH=430.f;
                 sf::RectangleShape bg2({PW,PH}); bg2.setPosition({PX,PY});
                 bg2.setFillColor(sf::Color(0,0,0,225));
                 bg2.setOutlineColor(lineage_color(L.id)); bg2.setOutlineThickness(2.f);
@@ -5538,9 +5856,9 @@ int main(){
                                   vm_[4], vm_[5], vm_[6], vm_[8], vm_[9] };
                     float pr[9]={ vm_[1], vm_[0], vm_[2], vm_[3],
                                   vm_[4], vm_[5], vm_[6], vm_[8], vm_[9] };
-                    draw_radar(window,font,PX+PW*0.5f,by+94.f,78.f,
+                    draw_radar(window,font,PX+PW*0.5f,by+98.f,68.f,
                                PN,pv,pr,9,lineage_color(L.id));
-                    by+=196.f;
+                    by+=228.f;
                     snprintf(b,130,"樹高 %.2f   水生 %.2f",vm_[7],vm_[8]);
                     { sf::Text t(font,jp(b),12); t.setPosition({PX+10.f,by});
                       t.setFillColor(sf::Color(190,200,190)); window.draw(t); }
@@ -5552,9 +5870,9 @@ int main(){
                                   vm_[11]/(SENSOR_MAX*N_SENSOR), vm_[12] };
                     float ar[9]={ vm_[4], vm_[3], vm_[2], vm_[0],
                                   vm_[5], vm_[6], vm_[10], vm_[11], vm_[12] };
-                    draw_radar(window,font,PX+PW*0.5f,by+94.f,78.f,
+                    draw_radar(window,font,PX+PW*0.5f,by+98.f,68.f,
                                AN,av,ar,9,lineage_color(L.id));
-                    by+=196.f;
+                    by+=228.f;
                     snprintf(b,130,"体格 %.2f   感覚器の射程 %.1f",vm_[7],vm_[11]);
                     { sf::Text t(font,jp(b),12); t.setPosition({PX+10.f,by});
                       t.setFillColor(sf::Color(200,200,190)); window.draw(t); by+=18.f; }
@@ -5614,7 +5932,8 @@ int main(){
                     dt.setPosition({dxp+dw*0.5f-dr.size.x*0.5f,ly});
                     window.draw(dt);
                     ui_hits.push_back({dxp,rowy,dw,rowh,300+i});
-
+                    // 行をクリックしたら、その名前を入力欄に書き込む
+                    ui_hits.push_back({bx+12.f,rowy,bw-70.f,rowh,500+i});
                     sf::Text ft(font,jp(save_files[i].c_str()),13);
                     ft.setFillColor(pend?sf::Color(255,190,190):sf::Color(180,220,255));
                     ft.setPosition({bx+20.f,ly}); window.draw(ft);
@@ -5693,7 +6012,8 @@ int main(){
                 {"C  温帯",   sf::Color(108,200,108)}, {"D  亜寒帯", sf::Color(118,150,202)},
                 {"ET ツンドラ",sf::Color(158,140,172)},{"EF 氷雪",   sf::Color(206,224,244)}
             };
-            float lx=18.f, ly=SCREEN_H-8.f-8*20.f;
+            // 左下はヘルプのボタンが使う。その上へ逃がす
+            float lx=18.f, ly=SCREEN_H-16.f-34.f-12.f-(8*20.f+6.f);
             sf::RectangleShape bg3({186.f,8*20.f+6.f});
             bg3.setPosition({lx-6.f,ly-4.f});
             bg3.setFillColor(sf::Color(0,0,0,195));
@@ -5713,7 +6033,8 @@ int main(){
             // 背景を薄く覆う
             sf::RectangleShape vlq({(float)SCREEN_W,(float)SCREEN_H});
             vlq.setFillColor(sf::Color(0,0,0,170)); window.draw(vlq);
-            float PW2=SCREEN_W*0.80f, PH2=SCREEN_H*0.66f;
+            // 横に広すぎると読みにくい。縦に三段積むので、幅は抑えて高さを取る
+            float PW2=std::min(SCREEN_W*0.52f,760.f), PH2=SCREEN_H*0.80f;
             float PX2=(SCREEN_W-PW2)*0.5f, PY2=(SCREEN_H-PH2)*0.5f;
             sf::RectangleShape bg2({PW2,PH2});
             bg2.setPosition({PX2,PY2});
@@ -5721,16 +6042,24 @@ int main(){
             bg2.setOutlineColor(sf::Color(130,150,160)); bg2.setOutlineThickness(1.f);
             window.draw(bg2);
 
-            struct GDef { const char* name; Series* a; Series* b;
-                          const char* la; const char* lb; float lo,hi; };
+            struct GDef { const char* name; Series* a; Series* b; Series* c;
+                          const char* la; const char* lb; const char* lc;
+                          float lo,hi; };
             GDef gd[7]={
-                {"個体数",     &s_plant,&s_animal,"植物","動物",     0.f,-1.f},
-                {"植物の形質", &s_maxh, &s_shade, "最大樹高","耐陰性", 0.f,5.f},
-                {"動物の形質", &s_reach,&s_diet,  "届く高さ","肉食性", 0.f,5.f},
-                {"陸の平均気温",&s_temp, nullptr,  "気温",nullptr,   -30.f,40.f},
-                {"耐寒性",     &s_coldP,&s_coldA, "植物","動物",     0.f,1.f},
-                {"大気",       &s_co2,  &s_o2,    "CO2","O2",       0.f,CO2_BASE*1.5f},
-                {"生産者と消費者",&s_plant,&s_animal,"植物","動物",  0.f,-1.f},
+                {"個体数",     &s_plant,&s_animal,&s_corpse,
+                               "植物","動物","死がい",            0.f,-1.f},
+                {"植物の形質", &s_maxh, &s_shade, &s_tough,
+                               "最大樹高","耐陰性","防御",         0.f,-1.f},
+                {"動物の形質", &s_reach,&s_diet,  &s_jaw,
+                               "届く高さ","肉食性","顎",           0.f,-1.f},
+                {"陸の平均気温",&s_temp, nullptr,  nullptr,
+                               "気温",nullptr,nullptr,           -30.f,40.f},
+                {"耐寒性",     &s_coldP,&s_coldA, nullptr,
+                               "植物","動物",nullptr,              0.f,1.f},
+                {"大気",       &s_co2,  &s_o2,    nullptr,
+                               "CO2","O2",nullptr,                0.f,-1.f},
+                {"生産者と消費者",&s_plant,&s_animal,&s_micro,
+                               "植物","動物","分解者",             0.f,-1.f},
             };
             int gi=std::max(0,std::min(graph_big,6));
             GDef& g=gd[gi];
@@ -5773,69 +6102,134 @@ int main(){
             }
 
             // 折れ線
-            float ax=PX2+70.f, ay=PY2+60.f, aw2=PW2-100.f, ah=PH2-140.f;
-            sf::RectangleShape fr2({aw2,ah});
-            fr2.setPosition({ax,ay});
-            fr2.setFillColor(sf::Color(0,0,0,0));
-            fr2.setOutlineColor(sf::Color(70,80,90)); fr2.setOutlineThickness(1.f);
-            window.draw(fr2);
+            // 二本を重ねると尺度が違って読めない。上下に分けて、各々に目盛を付ける
             const std::vector<float>& va=g.a->v[graph_scale];
             const std::vector<float>* vb=g.b? &g.b->v[graph_scale] : nullptr;
+            const std::vector<float>* vc=g.c? &g.c->v[graph_scale] : nullptr;
+            int npane=1+(vb?1:0)+(vc?1:0);
+            float ax=PX2+62.f, aw2=PW2-82.f;
+            float atop=PY2+60.f, atot=PH2-140.f;
+            float agap=18.f;
+            float ah=(atot-agap*(npane-1))/npane;
             int N2=(int)va.size();
             int win=std::min(N2,300);
             int maxoff=std::max(0,N2-win);
             if(graph_off>maxoff) graph_off=maxoff;
             if(graph_off<0) graph_off=0;
             int st3=N2-win-graph_off; if(st3<0) st3=0;
-            float lo=g.lo, hi=g.hi;
-            if(hi<0.f){                        // 自動目盛
-                hi=1.f;
-                for(int i=st3;i<st3+win&&i<N2;i++){
-                    if(va[i]>hi) hi=va[i];
-                    if(vb&&i<(int)vb->size()&&(*vb)[i]>hi) hi=(*vb)[i];
-                }
-                hi*=1.1f;
-            }
-            auto plot=[&](const std::vector<float>& v,sf::Color col){
-                if((int)v.size()<2) return;
-                sf::VertexArray ln(sf::PrimitiveType::LineStrip);
-                for(int i=st3;i<st3+win&&i<(int)v.size();i++){
-                    float t=(v[i]-lo)/std::max(1e-6f,hi-lo);
-                    sf::Vertex vt;
-                    vt.position={ax+aw2*(i-st3)/(float)std::max(1,win-1),
-                                 ay+ah*(1.f-clamp01(t))};
-                    vt.color=col; ln.append(vt);
-                }
-                window.draw(ln);
-            };
-            plot(va,sf::Color(120,235,140));
-            if(vb) plot(*vb,sf::Color(255,170,90));
-            // 目盛
             char lb2[64];
-            for(int k=0;k<=4;k++){
-                float t=k/4.f, yy=ay+ah*(1.f-t);
-                sf::RectangleShape gl2({aw2,1.f});
-                gl2.setPosition({ax,yy}); gl2.setFillColor(sf::Color(50,58,66));
-                window.draw(gl2);
-                snprintf(lb2,64,"%.1f",lo+(hi-lo)*t);
-                sf::Text t2(font,jp(lb2),11);
-                t2.setFillColor(sf::Color(150,160,170));
-                t2.setPosition({PX2+18.f,yy-8.f}); window.draw(t2);
-            }
-            // 凡例と操作の案内
-            snprintf(lb2,64,"%s",g.la);
-            { sf::Text t2(font,jp(lb2),14); t2.setFillColor(sf::Color(120,235,140));
-              t2.setPosition({ax,ay+ah+10.f}); window.draw(t2); }
-            if(g.lb){
-                snprintf(lb2,64,"%s",g.lb);
-                sf::Text t2(font,jp(lb2),14); t2.setFillColor(sf::Color(255,170,90));
-                t2.setPosition({ax+110.f,ay+ah+10.f}); window.draw(t2);
-            }
+            // 一段ぶんを描く。系列ごとに自分の目盛を持つので、尺度が違っても読める
+            auto pane=[&](const std::vector<float>& v,sf::Color col,
+                          const char* name,float py,float ph2){
+                sf::RectangleShape fr3({aw2,ph2});
+                fr3.setPosition({ax,py});
+                fr3.setFillColor(sf::Color(0,0,0,0));
+                fr3.setOutlineColor(sf::Color(70,80,90)); fr3.setOutlineThickness(1.f);
+                window.draw(fr3);
+                float lo=g.lo, hi=g.hi;
+                if(hi<0.f){                        // 自動目盛
+                    hi=1.f;
+                    for(int i=st3;i<st3+win&&i<(int)v.size();i++)
+                        if(v[i]>hi) hi=v[i];
+                    hi*=1.1f;
+                }
+                for(int k=0;k<=4;k++){
+                    float t=k/4.f, yy=py+ph2*(1.f-t);
+                    sf::RectangleShape gl2({aw2,1.f});
+                    gl2.setPosition({ax,yy}); gl2.setFillColor(sf::Color(50,58,66));
+                    window.draw(gl2);
+                    snprintf(lb2,64,"%.1f",lo+(hi-lo)*t);
+                    sf::Text t2(font,jp(lb2),11);
+                    t2.setFillColor(sf::Color(150,160,170));
+                    t2.setPosition({PX2+14.f,yy-8.f}); window.draw(t2);
+                }
+                if((int)v.size()>=2){
+                    sf::VertexArray ln(sf::PrimitiveType::LineStrip);
+                    for(int i=st3;i<st3+win&&i<(int)v.size();i++){
+                        float t=(v[i]-lo)/std::max(1e-6f,hi-lo);
+                        sf::Vertex vt;
+                        vt.position={ax+aw2*(i-st3)/(float)std::max(1,win-1),
+                                     py+ph2*(1.f-clamp01(t))};
+                        vt.color=col; ln.append(vt);
+                    }
+                    window.draw(ln);
+                }
+                sf::Text nt2(font,jp(name),14);
+                nt2.setFillColor(col);
+                nt2.setPosition({ax+8.f,py+4.f}); window.draw(nt2);
+            };
+            pane(va,sf::Color(120,235,140),g.la,atop,ah);
+            if(vb) pane(*vb,sf::Color(255,170,90),g.lb,atop+ah+agap,ah);
+            if(vc) pane(*vc,sf::Color(200,140,255),g.lc,atop+(ah+agap)*2,ah);
+            float ay=atop;   // 以降の案内表示の基準
             snprintf(lb2,64,"スクロールで時間移動   %d / %d",graph_off,maxoff);
             { sf::Text t2(font,jp(lb2),12); t2.setFillColor(sf::Color(140,150,160));
               t2.setPosition({ax,ay+ah+32.f}); window.draw(t2); }
             ui_hits.push_back({ax,ay,aw2,ah,220});   // スクロール領域
         }
+        // ===== 操作の案内 =====
+        if(font_ok && !show_tree){
+            // 個体パネルが左上に出るので、案内は左下に置く
+            const float HB=34.f, HM=16.f;
+            float hx=HM, hy=SCREEN_H-HM-HB;
+            bool hov=(mouse_x>=hx&&mouse_x<=hx+HB&&mouse_y>=hy&&mouse_y<=hy+HB);
+            sf::RectangleShape hb({HB,HB});
+            hb.setPosition({hx,hy});
+            hb.setFillColor(show_help?sf::Color(30,64,44,235)
+                           :(hov?sf::Color(40,50,58,225):sf::Color(0,0,0,195)));
+            hb.setOutlineColor(show_help||hov?sf::Color(140,225,160)
+                                             :sf::Color(120,135,150));
+            hb.setOutlineThickness(1.f);
+            window.draw(hb);
+            sf::Text ht(font,jp("?"),20);
+            ht.setFillColor(show_help||hov?sf::Color(200,250,210):sf::Color(190,205,215));
+            sf::FloatRect hr=ht.getLocalBounds();
+            ht.setPosition({hx+HB*0.5f-hr.size.x*0.5f,hy+3.f});
+            window.draw(ht);
+            ui_hits.push_back({hx,hy,HB,HB,104});
+
+            if(show_help){
+                struct HL { const char* k; const char* d; };
+                static const HL hl[]={
+                    {"緑の点","植物"},
+                    {"橙の点","動物(赤いほど肉食)"},
+                    {"紫の点","分解者"},
+                    {"クリック","生き物を選ぶ"},
+                    {"W A S D","地図を動かす"},
+                    {"Z / X","縮小・拡大"},
+                    {"‹ ›","地図の切りかえ"},
+                    {"N","昼夜の陰影を消す"},
+                    {"C","種ごとに色分け"},
+                    {"G","グラフの表示"},
+                    {"Space","一時停止"},
+                    {"K / L","保存・読み込み"},
+                    {"R","動物を再投入"},
+                    {"P","プランクトンを放つ"},
+                };
+                int nh=(int)(sizeof(hl)/sizeof(hl[0]));
+                float pw2=252.f, rowh=22.f;
+                float ph2=nh*rowh+20.f;
+                // 気候の凡例と重ならないよう、ボタンの右へ開く
+                float px2=hx+HB+8.f, py2=SCREEN_H-16.f-ph2;
+                sf::RectangleShape pb({pw2,ph2});
+                pb.setPosition({px2,py2});
+                pb.setFillColor(sf::Color(0,0,0,225));
+                pb.setOutlineColor(sf::Color(120,135,150));
+                pb.setOutlineThickness(1.f);
+                window.draw(pb);
+                float ly2=py2+10.f;
+                for(int i=0;i<nh;i++){
+                    sf::Text kt(font,jp(hl[i].k),13);
+                    kt.setFillColor(sf::Color(140,225,160));
+                    kt.setPosition({px2+12.f,ly2}); window.draw(kt);
+                    sf::Text dt2(font,jp(hl[i].d),13);
+                    dt2.setFillColor(sf::Color(205,215,225));
+                    dt2.setPosition({px2+96.f,ly2}); window.draw(dt2);
+                    ly2+=rowh;
+                }
+            }
+        }
+
         // ===== 下部バー =====
         if(font_ok && !show_tree){
             const float BH=72.f, BM=16.f, TW=96.f;
@@ -5940,3 +6334,6 @@ int main(){
     prevent_sleep_end();
     return 0;
 }
+
+//起動コマンドは以下の通り
+//clang++ -std=c++17 phase3.cpp -o phase3 $(pkg-config --cflags --libs sfml-graphics) -framework IOKit -framework CoreFoundation && ./phase3
