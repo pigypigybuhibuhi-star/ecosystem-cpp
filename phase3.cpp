@@ -2,6 +2,7 @@
 #include <vector>
 #include <cmath>
 #include <cstdio>
+#include <cstring>
 #include <random>
 #include <algorithm>
 #include <functional>
@@ -575,6 +576,71 @@ std::vector<float> pload(GRID_W*GRID_H,0.f), aload(GRID_W*GRID_H,0.f);
 double infect_p=0, infect_a=0;
 long fire_events=0; double fire_area=0;
 long slide_events=0;
+
+// 環境の出来事の記録と再生。生き物と無関係に起きる離散的な出来事を
+// 1件ずつ tick・位置・種類・強さで書き出し、時刻と場所を混ぜて再生できるようにする。
+// 書式: 1行1件 "tick 種類 x y 強さ"。'#' で始まる行は注記
+enum EvKind { EV_FIRE=0, EV_SLIDE=1, EV_N };
+const char* EV_NAME[EV_N]={"fire","slide"};
+struct EnvEvent { long tick; int kind; int x,y; float strength; };
+FILE* g_rec=nullptr;                       // --record の出力先
+bool  g_replay=false;                      // --replay 中は該当種類を物理から起こさない
+std::vector<EnvEvent> g_replay_ev;         // 混ぜたあと tick 順に並べた出来事
+size_t g_replay_pos=0;
+long   g_replay_done[EV_N]={0,0};
+
+void ev_record(int kind,int x,int y,float s){
+    if(!g_rec) return;
+    fprintf(g_rec,"%d %s %d %d %.4f\n",g_frame,EV_NAME[kind],x,y,s);
+}
+// 時刻と場所を、それぞれ同じ種類の出来事の中で入れ替える。
+// 種類と強さは出来事に付いたまま残す。種類をまたいで混ぜると、
+// 海に崖崩れが起きるような、記録に無い組み合わせになるため
+bool ev_load_replay(const char* path,unsigned shuffle_seed){
+    std::ifstream f(path);
+    if(!f){ fprintf(stderr,"replay: cannot open %s\n",path); return false; }
+    std::vector<EnvEvent> ev[EV_N];
+    std::string line;
+    while(std::getline(f,line)){
+        if(line.empty()||line[0]=='#') continue;
+        char kn[32]; EnvEvent e;
+        if(sscanf(line.c_str(),"%ld %31s %d %d %f",&e.tick,kn,&e.x,&e.y,&e.strength)!=5) continue;
+        e.kind=-1;
+        for(int k=0;k<EV_N;k++) if(!strcmp(kn,EV_NAME[k])) e.kind=k;
+        if(e.kind<0) continue;
+        ev[e.kind].push_back(e);
+    }
+    std::mt19937 srng(shuffle_seed);       // 本体の乱数とは別にする
+    g_replay_ev.clear();
+    for(int k=0;k<EV_N;k++){
+        auto& v=ev[k];
+        std::vector<long> ticks; std::vector<std::pair<int,int>> pos;
+        for(auto& e:v){ ticks.push_back(e.tick); pos.push_back({e.x,e.y}); }
+        std::shuffle(ticks.begin(),ticks.end(),srng);
+        std::shuffle(pos.begin(),pos.end(),srng);
+        for(size_t i=0;i<v.size();i++){
+            v[i].tick=ticks[i]; v[i].x=pos[i].first; v[i].y=pos[i].second;
+            g_replay_ev.push_back(v[i]);
+        }
+        printf("replay: %zu %s events\n",v.size(),EV_NAME[k]);
+    }
+    std::stable_sort(g_replay_ev.begin(),g_replay_ev.end(),
+        [](const EnvEvent& a,const EnvEvent& b){ return a.tick<b.tick; });
+    g_replay_pos=0;
+    return true;
+}
+// この tick に起こす再生の出来事を、種類ごとに呼び出し側へ渡す
+template<class F> void ev_replay_due(int kind,F apply){
+    for(size_t i=g_replay_pos;i<g_replay_ev.size() && g_replay_ev[i].tick<=g_frame;i++){
+        const EnvEvent& e=g_replay_ev[i];
+        if(e.kind!=kind || e.tick<g_frame) continue;
+        if(e.x<0||e.x>=GRID_W||e.y<0||e.y>=GRID_H) continue;
+        apply(e); g_replay_done[kind]++;
+    }
+}
+void ev_replay_advance(){
+    while(g_replay_pos<g_replay_ev.size() && g_replay_ev[g_replay_pos].tick<=g_frame) g_replay_pos++;
+}
 
 // 選択勾配。繁殖した個体と集団全体で遺伝子の平均を比べる。
 // 差がそのまま「その形質が今どちらへ押されているか」になる。
@@ -2077,19 +2143,27 @@ void update_odor(){
 }
 
 // 崖崩れ。急斜面が滑り、その場の生物を押し流す
+void slide_at(int ci){
+    slide_events++;
+    ev_record(EV_SLIDE,ci%GRID_W,ci/GRID_W,slope[ci]);
+    for(int t=pgrid.b(ci);t<pgrid.e(ci);t++){
+        Plant& p=plants[pgrid.items[t]];
+        if(!p.alive) continue;
+        p.alive=false;
+        corpses.push_back({p.x,p.y,p.height*0.8f,0});
+    }
+    soil_n[ci]*=0.35f;                 // 表土が流される
+}
 void update_slides(){
     // 崖崩れ。急斜面が滑り、その場の生物を押し流す
+    if(g_replay){                      // 再生中は記録の各件だけを起こす
+        ev_replay_due(EV_SLIDE,[](const EnvEvent& e){ slide_at(idx(e.x,e.y)); });
+        return;
+    }
     for(int ci=0;ci<GRID_W*GRID_H;ci++){
         if(sea[ci]||slope[ci]<SLIDE_SLOPE) continue;
         if(dist01(rng)>=SLIDE_RATE*(slope[ci]/SLIDE_SLOPE)) continue;
-        slide_events++;
-        for(int t=pgrid.b(ci);t<pgrid.e(ci);t++){
-            Plant& p=plants[pgrid.items[t]];
-            if(!p.alive) continue;
-            p.alive=false;
-            corpses.push_back({p.x,p.y,p.height*0.8f,0});
-        }
-        soil_n[ci]*=0.35f;                 // 表土が流される
+        slide_at(ci);
     }
 }
 
@@ -2181,13 +2255,27 @@ void update_fire(int frame){
     float frac = (tot>1e-6f) ? o2m/tot : 0.f;    // 0..1
     // 地球の21%を基準に、火の窓(17%〜35%)へ写す
     float o2r = frac/0.21f;
-    if(o2r<FIRE_O2_MIN){                      // 酸素が足りず火が広がらない
+    if(o2r<FIRE_O2_MIN && !g_replay){         // 酸素が足りず火が広がらない(再生の出来事は外から与える)
         std::fill(fire.begin(),fire.end(),0.f);
         return;
     }
     // 酸素が多いほど、湿った燃料まで燃えるようになる
     float wet_ok=FIRE_MOIST*std::min(2.0f,o2r/FIRE_O2_WET);
 
+    if(g_replay){
+        // 再生中: 落雷と燃え広がりを止め、記録の各件だけを置く。
+        // 置いた火は隣へ移らず、その場で減衰して消える(連鎖を起こさない)
+        for(int i=0;i<GRID_W*GRID_H;i++){
+            float f=fire[i]*(1.f-FIRE_DECAY);
+            fire_buf[i]=(f<0.01f)?0.f:f;
+        }
+        ev_replay_due(EV_FIRE,[](const EnvEvent& e){
+            int i=idx(e.x,e.y);
+            fire_buf[i]=std::max(fire_buf[i],e.strength);
+            fire_events++;
+            ev_record(EV_FIRE,e.x,e.y,e.strength);
+        });
+    } else
     for(int y=0;y<GRID_H;y++){
         for(int x=0;x<GRID_W;x++){
             int i=idx(x,y);
@@ -2206,6 +2294,8 @@ void update_fire(int frame){
             f*=(1.f-FIRE_DECAY);
             if(f>3.f) f=3.f;
             fire_buf[i]=f;
+            // 燃え始めたマス(落雷でも燃え移りでも)を1件として記録する
+            if(fire[i]<0.05f && f>=0.05f) ev_record(EV_FIRE,x,y,f);
         }
     }
     fire.swap(fire_buf);
@@ -4033,11 +4123,26 @@ std::string save_summary(const std::string& fn){
 }
 
 int main(int argc,char** argv){
-    // 起動引数: --seed N  --stop-at N
+    // 起動引数: --seed N  --stop-at N  --record FILE  --replay FILE --shuffle-seed N
+    std::string rec_path, replay_path; unsigned shuffle_seed=1;
     for(int i=1;i<argc;i++){
         std::string a=argv[i];
         if(a=="--seed"    && i+1<argc) rng.seed((unsigned)std::stoul(argv[++i]));
         if(a=="--stop-at" && i+1<argc) g_stop_at=std::stol(argv[++i]);
+        if(a=="--record"  && i+1<argc) rec_path=argv[++i];
+        if(a=="--replay"  && i+1<argc) replay_path=argv[++i];
+        if(a=="--shuffle-seed" && i+1<argc) shuffle_seed=(unsigned)std::stoul(argv[++i]);
+    }
+    if(!rec_path.empty()){
+        g_rec=fopen(rec_path.c_str(),"w");
+        if(!g_rec){ fprintf(stderr,"record: cannot open %s\n",rec_path.c_str()); return 1; }
+        fprintf(g_rec,"# evosim environment events v1: tick kind x y strength\n");
+        fprintf(g_rec,"# fire strength = fire intensity at ignition; slide strength = slope\n");
+    }
+    if(!replay_path.empty()){
+        if(!ev_load_replay(replay_path.c_str(),shuffle_seed)) return 1;
+        g_replay=true;
+        printf("replay: %s shuffle-seed %u (fire/slide physics off)\n",replay_path.c_str(),shuffle_seed);
     }
     prevent_sleep_begin();
     for(int k=0;k<N_ODOR;k++) odor[k].assign(GRID_W*GRID_H,0.f);
@@ -4530,6 +4635,8 @@ int main(int argc,char** argv){
               ao+=std::chrono::duration<double,std::milli>(tf2-te).count();
               auto tg=std::chrono::steady_clock::now();
               update_slides();
+              if(g_replay) ev_replay_advance();
+              if(g_rec && frame%600==0) fflush(g_rec);
               auto th2=std::chrono::steady_clock::now();
               as+=std::chrono::duration<double,std::milli>(th2-tg).count();
               if(++cm>=60){
@@ -4545,6 +4652,9 @@ int main(int argc,char** argv){
             if(g_stop_at>0 && frame>=g_stop_at){
                 printf("=== stop at t=%d  mean fps (t>=50000) %.2f over %ld frames ===\n",
                        frame, g_fps_time>0? g_fps_n/g_fps_time : 0.0, g_fps_n);
+                if(g_replay) printf("replay: done fire %ld slide %ld of %zu\n",
+                                    g_replay_done[EV_FIRE],g_replay_done[EV_SLIDE],g_replay_ev.size());
+                if(g_rec){ fclose(g_rec); g_rec=nullptr; }
                 fflush(stdout);
                 window.close();
             }
