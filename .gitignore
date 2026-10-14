@@ -8,3 +8,6 @@ main_neat
 *.dSYM/
 old/
 .DS_Store
+runs/
+old3
+phase4
