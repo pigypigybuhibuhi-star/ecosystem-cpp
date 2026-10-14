@@ -385,6 +385,15 @@ std::vector<float> slope(GRID_W*GRID_H, 0.f);
 std::vector<float> precip(GRID_W*GRID_H, 0.f);
 std::vector<float> soil_water(GRID_W*GRID_H, 0.f);
 std::vector<float> soil_n(GRID_W*GRID_H, SOIL_N_BASE);
+// 収支の帳簿。系の外とのやりとり(明示した出入り)を種類ごとに積算する。
+// 読むだけで物理は変えない。BUDGET_EVERY ごとに在庫の変化と並べて出力し、0 に戻す
+const int BUDGET_EVERY = 600;
+struct Budget {
+    double c_relax=0, c_trans=0;     // 大気CO2: 基準値への緩和(海・岩石との交換とみなす) / 輸送の数値誤差と下限での切り捨て
+    double o_relax=0, o_trans=0;     // 大気O2: 同上
+    double n_sink=0, n_runoff=0, n_upwell=0, n_clamp=0;   // 海の窒素: 沈降・河川流入・湧昇・上下限の切り捨て
+    double w_relax=0;                // 陸の土壌水: 降水・河川・流出による目標への緩和(上下限込み)
+} g_bud;
 std::vector<float> shelf(GRID_W*GRID_H, 0.f);   // 陸への近さ(1=岸 0=外洋)
 std::vector<char>  upwell(GRID_W*GRID_H, 0);
 std::vector<char>  ice(GRID_W*GRID_H, 0);
@@ -1852,11 +1861,17 @@ void update_water(int frame){
             if(sea[i]){
                 soil_water[i]=FIELD_CAP;
                 // 有機物が沈降して栄養が抜ける。沿岸と湧昇域だけが補われる
+                // 帳簿は更新の前後の差で測る。式を分けると FMA の丸めが変わり結果がずれるため、更新の式は元のまま
+                float n0=soil_n[i];
                 soil_n[i]-=soil_n[i]*N_SINK;
+                float n1=soil_n[i];
                 soil_n[i]+=N_RUNOFF*shelf[i]*shelf[i];
-                if(upwell[i]) soil_n[i]+=N_UPWELL;
+                g_bud.n_sink+=n1-n0; g_bud.n_runoff+=soil_n[i]-n1;
+                if(upwell[i]){ float n2=soil_n[i]; soil_n[i]+=N_UPWELL; g_bud.n_upwell+=soil_n[i]-n2; }
+                float pre=soil_n[i];
                 if(soil_n[i]<0.f) soil_n[i]=0.f;
                 if(soil_n[i]>3.f) soil_n[i]=3.f;
+                g_bud.n_clamp+=soil_n[i]-pre;
                 continue;
             }
             // 乾燥限界は気温に比例する。寒い土地は少ない雨でも乾かない
@@ -1865,8 +1880,10 @@ void update_water(int frame){
             aridity[i]=A;
             float target=A/(A+ARID_SOFT);          // 飽和させて差をなだらかにする
             if(river[i]) target=std::max(target,RIVER_SUPPLY);
+            float w0=soil_water[i];
             soil_water[i]+=(target-soil_water[i])*WATER_RELAX;
             soil_water[i]=clamp01(soil_water[i]);
+            g_bud.w_relax+=soil_water[i]-w0;
         }
     }
 }
@@ -1959,7 +1976,11 @@ void update_climate(int frame){
     day_light=(float)(dsum/(GRID_W*GRID_H));
 }
 
+inline double grid_sum(const std::vector<float>& g){
+    double s=0; for(int i=0;i<GRID_W*GRID_H;i++) s+=g[i]; return s;
+}
 void update_gases(){
+    double s0[2]={grid_sum(co2),grid_sum(o2)};
     for(int y=0;y<GRID_H;y++){
         float u=wind[y];
         if(std::fabs(u)<1e-4f) continue;
@@ -1975,6 +1996,7 @@ void update_gases(){
     for(int pass=0;pass<2;pass++){
         std::vector<float>& g=(pass==0)?co2:o2;
         float base=(pass==0)?CO2_BASE:O2_BASE;
+        double s1=grid_sum(g), relax=0;
         for(int y=0;y<GRID_H;y++) for(int x=0;x<GRID_W;x++){
             float s=0.f; int c=0;
             for(int dy=-1;dy<=1;dy++) for(int dx=-1;dx<=1;dx++){
@@ -1985,9 +2007,14 @@ void update_gases(){
             }
             float mean=s/c; int i=idx(x,y);
             gbuf[i]=g[i]+(mean-g[i])*GAS_DIFFUSE+(base-g[i])*GAS_RELAX;
+            relax+=(base-g[i])*GAS_RELAX;
             if(gbuf[i]<0.f) gbuf[i]=0.f;
         }
         g.swap(gbuf);
+        // 移流・拡散は本来は総量を保つ。ずれた分は数値誤差として別に数える
+        double trans=(s1-s0[pass])+(grid_sum(g)-s1-relax);
+        if(pass==0){ g_bud.c_relax+=relax; g_bud.c_trans+=trans; }
+        else       { g_bud.o_relax+=relax; g_bud.o_trans+=trans; }
     }
 }
 
@@ -4836,6 +4863,36 @@ int main(int argc,char** argv){
                 printf("t:%d P:%d absorb:%.3f maxH:%.3f shade:%.3f tough:%.3f clonal:%.3f disp:%.3f cold:%.3f aq:%.3f dry:%.3f | soil:%.3f\n",
                        frame,n,n?sa/n:0,n?sh/n:0,n?st/n:0,n?stg/n:0,n?scl/n:0,n?sdp/n:0,
                        n?scd/n:0,n?saq/n:0,n?sdr/n:0,land?sw/land:0);
+                if(frame%BUDGET_EVERY==0){
+                    // 在庫。生体の炭素はエネルギー×CO2_PER_ENERGY(光合成の換算と同じ)で数える。
+                    // 植物の体(高さ)は建設に GROW_COST を払ったぶんの炭素を持つとみなす
+                    double ep=0,ea=0,ec=0,em=0,np=0,ns=0,nl=0,wl=0;
+                    for(const auto& p:plants){ ep+=p.energy+p.height*GROW_COST; np+=p.n_store; }
+                    for(const auto& a:animals) ea+=a.energy+a.fat;
+                    for(const auto& c:corpses) ec+=c.energy;
+                    for(const auto& m:microbes) if(m.alive) em+=m.energy;
+                    for(int i=0;i<GRID_W*GRID_H;i++){
+                        if(sea[i]) ns+=soil_n[i]; else { nl+=soil_n[i]; wl+=soil_water[i]; } }
+                    double catm=grid_sum(co2), oatm=grid_sum(o2);
+                    double cbio=(ep+ea+ec+em)*CO2_PER_ENERGY;
+                    double ctot=catm+cbio, ntot=np+ns+nl;
+                    static bool have=false; static double pc=0,po=0,pn=0,pw=0;
+                    if(have){
+                        double cext=g_bud.c_relax+g_bud.c_trans;
+                        double next=g_bud.n_sink+g_bud.n_runoff+g_bud.n_upwell+g_bud.n_clamp;
+                        printf("      budget C: atm %.1f bio %.1f (P %.1f A %.1f dead %.1f mic %.1f) | dC %+.2f = ext %+.2f (relax %+.2f trans %+.3f) + internal %+.2f\n",
+                               catm,cbio,ep*CO2_PER_ENERGY,ea*CO2_PER_ENERGY,ec*CO2_PER_ENERGY,em*CO2_PER_ENERGY,
+                               ctot-pc,cext,g_bud.c_relax,g_bud.c_trans,ctot-pc-cext);
+                        printf("      budget O2: atm %.1f | dO2 %+.2f = relax %+.2f trans %+.3f + internal %+.2f\n",
+                               oatm,oatm-po,g_bud.o_relax,g_bud.o_trans,oatm-po-g_bud.o_relax-g_bud.o_trans);
+                        printf("      budget N: soil land %.1f sea %.1f plant %.1f | dN %+.2f = sink %+.2f runoff %+.2f upwell %+.2f clamp %+.3f + internal %+.2f\n",
+                               nl,ns,np,ntot-pn,g_bud.n_sink,g_bud.n_runoff,g_bud.n_upwell,g_bud.n_clamp,ntot-pn-next);
+                        printf("      budget W: soil land %.1f | dW %+.2f = relax %+.2f + internal %+.2f\n",
+                               wl,wl-pw,g_bud.w_relax,wl-pw-g_bud.w_relax);
+                    }
+                    have=true; pc=ctot; po=oatm; pn=ntot; pw=wl;
+                    g_bud=Budget();
+                }
                 { double sfi=0,scl2=0,sx=0;
                   for(const auto& p:plants){ sfi+=p.fire_tol; scl2+=p.climb; sx+=p.sexual; }
                   double asx=0; for(const auto& a:animals) asx+=a.sexual;
