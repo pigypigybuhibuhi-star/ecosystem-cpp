@@ -34,76 +34,47 @@ const int   GRID_W          = 900;     // 9 km
 const int   GRID_H          = 500;     // 5 km
 
 // --- 地形 ---
-const float SEA_LEVEL       = 0.42f;
-const float MOUNTAIN_LEVEL  = 0.72f;
-// プレートテクトニクス。山脈・海溝・海嶺・平坦な深海底は、
-// すべてプレート境界での相対運動から出る
-const int   N_PLATES        = 24;      // プレートの枚数
-const float OCEANIC_FRAC    = 0.72f;   // 海洋プレートの割合
-const float RIDGE_HEIGHT    = 0.045f;  // 海嶺。現実では海面下2,500mに留まる
-const float ISLAND_ARC      = 0.30f;   // 島弧。日本列島やインドネシア
-const int   N_HOTSPOT       = 5;       // ホットスポットの数
-const int   HOTSPOT_CHAIN   = 9;       // 一列に並ぶ島の数
-const float HOTSPOT_GAP     = 11.f;    // 島の間隔
-const float HOTSPOT_R       = 6.5f;    // 島の大きさ
-const float HOTSPOT_H       = 0.42f;   // 火山の高さ
-const float TRENCH_DEPTH    = 0.15f;   // 海溝(沈み込み帯)
-const float RIFT_DEPTH      = 0.10f;   // 大陸の裂け目
-const float BOUNDARY_W      = 5.0f;    // 境界が効く幅(マス)
-// 細部は標準偏差で正規化する。オクターブを増やしても振幅が崩れない
-const float DETAIL_OCEAN    = 0.004f;  // 海底の細部。平坦さを保つため極小
-const float DETAIL_LAND     = 0.075f;  // 陸の細部
-const int   BASE_BLUR       = 16;      // 地殻の境界を均す
-const int   FINAL_BLUR      = 1;       // 仕上げ。強くかけると海岸線が直線化する
-const float WARP_AMP        = 32.f;    // 座標の歪み。Voronoiの直線を蛇行させる
-const int   WARP_R          = 20;      // 歪みの波長
-// --- 地形発達 ---
-// 地殻の厚さから標高を決め(アイソスタシー)、低海面で川に刻ませ、
-// そのあと海面を上げて谷を沈ませる。複雑な海岸線は溺れた谷から出る
-const float CRUST_CONT      = 38.0f;   // 大陸地殻の厚さ
-const float CRUST_OCEAN     = 7.0f;    // 海洋地殻の厚さ
-const float CRUST_VARY      = 4.0f;    // 大陸ごとのばらつき
-// 大陸内部の構造。一様な塊ではなく、古い核と若い帯と沈んだ盆地でできている
-const float CRUST_INTERNAL  = 9.0f;    // 大陸内部の厚さの起伏
-const int   CRUST_SCALE     = 26;      // その波長
-const int   N_RIFT          = 7;       // 失敗した地溝の数
-const float RIFT_THIN       = 7.5f;    // 地殻がどれだけ薄くなるか
-const float RIFT_LEN        = 70.f;    // 地溝の長さ
-const float RIFT_WIDTH      = 7.0f;    // 幅
-const float CRATON_THICK    = 5.0f;    // 楯状地の地殻の厚み増し
-const float CRATON_RESIST   = 0.25f;   // 侵食への抵抗(古い岩盤は硬い)
-const int   CRATON_SCALE    = 34;
-const float OROGEN_THICK    = 22.0f;   // 衝突でどれだけ厚くなるか
-const float RHO_RATIO       = 0.1515f; // 1 - ρ地殻/ρマントル
-const float SUBSIDE_K       = 0.9f;    // 熱的沈降。√年齢に比例
-const float SUBSIDE_MAX     = 60.f;    // 沈降が飽和する年齢
+// 惑星ではなく一区画の土地。南の端が海に沈み、北へ丘陵が上がる海岸の土地とする。
+// 区画の外の地殻変動(隆起の量と向き)は条件として与え、区画の中の形は
+// 隆起・川の侵食(ストリームパワー則)・斜面の崩れ(安息角)から出す
+const float SEA_LEVEL       = 0.42f;   // 標高の尺度(0〜1)での海面
+const float LAND_RELIEF_M   = 400.f;   // 条件: 区画の最高点の海抜(m)。区画の外の隆起が決める
+const float SEA_DEPTH_M     = 60.f;    // 条件: 区画の中の海の最も深い所(m)
+const float ELEV_M          = LAND_RELIEF_M/(1.f-SEA_LEVEL);   // 標高の尺度 1 が何 m か(約 690 m)
+const float COAST_FRAC      = 0.25f;   // 条件: 南から何割の帯が沈降して海の下にあるか
+const float REPOSE_SLOPE    = 0.70f;   // 安息角 35° の勾配(tan 35°)。これより急な斜面は崩れて残らない
+// 地形を作るときだけ使う。最後に海抜 LAND_RELIEF_M へ写すので、尺度は形にしか効かない
+const float TERRAIN_NOISE   = 0.004f;  // 初期の面の起伏(標準偏差)。海岸線を曲げる
+const float TERRAIN_TILT    = 0.05f;   // 初期の面の南北の傾き
+const float UPLIFT_LAND     = 0.006f;  // 1 回あたりの隆起。北ほど大きい(傾動する地塊)
+const float UPLIFT_VARY     = 0.40f;   // 隆起の場所ごとのばらつき
+const float TARGET_RELIEF   = 0.42f;   // 侵食係数の逆算に使う起伏(形だけに効く)
 // Cordonnier et al. 2016 のストリームパワー式。n=1, m=0.5
 const float EROSION_M       = 0.5f;    // 流域面積の指数
 const float EROSION_DT      = 2.5f;    // 時間刻み。陰的解法なので大きく取れる
-const float TARGET_RELIEF   = 0.42f;   // 目指す最高峰の高さ(海面から)
-const float MAX_SLOPE       = 0.022f;  // 熱的侵食。これ以上の勾配は崩れる
-const float DIFFUSE_K       = 0.020f;  // 斜面拡散
-const int   EROSION_STEPS   = 250;      // 侵食を回す回数
-const float UPLIFT_CONT     = 0.0045f; // 大陸地殻全体の隆起(アイソスタシー)
-const float UPLIFT_OROGEN   = 0.0085f; // 衝突境界での造山
-const float GLACIAL_LEVEL   = 0.52f;   // 刻むときの低海面(分位)
+const float DIFFUSE_K       = 0.20f;   // 斜面拡散(1 回あたりに隣との差を均す割合)
+const int   DIFFUSE_PASS    = 4;       // 斜面拡散を 1 回に何度かけるか
+// 川の始まり。流域がこれより小さい斜面は川に削られず、拡散だけで形が決まる
+// (Montgomery & Dietrich 1988。谷頭の集水面積はおよそ 0.01〜0.1 km²)
+const float CHANNEL_AREA    = 100.0f;    // 何マス(1 マス 100 m²)から川が削るか
+const int   EROSION_STEPS   = 250;     // 侵食を回す回数
 
-// --- 海流 ---
-const int   CURRENT_ITER    = 90;      // 熱が大洋を横断するまで回す
-const float CURRENT_ADV     = 0.55f;
-const float WBC_RANGE       = 14.f;    // 西岸強化が効く距離
-const float CURRENT_HEAT    = 9.0f;    // 海流が動かす気温の幅(度)
-const float OCEAN_FRACTION  = 0.64f;
-// --- 気候 ---
+// --- 気候(惑星規模の条件) ---
+// 緯度・季節ごとの日射・卓越風・背景の気温は外から与える。区画は 9 km × 5 km で
+// 緯度の差は 0.05° に満たないので、緯度と太陽時は区画の中で一様とする
+const float LATITUDE_DEG    = 40.0f;   // 条件: 区画の緯度(北緯)
+const float LAT_N           = LATITUDE_DEG/90.f;
+// 背景の気温は、緯度の関数として与える(条件)。区画の緯度で一度だけ評価する
 const float TEMP_EQUATOR    = 30.0f;
 const float TEMP_POLE       = -15.0f;
-const float LAPSE_RATE      = 28.0f;
+const float LAPSE_RATE      = 6.5e-3f*ELEV_M;  // 気温減率 6.5 °C/km を標高の尺度あたりに直したもの
 const int   SEASON_PERIOD   = 500;
-const float SEASON_AMP      = 24.0f;   // 年較差。大きいほど亜寒帯が広がる
+const float SEASON_AMP      = 24.0f;   // 年較差。緯度を掛けて使う
 const float SEA_SEASON      = 0.30f;   // 海の年較差は陸の3割ほど
 // 海面水温は気温と別の曲線を描く。凍結点より下がれないため、極でも−数度で止まる
 const float SST_EQUATOR     = 29.0f;
 const float SST_POLE        = -3.5f;
+const float CURRENT_HEAT    = 9.0f;    // 水温偏差の表示の幅(度)
 const float ICE_LAG         = 0.055f;  // 氷の成長と融解は季節に遅れる
 const int   COAST_RANGE     = 7;       // 陸の冷気が海へ及ぶ距離
 const float COAST_CHILL     = 0.55f;   // 沿岸の海が陸の気温に引かれる強さ
@@ -155,7 +126,7 @@ const float PLANT_RESP_CO2  = 0.35f;   // 植物の呼吸(維持コストのう�
 const float RESP_EFFICIENCY = 0.60f;   // 呼吸効率の遺伝子が持つ効き
 const float RESP_COST       = 0.032f;  // 高効率な呼吸器の維持費
 const float DISSOLVED_O2    = 0.45f;   // 鰓は水から効率よく酸素を取り出す
-const float ALT_O2_DECAY    = 2.20f;   // 標高による空気の薄まり
+const float ALT_O2_DECAY    = ELEV_M/8400.f;  // 標高による空気の薄まり。大気のスケールハイト 8.4 km
 const float GAS_DIFFUSE     = 0.55f;   // 4tickに一度呼ぶぶん強める
 const float GAS_RELAX       = 0.0060f;
 const float WIND_STRENGTH   = 0.35f;   // 拡散に負けない強さにする
@@ -177,7 +148,7 @@ const float FIRE_DAMAGE     = 9.0f;    // 炎そのものの破壊力
 const float FIRE_FUEL_MIN   = 1.5f;
 
 // --- 撹乱 ---
-const float SLIDE_SLOPE     = 0.045f;  // これ以上の傾斜で崩れうる
+const float SLIDE_SLOPE     = 0.58f;   // これ以上の勾配(30°)で崩れうる。表層崩壊の多くは 30° を超える斜面で起きる
 const float SLIDE_RATE      = 1.2e-5f; // 崩落率/マス/tick
 
 // --- 変異 ---
@@ -299,7 +270,7 @@ const float BUOY_COST       = 0.030f;  // 浮くための組織の維持費
 const float BUOY_DRIFT      = 0.55f;   // 海流に流される強さ
 const float HABITAT_COST_P  = 0.35f;   // 生息環境の不適合(植物)
 const float HABITAT_COST_A  = 0.10f;   // 生息環境の不適合(動物)
-const float SLOPE_COEF      = 25.0f;    // 傾斜による減速
+const float SLOPE_COEF      = 0.50f;   // 勾配による減速。45°(勾配 1)で速さが 2/3。小さな昆虫は体重あたりの登坂の仕事が小さい
 const float WATER_SPEED     = 1.30f;   // 水生が水中で得る速度
 const float SHALLOW_EASE    = 0.30f;   // 浅瀬の緩さ(小さいほど岸が入りやすい)
 
@@ -418,13 +389,6 @@ std::vector<float> temp_annual(GRID_W*GRID_H, 0.f);
 std::vector<float> aridity(GRID_W*GRID_H, 0.f);
 std::vector<unsigned char> climate(GRID_W*GRID_H, 0);
 std::vector<float> elev_smooth(GRID_W*GRID_H, 0.f);
-std::vector<int>   plate_id(GRID_W*GRID_H, 0);     // どのプレートに属するか
-std::vector<char>  plate_oce(N_PLATES, 0);         // 海洋プレートか
-std::vector<float> bnd_type(GRID_W*GRID_H, 0.f);
-std::vector<float> tect_f(GRID_W*GRID_H, 0.f);
-std::vector<float> hotspot(GRID_W*GRID_H, 0.f);
-std::vector<float> craton(GRID_W*GRID_H, 0.f);   // 古い安定した大陸核。侵食に抗う
-std::vector<float> crust(GRID_W*GRID_H, 0.f);     // 地殻の厚さ
 std::vector<float> sst_anom(GRID_W*GRID_H, 0.f);  // 海流による水温偏差
 std::vector<float> cur_u(GRID_W*GRID_H, 0.f);     // 海流の東西成分
 std::vector<float> cur_v(GRID_W*GRID_H, 0.f);     // 海流の南北成分
@@ -1209,16 +1173,15 @@ void route_flow(const std::vector<float>& zf, const std::vector<float>& rain,
     }
 }
 
-// h_max = 2.244 u/k。望む起伏から侵食係数を逆算する
-// h_max = 2.244 u/k。最大の隆起から、望む最高峰になる侵食係数を逆算する
+// h_max = 2.244 u/k。最大の隆起から、望む起伏になる侵食係数を逆算する
 inline float erosion_k(){
-    return 2.244f*(UPLIFT_CONT+UPLIFT_OROGEN)/std::max(1e-6f,TARGET_RELIEF);
+    return 2.244f*UPLIFT_LAND*(1.f+UPLIFT_VARY)/std::max(1e-6f,TARGET_RELIEF);
 }
 
 void erode_step(std::vector<float>& z, const std::vector<float>& rain,
                 const std::vector<float>& uplift, float sea_lv){
     int N=GRID_W*GRID_H;
-    for(int i=0;i<N;i++) z[i]+=uplift[i]*EROSION_DT;   // 隆起は海面下でも続く
+    for(int i=0;i<N;i++) z[i]+=uplift[i]*EROSION_DT;
     std::vector<float> zf=z;
     fill_depressions(zf,sea_lv);
     static std::vector<int> rec, order;
@@ -1233,508 +1196,130 @@ void erode_step(std::vector<float>& z, const std::vector<float>& rain,
         int r=rec[i];
         if(r<0) continue;             // 河口。海面に固定され、削られない
         if(z[i]<sea_lv) continue;
+        if(acc[i]<CHANNEL_AREA) continue;  // 谷頭より上は川が無い
         int x1=i%GRID_W, y1=i/GRID_W, x2=r%GRID_W, y2=r/GRID_W;
         int dx=x1-x2; if(dx>GRID_W/2) dx-=GRID_W; if(dx<-GRID_W/2) dx+=GRID_W;
         int dy=y1-y2;
         float dist=std::sqrt((float)(dx*dx+dy*dy));
-        // 楯状地は古い硬い岩盤。侵食が遅く、平坦な地形が長く残る
-        float resist=1.f-CRATON_RESIST*craton[i];
-        float c=K*resist*std::pow(acc[i],EROSION_M)/std::max(0.5f,dist);
+        float c=K*std::pow(acc[i],EROSION_M)/std::max(0.5f,dist);
         z[i]=(z[i]+EROSION_DT*c*z[r])/(1.f+c*EROSION_DT);
     }
 
-    // 熱的侵食。流域面積が小さい場所に立つ、非現実的な尖峰を崩す
-    for(int pass=0;pass<2;pass++){
-        for(int k=0;k<N;k++){
-            int i=order[k];
-            if(z[i]<sea_lv) continue;
-            int x=i%GRID_W, y=i/GRID_W;
-            const int DX[4]={1,-1,0,0}, DY[4]={0,0,1,-1};
-            for(int d=0;d<4;d++){
-                int nx=x+DX[d], ny=y+DY[d];
-                if(nx<0) nx+=GRID_W; if(nx>=GRID_W) nx-=GRID_W;
-                if(ny<0||ny>=GRID_H) continue;
-                int j=idx(nx,ny);
-                float diff=z[i]-z[j];
-                if(diff<=MAX_SLOPE) continue;
-                float move=(diff-MAX_SLOPE)*0.5f;   // 斜面上の物質が落ちる
-                z[i]-=move; z[j]+=move;
-            }
-        }
-    }
-
-    // 地殻均衡による戻り。削られた場所は浮き上がる
-    // (陰的解法に含まれないので、別に扱う)
+    // 斜面拡散。土壌の匍行で尾根が丸くなる
     static std::vector<float> sm;
-    sm=z;
-    box_blur(sm,1,1);
-    for(int i=0;i<N;i++) z[i]+=(sm[i]-z[i])*DIFFUSE_K;
+    for(int p=0;p<DIFFUSE_PASS;p++){
+        sm=z;
+        box_blur(sm,1,1);
+        for(int i=0;i<N;i++) z[i]+=(sm[i]-z[i])*DIFFUSE_K;
+    }
 }
 
-// 海流。風に押された表層水が海岸で曲がり、西岸で強化される。
-// 大陸東岸に暖流、西岸に寒流と湧昇という実際の配置が出る
+// 吹送流。区画は大洋の循環を決めるには小さすぎる(海流は区画の外の条件)。
+// 区画の中の海面の流れは、卓越風が押す分だけとする。水温の偏差は持たない
 void compute_currents(){
     std::fill(sst_anom.begin(),sst_anom.end(),0.f);
     std::fill(cur_u.begin(),cur_u.end(),0.f);
     std::fill(cur_v.begin(),cur_v.end(),0.f);
-    // 流速場。風に従い、岸にぶつかれば岸沿いに向きを変える
-    for(int y=0;y<GRID_H;y++){
-        float latn=((GRID_H-1)/2.f-(float)y)/((GRID_H-1)/2.f);
-        for(int x=0;x<GRID_W;x++){
-            int i=idx(x,y);
-            if(!sea[i]) continue;
-            float u=wind[y]/WIND_STRENGTH, v=0.f;
-            // 東に陸があれば、ここは海盆の西岸。極向きに強化される
-            int look=(int)WBC_RANGE, e_land=0, w_land=0;
-            for(int k=1;k<=look;k++){
-                if(!e_land && !sea[idx((x+k)%GRID_W,y)]) e_land=k;
-                if(!w_land && !sea[idx((x-k+GRID_W)%GRID_W,y)]) w_land=k;
-            }
-            if(e_land){ float s=1.f-(float)e_land/look; v+= latn*1.8f*s; u*=0.5f; }
-            if(w_land){ float s=1.f-(float)w_land/look; v-= latn*1.1f*s; }
-            cur_u[i]=u; cur_v[i]=v;
-        }
+    for(int y=0;y<GRID_H;y++) for(int x=0;x<GRID_W;x++){
+        int i=idx(x,y);
+        if(sea[i]) cur_u[i]=wind[y]/WIND_STRENGTH;
     }
-    // 熱を流れに乗せて運ぶ。低緯度の暖かさが高緯度へ届く
-    std::vector<float> heat(GRID_W*GRID_H,0.f), buf(GRID_W*GRID_H,0.f);
-    for(int y=0;y<GRID_H;y++){
-        float lat=std::fabs((float)y-(GRID_H-1)/2.f)/((GRID_H-1)/2.f);
-        for(int x=0;x<GRID_W;x++)
-            if(sea[idx(x,y)]) heat[idx(x,y)]=1.f-lat;    // 低緯度が熱源
-    }
-    for(int it=0;it<CURRENT_ITER;it++){
-        buf=heat;
-        for(int y=0;y<GRID_H;y++) for(int x=0;x<GRID_W;x++){
-            int i=idx(x,y);
-            if(!sea[i]) continue;
-            int ux=(cur_u[i]>0)?(x-1+GRID_W)%GRID_W:(x+1)%GRID_W;
-            int uy=y-((cur_v[i]>0)?1:-1);
-            if(uy<0) uy=0; if(uy>=GRID_H) uy=GRID_H-1;
-            float fu=std::min(0.7f,std::fabs(cur_u[i]))*CURRENT_ADV;
-            float fv=std::min(0.7f,std::fabs(cur_v[i]))*CURRENT_ADV;
-            int iu=idx(ux,y), iv=idx(x,uy);
-            float src=0.f, wsum=0.f;
-            if(sea[iu]){ src+=heat[iu]*fu; wsum+=fu; }
-            if(sea[iv]){ src+=heat[iv]*fv; wsum+=fv; }
-            buf[i]=heat[i]*(1.f-wsum)+src;
-        }
-        heat.swap(buf);
-        box_blur(heat,1,1);
-        for(int y=0;y<GRID_H;y++){        // 熱源と放熱で平衡へ引き戻す
-            float lat=std::fabs((float)y-(GRID_H-1)/2.f)/((GRID_H-1)/2.f);
-            for(int x=0;x<GRID_W;x++){
-                int i=idx(x,y);
-                if(sea[i]) heat[i]+=((1.f-lat)-heat[i])*0.015f;
-            }
-        }
-    }
-    // 緯度ごとの平均からのずれが、海流による気温の偏差になる
-    for(int y=0;y<GRID_H;y++){
-        double m=0; int c=0;
-        for(int x=0;x<GRID_W;x++) if(sea[idx(x,y)]){ m+=heat[idx(x,y)]; c++; }
-        if(!c) continue;
-        m/=c;
-        for(int x=0;x<GRID_W;x++){
-            int i=idx(x,y);
-            if(sea[i]) sst_anom[i]=(float)(heat[i]-m)*CURRENT_HEAT;
-        }
-    }
-    box_blur(sst_anom,3,2);              // 沿岸の陸にも及ぶ
 }
 
+// 土地の地形を作る。
+// 1. 初期の面: 南が低く北が高い緩い傾きに、波長の違う起伏を重ねる
+// 2. 区画の外の地殻変動として、北ほど大きく隆起させる(傾動地塊。条件)
+// 3. 隆起と川の侵食(ストリームパワー則)と斜面拡散を繰り返し、谷と尾根を刻ませる
+// 4. 最高点を海抜 LAND_RELIEF_M、最深部を SEA_DEPTH_M に写して m 単位にする
+// 5. 安息角より急な斜面を崩し、物質を下へ移す(質量は保つ)
+// 東西は他の場(風・匂い・生き物の移動)と同じくつながっているので、継ぎ目の無い形にする
 void init_terrain(){
-    const float PI=3.14159265f;
-    std::vector<float> psx(N_PLATES),psy(N_PLATES),pvx(N_PLATES),pvy(N_PLATES),
-                       pthick(N_PLATES);
-    // プレートの種を撒き、それぞれに地殻の厚さと運動を与える
-    for(int k=0;k<N_PLATES;k++){
-        psx[k]=frand(0.f,(float)GRID_W);
-        psy[k]=frand(0.f,(float)GRID_H);
-        plate_oce[k]=(dist01(rng)<OCEANIC_FRAC)?1:0;
-        pthick[k]= plate_oce[k] ? CRUST_OCEAN
-                                : CRUST_CONT+(dist01(rng)-0.5f)*CRUST_VARY;
-        float a=frand(0.f,2.f*PI), sp=0.4f+frand(0.f,0.6f);
-        pvx[k]=std::cos(a)*sp; pvy[k]=std::sin(a)*sp;
-    }
-
-    // 座標そのものをノイズでずらす。プレート境界が直線でなくなる
-    std::vector<float> wpx(GRID_W*GRID_H), wpy(GRID_W*GRID_H);
-    {
-        std::vector<float> a1(GRID_W*GRID_H),a2(GRID_W*GRID_H),
-                           b1f(GRID_W*GRID_H),b2f(GRID_W*GRID_H);
-        for(int i=0;i<GRID_W*GRID_H;i++){
-            a1[i]=frand(0.f,1.f); a2[i]=frand(0.f,1.f);
-            b1f[i]=frand(0.f,1.f); b2f[i]=frand(0.f,1.f);
-        }
-        box_blur(a1,WARP_R,3);  box_blur(a2,WARP_R,3);
-        box_blur(b1f,std::max(2,WARP_R/3),3); box_blur(b2f,std::max(2,WARP_R/3),3);
-        auto nrm=[&](std::vector<float>& v){
-            float lo=1e9f,hi=-1e9f;
-            for(float t:v){ if(t<lo)lo=t; if(t>hi)hi=t; }
-            for(auto& t:v) t=(t-lo)/std::max(1e-6f,hi-lo);
-        };
-        nrm(a1); nrm(a2); nrm(b1f); nrm(b2f);
-        for(int y=0;y<GRID_H;y++) for(int x=0;x<GRID_W;x++){
-            int i=idx(x,y);
-            wpx[i]=(float)x+((a1[i]-0.5f)*2.f+(b1f[i]-0.5f)*0.9f)*WARP_AMP;
-            wpy[i]=(float)y+((a2[i]-0.5f)*2.f+(b2f[i]-0.5f)*0.9f)*WARP_AMP;
-            if(wpy[i]<0.f) wpy[i]=0.f;
-            if(wpy[i]>GRID_H-1.f) wpy[i]=GRID_H-1.f;
-        }
-    }
-
-    // プレートの割り当て: ランダム塗りつぶし。
-    // キューから無作為に選んで広げると、境界が直線でなくフラクタルになる
-    {
-        int N=GRID_W*GRID_H;
-        std::fill(plate_id.begin(),plate_id.end(),-1);
-        std::vector<int> queue;
-        for(int k=0;k<N_PLATES;k++){
-            int gx=(int)psx[k], gy=(int)psy[k];
-            gx=std::max(0,std::min(GRID_W-1,gx));
-            gy=std::max(0,std::min(GRID_H-1,gy));
-            int i=idx(gx,gy);
-            if(plate_id[i]>=0) continue;
-            plate_id[i]=k; queue.push_back(i);
-        }
-        const int DX[4]={1,-1,0,0}, DY[4]={0,0,1,-1};
-        for(size_t out=0; out<queue.size(); out++){
-            // 残りの中から無作為に一つ選び、先頭と入れ替える
-            size_t pos=out+(size_t)(frand(0.f,(float)(queue.size()-out)-0.001f));
-            int cur=queue[pos];
-            queue[pos]=queue[out]; queue[out]=cur;
-            int x=cur%GRID_W, y=cur/GRID_W;
-            for(int d=0;d<4;d++){
-                int nx=x+DX[d], ny=y+DY[d];
-                if(nx<0) nx+=GRID_W; if(nx>=GRID_W) nx-=GRID_W;
-                if(ny<0||ny>=GRID_H) continue;
-                int j=idx(nx,ny);
-                if(plate_id[j]>=0) continue;
-                plate_id[j]=plate_id[cur];
-                queue.push_back(j);
-            }
-        }
-        for(int i=0;i<N;i++) if(plate_id[i]<0) plate_id[i]=0;
-
-        // 境界を見つけ、そこでの相対運動を求める
-        std::vector<float> conv_f(N,0.f);
-        std::vector<int> bq;
-        std::vector<float> bdist(N,1e9f);
-        for(int y=0;y<GRID_H;y++) for(int x=0;x<GRID_W;x++){
-            int i=idx(x,y); int a=plate_id[i];
-            float nx=0.f, ny=0.f, cs=0.f; int cnt=0;
-            for(int d=0;d<4;d++){
-                int mx=x+DX[d], my=y+DY[d];
-                if(mx<0) mx+=GRID_W; if(mx>=GRID_W) mx-=GRID_W;
-                if(my<0||my>=GRID_H) continue;
-                int j=idx(mx,my); int b=plate_id[j];
-                if(b==a) continue;
-                // 相手のプレートへ向かう向きが法線
-                float ux=(float)DX[d], uy=(float)DY[d];
-                float c=(pvx[a]-pvx[b])*ux+(pvy[a]-pvy[b])*uy;  // 正なら衝突
-                nx+=ux; ny+=uy; cs+=c; cnt++;
-            }
-            if(cnt){ conv_f[i]=cs/cnt; bdist[i]=0.f; bq.push_back(i); }
-        }
-        // 境界から内陸へ、影響を減衰させながら広げる
-        for(size_t h=0;h<bq.size();h++){
-            int i=bq[h];
-            if(bdist[i]>=BOUNDARY_W) continue;
-            int x=i%GRID_W, y=i/GRID_W;
-            for(int d=0;d<4;d++){
-                int nx=x+DX[d], ny=y+DY[d];
-                if(nx<0) nx+=GRID_W; if(nx>=GRID_W) nx-=GRID_W;
-                if(ny<0||ny>=GRID_H) continue;
-                int j=idx(nx,ny);
-                if(bdist[j]<=bdist[i]+1.f) continue;
-                bdist[j]=bdist[i]+1.f;
-                conv_f[j]=conv_f[i];
-                bq.push_back(j);
-            }
-        }
-        for(int i=0;i<N;i++){
-            float w=clamp01(1.f-bdist[i]/BOUNDARY_W); w*=w;
-            bnd_type[i]=conv_f[i]*w;
-        }
-        // 境界ごとの地形。海溝・海嶺・島弧・地溝は、ここで作られる
-        for(int i=0;i<N;i++){
-            float bt=bnd_type[i];
-            if(std::fabs(bt)<1e-4f){ tect_f[i]=0.f; continue; }
-            float ac=std::fabs(bt);
-            bool oce=plate_oce[plate_id[i]]!=0;
-            // 隣接する相手のプレートを探す
-            int x=i%GRID_W, y=i/GRID_W, other=-1;
-            for(int d=0;d<4&&other<0;d++){
-                const int DX[4]={1,-1,0,0}, DY[4]={0,0,1,-1};
-                for(int step=1;step<=(int)BOUNDARY_W+1&&other<0;step++){
-                    int nx=x+DX[d]*step, ny=y+DY[d]*step;
-                    if(nx<0) nx+=GRID_W; if(nx>=GRID_W) nx-=GRID_W;
-                    if(ny<0||ny>=GRID_H) continue;
-                    int p=plate_id[idx(nx,ny)];
-                    if(p!=plate_id[i]) other=p;
-                }
-            }
-            bool oce2 = (other>=0) ? (plate_oce[other]!=0) : oce;
-            float t=0.f;
-            if(bt>0.f){
-                if(!oce && !oce2)      t=0.f;                   // 大陸衝突は地殻の厚さで表す
-                else if(oce && !oce2)  t=-TRENCH_DEPTH*ac;      // 沈み込む側 → 海溝
-                else if(!oce && oce2)  t=0.f;                   // 乗り上げる側も地殻で表す
-                else {
-                    // 海洋同士。速度の大きい方が沈み込み、他方に島弧が立つ
-                    bool sub=(pvx[plate_id[i]]*pvx[plate_id[i]]
-                             +pvy[plate_id[i]]*pvy[plate_id[i]])
-                           > (other>=0? pvx[other]*pvx[other]+pvy[other]*pvy[other] : 0.f);
-                    t = sub ? -TRENCH_DEPTH*ac : ISLAND_ARC*ac;
-                }
-            } else {
-                if(oce) t= RIDGE_HEIGHT*ac;    // 海洋の発散 → 海嶺
-                else    t=-RIFT_DEPTH*ac;      // 大陸の発散 → 地溝
-            }
-            tect_f[i]=t;
-        }
-    }
-
-    // ホットスポット。マントル深部の熱の柱は動かないが、
-    // その上をプレートが動くので、火山島が一列に並ぶ
-    for(int h=0;h<N_HOTSPOT;h++){
-        float hx=frand(0.f,(float)GRID_W), hy=frand(GRID_H*0.1f,GRID_H*0.9f);
-        int seed=idx(std::max(0,std::min(GRID_W-1,(int)hx)),
-                     std::max(0,std::min(GRID_H-1,(int)hy)));
-        int pl=plate_id[seed];
-        float dx=-pvx[pl], dy=-pvy[pl];          // プレートが去った方向へ島が残る
-        float nl=std::sqrt(dx*dx+dy*dy)+1e-9f; dx/=nl; dy/=nl;
-        for(int k=0;k<HOTSPOT_CHAIN;k++){
-            float px=hx+dx*k*HOTSPOT_GAP, py=hy+dy*k*HOTSPOT_GAP;
-            if(px<0.f) px+=GRID_W; if(px>=GRID_W) px-=GRID_W;
-            if(py<0.f||py>=GRID_H) break;
-            // 古い島ほど沈む。海山になり、やがて見えなくなる
-            float age=(float)k/HOTSPOT_CHAIN;
-            float amp=HOTSPOT_H*(1.f-age*0.75f);
-            int r=(int)HOTSPOT_R;
-            for(int ddy=-r;ddy<=r;ddy++) for(int ddx=-r;ddx<=r;ddx++){
-                float d=std::sqrt((float)(ddx*ddx+ddy*ddy));
-                if(d>HOTSPOT_R) continue;
-                int gx=(int)px+ddx, gy=(int)py+ddy;
-                if(gx<0) gx+=GRID_W; if(gx>=GRID_W) gx-=GRID_W;
-                if(gy<0||gy>=GRID_H) continue;
-                float f=1.f-d/HOTSPOT_R;
-                hotspot[idx(gx,gy)]+=amp*f*f;
-            }
-        }
-    }
-
-    // --- 地殻の厚さ。標高はアイソスタシーで決まる ---
-    for(int i=0;i<GRID_W*GRID_H;i++) crust[i]=pthick[plate_id[i]];
-
-    // --- 大陸内部の構造 ---
-    {
-        int N=GRID_W*GRID_H;
-        // 厚さの起伏。高原と内陸盆地を生む
-        std::vector<float> f(N);
-        for(int oc=0;oc<3;oc++){
-            int R=CRUST_SCALE>>oc;
-            if(R<2) R=2;
-            for(int i=0;i<N;i++) f[i]=frand(0.f,1.f);
-            box_blur(f,R,2);
-            float lo=1e9f,hi=-1e9f;
-            for(float v:f){ if(v<lo)lo=v; if(v>hi)hi=v; }
-            float amp=CRUST_INTERNAL/(1<<oc);
-            for(int i=0;i<N;i++)
-                if(!plate_oce[plate_id[i]])
-                    crust[i]+=((f[i]-lo)/std::max(1e-6f,hi-lo)-0.5f)*amp;
-        }
-        // 楯状地。古く厚く、そして侵食に抗う
-        for(int i=0;i<N;i++) f[i]=frand(0.f,1.f);
-        box_blur(f,CRATON_SCALE,3);
-        {
-            float lo=1e9f,hi=-1e9f;
-            for(float v:f){ if(v<lo)lo=v; if(v>hi)hi=v; }
-            for(int i=0;i<N;i++){
-                if(plate_oce[plate_id[i]]){ craton[i]=0.f; continue; }
-                float t=(f[i]-lo)/std::max(1e-6f,hi-lo);
-                craton[i]=clamp01((t-0.55f)/0.35f);     // 上位のみが楯状地
-                crust[i]+=CRATON_THICK*craton[i];
-            }
-        }
-        // 失敗した地溝。大陸が割れかけて止まった跡が、内陸の細長い低地になる
-        for(int k=0;k<N_RIFT;k++){
-            int sx=-1,sy=-1;
-            for(int t=0;t<200;t++){
-                int gx=(int)frand(0.f,(float)GRID_W), gy=(int)frand(0.f,(float)GRID_H);
-                if(plate_oce[plate_id[idx(gx,gy)]]) continue;
-                sx=gx; sy=gy; break;
-            }
-            if(sx<0) continue;
-            float ang=frand(0.f,6.2832f);
-            float px=(float)sx, py=(float)sy;
-            for(int s=0;s<(int)RIFT_LEN;s++){
-                ang+=frand(-0.14f,0.14f);         // 蛇行させる
-                px+=std::cos(ang); py+=std::sin(ang);
-                if(px<0.f) px+=GRID_W; if(px>=GRID_W) px-=GRID_W;
-                if(py<1.f||py>=GRID_H-1.f) break;
-                float fade=1.f-(float)s/RIFT_LEN;  // 先へ行くほど浅くなる
-                int r=(int)RIFT_WIDTH;
-                for(int dy=-r;dy<=r;dy++) for(int dx=-r;dx<=r;dx++){
-                    float d=std::sqrt((float)(dx*dx+dy*dy));
-                    if(d>RIFT_WIDTH) continue;
-                    int gx=(int)px+dx, gy=(int)py+dy;
-                    if(gx<0) gx+=GRID_W; if(gx>=GRID_W) gx-=GRID_W;
-                    if(gy<0||gy>=GRID_H) continue;
-                    int j=idx(gx,gy);
-                    if(plate_oce[plate_id[j]]) continue;
-                    float w=(1.f-d/RIFT_WIDTH);
-                    crust[j]-=RIFT_THIN*w*w*fade;
-                    craton[j]*=(1.f-w*0.8f);      // 割れた場所は古い核ではない
-                }
-            }
-        }
-    }
-    box_blur(crust,BASE_BLUR,2);
-    // 収束境界で地殻が厚くなる。これが山脈になる
-    for(int i=0;i<GRID_W*GRID_H;i++)
-        if(bnd_type[i]>0.f && !plate_oce[plate_id[i]])
-            crust[i]+=OROGEN_THICK*bnd_type[i];
-    // アイソスタシー
-    for(int i=0;i<GRID_W*GRID_H;i++)
-        elev[i]=crust[i]*RHO_RATIO+hotspot[i]+tect_f[i];
-    // 熱的沈降。海洋底は海嶺から離れるほど深い
-    {
-        std::vector<float> dr(GRID_W*GRID_H,1e9f);
-        std::vector<int> q;
-        for(int i=0;i<GRID_W*GRID_H;i++)
-            if(plate_oce[plate_id[i]] && bnd_type[i]<-0.05f){ dr[i]=0.f; q.push_back(i); }
-        for(size_t h=0;h<q.size();h++){
-            int i=q[h]; int x=i%GRID_W, y=i/GRID_W;
-            for(int d=0;d<4;d++){
-                const int DX[4]={1,-1,0,0}, DY[4]={0,0,1,-1};
-                int nx=x+DX[d], ny=y+DY[d];
-                if(nx<0) nx+=GRID_W; if(nx>=GRID_W) nx-=GRID_W;
-                if(ny<0||ny>=GRID_H) continue;
-                int j=idx(nx,ny);
-                if(dr[j]>dr[i]+1.f){ dr[j]=dr[i]+1.f; q.push_back(j); }
-            }
-        }
-        for(int i=0;i<GRID_W*GRID_H;i++)
-            if(plate_oce[plate_id[i]])
-                elev[i]-=SUBSIDE_K*std::sqrt(std::min(dr[i],SUBSIDE_MAX));
-        // 海嶺は海面を超えない。海洋地殻が陸として顔を出すのは例外的な場合だけ
-        float ocean_top=CRUST_OCEAN*RHO_RATIO+RIDGE_HEIGHT*0.35f;
-        for(int i=0;i<GRID_W*GRID_H;i++)
-            if(plate_oce[plate_id[i]] && elev[i]>ocean_top+hotspot[i])
-                elev[i]=ocean_top+hotspot[i];
-    }
-    // 地殻の厚さは km 単位で扱ったので、表示と侵食の尺度 0〜1 に写す
-    {
-        float lo=1e9f,hi=-1e9f;
-        for(float v:elev){ if(v<lo)lo=v; if(v>hi)hi=v; }
-        float sp=std::max(1e-6f,hi-lo);
-        for(auto& v:elev) v=(v-lo)/sp;
-    }
-
-    // 細部。海底は平坦に保つため、海洋プレートでは極小にする
-    {
-        std::vector<float> det(GRID_W*GRID_H,0.f), layer(GRID_W*GRID_H);
-        const int   RR[6]={40,20,10,5,2,1};
-        const float RA[6]={0.42f,0.40f,0.38f,0.36f,0.34f,0.30f};
-        for(int oc=0;oc<6;oc++){
-            for(int i=0;i<GRID_W*GRID_H;i++) layer[i]=frand(0.f,1.f);
+    const int N=GRID_W*GRID_H;
+    // 起伏。オクターブごとに 0〜1 へ揃え、最後に標準偏差で正規化する
+    auto octaves=[&](const int* RR,const float* RA,int n){
+        std::vector<float> det(N,0.f), layer(N);
+        for(int oc=0;oc<n;oc++){
+            for(int i=0;i<N;i++) layer[i]=frand(0.f,1.f);
             box_blur(layer,RR[oc],3);
             float a=1e9f,b=-1e9f;
             for(float v:layer){ if(v<a)a=v; if(v>b)b=v; }
-            for(int i=0;i<GRID_W*GRID_H;i++){
-                float t=(layer[i]-a)/std::max(1e-6f,b-a);
-                det[i]+=(t-0.5f)*RA[oc];
-            }
+            for(int i=0;i<N;i++) det[i]+=((layer[i]-a)/std::max(1e-6f,b-a)-0.5f)*RA[oc];
         }
-        // 標準偏差で揃える。オクターブ数を変えても振幅が崩れない
-        double m=0; for(float v:det) m+=v; m/=GRID_W*GRID_H;
+        double m=0; for(float v:det) m+=v; m/=N;
         double s2=0; for(float v:det){ double d=v-m; s2+=d*d; }
-        float sd=(float)std::sqrt(s2/(GRID_W*GRID_H))+1e-6f;
-        for(int i=0;i<GRID_W*GRID_H;i++)
-            elev[i]+= det[i]/sd
-                    * (plate_oce[plate_id[i]]?DETAIL_OCEAN:DETAIL_LAND);
-    }
-    if(FINAL_BLUR>0) box_blur(elev,FINAL_BLUR,1);
+        float sd=(float)std::sqrt(s2/N)+1e-6f;
+        for(auto& v:det) v=(float)((v-m)/sd);
+        return det;
+    };
+    const int   RR1[5]={60,30,15,7,3};
+    const float RA1[5]={1.f,0.6f,0.35f,0.2f,0.1f};
+    std::vector<float> rough=octaves(RR1,RA1,5);
+    const int   RR2[2]={40,20};
+    const float RA2[2]={1.f,0.5f};
+    std::vector<float> vary=octaves(RR2,RA2,2);
 
-    // --- 川に刻ませる ---
-    // 低い海面で谷を刻み、そのあと海面を上げて沈ませる。
-    // 複雑な海岸線は、溺れた谷から生まれる
-    {
-        std::vector<float> s(elev);
-        std::sort(s.begin(),s.end());
-        float glacial=s[(size_t)(s.size()*GLACIAL_LEVEL)];
-        // 降水の見込み。緯度と標高から粗く見積もる
-        std::vector<float> rain(GRID_W*GRID_H,1.f);
-        for(int y=0;y<GRID_H;y++){
-            float lat=std::fabs((float)y-(GRID_H-1)/2.f)/((GRID_H-1)/2.f);
-            float band=0.35f+0.65f*(0.5f+0.5f*std::cos(lat*3.14159265f*3.f));
-            for(int x=0;x<GRID_W;x++) rain[idx(x,y)]=band;
-        }
-        // 造山は続いている。衝突境界では隆起が侵食に抗う
-        // 隆起は滑らかな勾配より、一定値の段を並べた方が自然な谷を生む
-        std::vector<float> up(GRID_W*GRID_H,0.f);
-        std::vector<float> band(GRID_W*GRID_H);
-        for(int i=0;i<GRID_W*GRID_H;i++) band[i]=frand(0.f,1.f);
-        box_blur(band,9,2);
-        { float lo=1e9f,hi=-1e9f;
-          for(float v:band){ if(v<lo)lo=v; if(v>hi)hi=v; }
-          for(auto& v:band) v=std::floor((v-lo)/std::max(1e-6f,hi-lo)*4.f)/3.f; }
-        // 大陸地殻は全体が隆起し続ける。衝突境界ではそこに造山が上乗せされる
-        for(int i=0;i<GRID_W*GRID_H;i++){
-            if(plate_oce[plate_id[i]]){
-                // 海洋地殻は沈むが、火山島は供給が続くので持ちこたえる
-                up[i]=-UPLIFT_CONT*0.15f+hotspot[i]*0.8f;
-                continue;
-            }
-            float u=UPLIFT_CONT;
-            if(bnd_type[i]>0.f) u+=UPLIFT_OROGEN*bnd_type[i];
-            up[i]=u*(0.55f+0.45f*band[i]);
-        }
-        for(int it=0;it<EROSION_STEPS;it++)
-            erode_step(elev,rain,up,glacial);
-    }
-
-    // 極を冷たい海にする
+    std::vector<float> h(N), up(N), rain(N,1.f);
     for(int y=0;y<GRID_H;y++){
-        float lat=std::fabs((float)y-(GRID_H-1)/2.f)/((GRID_H-1)/2.f);
-        float edge=(lat>0.90f)?(lat-0.90f)/0.10f:0.f;
-        for(int x=0;x<GRID_W;x++) elev[idx(x,y)]-=edge*0.45f;
-    }
-
-    // 海陸比を強制し、陸の起伏を引き伸ばす
-    {
-        std::vector<float> s(elev);
-        std::sort(s.begin(),s.end());
-        float cut=s[(size_t)(s.size()*OCEAN_FRACTION)];
-        float shift=SEA_LEVEL-cut;
-        for(auto& v:elev){ v+=shift; if(v<0.02f)v=0.02f; if(v>1.f)v=1.f; }
-        // 起伏はアイソスタシーと侵食が作る。人為的な引き伸ばしは不要
-        float mx=SEA_LEVEL;
-        for(float v:elev) if(v>mx) mx=v;
-        float span=std::max(1e-6f,mx-SEA_LEVEL);
-        for(auto& v:elev){
-            if(v<=SEA_LEVEL) continue;
-            v=SEA_LEVEL+(v-SEA_LEVEL)/span*(1.f-SEA_LEVEL);
+        float s=1.f-(float)y/(GRID_H-1);              // 南端 0、北端 1
+        float land=(s-COAST_FRAC)/(1.f-COAST_FRAC);   // 負なら海の下
+        for(int x=0;x<GRID_W;x++){
+            int i=idx(x,y);
+            h[i]=TERRAIN_TILT*land+TERRAIN_NOISE*rough[i];
+            float u=UPLIFT_LAND*clamp01(land)*(1.f+UPLIFT_VARY*clampf(vary[i],-1.f,1.f));
+            up[i]=std::max(0.f,u);
         }
     }
+    for(int it=0;it<EROSION_STEPS;it++) erode_step(h,rain,up,0.f);
 
-    for(int i=0;i<GRID_W*GRID_H;i++) sea[i]=(elev[i]<SEA_LEVEL)?1:0;
+    // m 単位へ写す。陸は最高点、海は最深部で揃える
+    float hmax=1e-6f, hmin=-1e-6f;
+    for(float v:h){ if(v>hmax)hmax=v; if(v<hmin)hmin=v; }
+    std::vector<float> zm(N);
+    for(int i=0;i<N;i++)
+        zm[i]=(h[i]>=0.f) ? h[i]/hmax*LAND_RELIEF_M : h[i]/(-hmin)*SEA_DEPTH_M;
+    // 安息角。急な斜面の物質は下の隣へ落ちる。陸の中だけで動かし、質量は保つ
+    {
+        const float dmax=REPOSE_SLOPE*CELL_M;
+        const int DX[4]={1,-1,0,0}, DY[4]={0,0,1,-1};
+        for(int pass=0;pass<200;pass++){
+            int moved=0;
+            for(int y=0;y<GRID_H;y++) for(int x=0;x<GRID_W;x++){
+                int i=idx(x,y);
+                if(zm[i]<0.f) continue;
+                for(int d=0;d<4;d++){
+                    int nx=x+DX[d], ny=y+DY[d];
+                    if(nx<0) nx+=GRID_W; if(nx>=GRID_W) nx-=GRID_W;
+                    if(ny<0||ny>=GRID_H) continue;
+                    int j=idx(nx,ny);
+                    if(zm[j]<0.f) continue;
+                    float diff=zm[i]-zm[j];
+                    if(diff<=dmax) continue;
+                    float mv=(diff-dmax)*0.5f;
+                    zm[i]-=mv; zm[j]+=mv; moved++;
+                }
+            }
+            if(!moved) break;
+        }
+    }
+    for(int i=0;i<N;i++) elev[i]=SEA_LEVEL+zm[i]/ELEV_M;
+
+    for(int i=0;i<N;i++) sea[i]=(elev[i]<SEA_LEVEL)?1:0;
+    // 勾配は m/m で持つ(崖崩れと歩く速さが物理の勾配で判断できるように)
     for(int y=0;y<GRID_H;y++) for(int x=0;x<GRID_W;x++){
         int xr=(x+1)%GRID_W, xl=(x-1+GRID_W)%GRID_W;
         int yu=std::max(0,y-1), yd=std::min(GRID_H-1,y+1);
         float gx=(elev[idx(xr,y)]-elev[idx(xl,y)])*0.5f;
-        float gy=(elev[idx(x,yd)]-elev[idx(x,yu)])*0.5f;
-        slope[idx(x,y)]=std::sqrt(gx*gx+gy*gy);
+        float gy=(elev[idx(x,yd)]-elev[idx(x,yu)])/(float)(yd-yu);
+        slope[idx(x,y)]=std::sqrt(gx*gx+gy*gy)*ELEV_M/CELL_M;
     }
-    // 地形性降雨は数十キロの規模で起きる。細かい凹凸を均した標高を使う
     elev_smooth=elev;
     box_blur(elev_smooth,4,2);
-    for(int y=0;y<GRID_H;y++){
-        float latn=((float)y-(GRID_H-1)/2.f)/((GRID_H-1)/2.f);
-        wind[y]=-std::cos(latn*3.14159265f*3.f)*WIND_STRENGTH;
+    // 卓越風は条件。区画の緯度で、惑星の風の帯の式を一度だけ評価し、区画全体で一様にする
+    {
+        float w=-std::cos(LAT_N*3.14159265f*3.f)*WIND_STRENGTH;
+        for(int y=0;y<GRID_H;y++) wind[y]=w;
     }
-    // 陸からの距離。沿岸は河川の栄養が届き、外洋は届かない
+    // 陸からの距離。沿岸は河川の栄養が届き、沖は届かない
     std::fill(shelf.begin(),shelf.end(),0.f);
     for(int y=0;y<GRID_H;y++) for(int x=0;x<GRID_W;x++){
         int i=idx(x,y);
@@ -1762,7 +1347,7 @@ void init_terrain(){
             if(!sea[idx(back,y)] && shelf[i]>0.4f) upwell[i]=1;
         }
     }
-    // 陸からの近さ。沿岸の海は、大陸の気温に引かれる
+    // 陸からの近さ。沿岸の海は、陸の気温に引かれる
     std::fill(coast_w.begin(),coast_w.end(),0.f);
     for(int y=0;y<GRID_H;y++) for(int x=0;x<GRID_W;x++){
         int i=idx(x,y);
@@ -1817,9 +1402,8 @@ void compute_precip(){
         float u=wind[y];
         int d=(u>0)?1:-1;
         int x0=(d>0)?0:GRID_W-1;
-        float lat=std::fabs((float)y-(GRID_H-1)/2.f)/((GRID_H-1)/2.f);
-        // ハドレー循環: 赤道で上昇し、亜熱帯で下降する
-        float lift=0.5f+0.5f*std::cos(lat*3.14159265f*3.f);
+        // 大気の大循環による上昇の強さは条件。区画の緯度で評価する
+        float lift=0.5f+0.5f*std::cos(LAT_N*3.14159265f*3.f);
         float m=0.f;
         // 東西はループしているので、数周させて定常状態に落ち着かせる
         for(int lap=0;lap<3;lap++){
@@ -1856,9 +1440,7 @@ void compute_precip(){
 void update_water(int frame){
     float ph=std::sin(2.f*3.14159265f*frame/SEASON_PERIOD);
     for(int y=0;y<GRID_H;y++){
-        float lat=std::fabs((float)y-(GRID_H-1)/2.f)/((GRID_H-1)/2.f);
-        float sign=((float)y<(GRID_H-1)/2.f)?1.f:-1.f;
-        float wet=1.f+0.45f*lat*ph*sign;          // 雨季と乾季
+        float wet=1.f+0.45f*LAT_N*ph;             // 雨季と乾季(北半球)
         if(wet<0.f) wet=0.f;
         for(int x=0;x<GRID_W;x++){
             int i=idx(x,y);
@@ -1895,7 +1477,7 @@ void update_water(int frame){
 // 年平均気温と降水から気候区分を決める(ケッペンの判定順に従う)
 void classify_climate(){
     for(int y=0;y<GRID_H;y++){
-        float lat=std::fabs((float)y-(GRID_H-1)/2.f)/((GRID_H-1)/2.f);
+        float lat=LAT_N;
         float amp=SEASON_AMP*lat;
         for(int x=0;x<GRID_W;x++){
             int i=idx(x,y);
@@ -1927,32 +1509,27 @@ void update_climate(int frame){
     float rot=2.f*PI*(float)(frame%DAY_PERIOD)/DAY_PERIOD;
     double dsum=0;
 
+    // 緯度と太陽時は区画の中で一様。東西 9 km は経度 0.1° ほどで、太陽時の差は 30 秒に満たない
+    float phi=LAT_N*PI/2.f;
+    float sp=std::sin(phi), cp=std::cos(phi);
+    float base=TEMP_EQUATOR+(TEMP_POLE-TEMP_EQUATOR)*LAT_N;
+    float base_sea=SST_EQUATOR+(SST_POLE-SST_EQUATOR)*LAT_N;
+    float seas_land=SEASON_AMP*LAT_N*ph;
+    float seas_sea =SEASON_AMP*SEA_SEASON*LAT_N*ph;   // 海は熱容量で振れにくい
+    float sinh=sp*sd+cp*cd*std::cos(rot);              // 時角は自転の位相だけで決まる
+    float sun=(sinh>0.f)?sinh:0.f;                     // 地平線の下なら日射はゼロ
+    float dl=clamp01(sinh*5.f);                        // 薄明を挟んだ昼夜
     for(int y=0;y<GRID_H;y++){
-        // 符号つき緯度。+1が北極、-1が南極
-        float latn=((GRID_H-1)/2.f-(float)y)/((GRID_H-1)/2.f);
-        float lat=std::fabs(latn);
-        float phi=latn*PI/2.f;
-        float sp=std::sin(phi), cp=std::cos(phi);
-        float base=TEMP_EQUATOR+(TEMP_POLE-TEMP_EQUATOR)*lat;
-        float base_sea=SST_EQUATOR+(SST_POLE-SST_EQUATOR)*lat;
-        float seas_land=SEASON_AMP*latn*ph;
-        float seas_sea =SEASON_AMP*SEA_SEASON*latn*ph;   // 海は熱容量で振れにくい
         for(int x=0;x<GRID_W;x++){
             int i=idx(x,y);
-            // 時角。経度と自転から決まる
-            float H=2.f*PI*(float)x/GRID_W+rot;
-            float sinh=sp*sd+cp*cd*std::cos(H);
-            float sun=(sinh>0.f)?sinh:0.f;      // 地平線の下なら日射はゼロ
             solar[i]=sun*SOLAR_GAIN;
-            float dl=clamp01(sinh*5.f);          // 薄明を挟んだ昼夜
             daylit[i]=dl;
             dsum+=dl;
             // 日較差。海は熱容量が大きくほとんど振れない
             float amp=sea[i]?DIURNAL_SEA:DIURNAL_LAND;
             if(sea[i]){
                 float t_sea=base_sea+seas_sea+amp*(dl-0.5f)+sst_anom[i];
-                // 沿岸の海は、隣接する大陸の気温に引かれる。
-                // 冬に大陸から吹き出す寒気が、外洋より低緯度で海を凍らせる
+                // 沿岸の海は、隣接する陸の気温に引かれる
                 if(coast_w[i]>0.01f){
                     float t_land=base+seas_land+amp*(dl-0.5f)+sst_anom[i];
                     float pull=COAST_CHILL*coast_w[i];
@@ -2955,8 +2532,7 @@ void update_animals(){
         float felt = temper[ci];
         if(a.depth>0.05f){
             float year_mean=TEMP_EQUATOR
-                +(TEMP_POLE-TEMP_EQUATOR)*std::fabs((float)((int)a.y)-(GRID_H-1)/2.f)
-                 /((GRID_H-1)/2.f) - LAPSE_RATE*altitude(ci);
+                +(TEMP_POLE-TEMP_EQUATOR)*LAT_N - LAPSE_RATE*altitude(ci);
             felt = temper[ci]+(year_mean-temper[ci])*BURROW_BUFFER*a.depth;
         }
         if(felt<kill_temp_a(a)){
@@ -3388,10 +2964,6 @@ std::vector<Fld<int>> cell_schema(){
         fv("pstrain"+std::to_string(k),pstrain[k],0.5);
         fv("astrain"+std::to_string(k),astrain[k],0.5);
     }
-    // 地形の構造。再生成すると別の世界になるので、そのまま残す
-    iv("plate_id",plate_id,0);
-    fv("craton",craton,0); fv("crust",crust,0);
-    fv("bnd_type",bnd_type,0); fv("hotspot",hotspot,0);
     return s;
 }
 
@@ -4183,8 +3755,22 @@ int main(int argc,char** argv){
         astrain[k].assign(GRID_W*GRID_H,0.5f);
     }
     init_terrain();
-    compute_currents();      // 海流を求める。気温の計算がこれを使う
+    compute_currents();      // 吹送流を求める
     compute_rivers();
+    {   // 地形の要約。土地の形が報告書で確かめられるように
+        long land=0, steep=0, riv=0; double ssum=0, smax=0, hmax=0, dmax=0;
+        for(int i=0;i<GRID_W*GRID_H;i++){
+            float zm=(elev[i]-SEA_LEVEL)*ELEV_M;
+            if(sea[i]){ if(-zm>dmax) dmax=-zm; continue; }
+            land++; ssum+=slope[i]; if(slope[i]>smax) smax=slope[i];
+            if(slope[i]>=SLIDE_SLOPE) steep++;
+            if(river[i]) riv++;
+            if(zm>hmax) hmax=zm;
+        }
+        printf("terrain: lat %.1fN | land %.1f%% | top %.0f m  sea depth %.0f m | slope mean %.3f max %.3f | >=30deg %.2f%% | river %.2f%%\n",
+               LATITUDE_DEG,100.0*land/(GRID_W*GRID_H),hmax,dmax,land?ssum/land:0.0,smax,
+               land?100.0*steep/land:0.0,land?100.0*riv/land:0.0);
+    }
     update_climate(0);
     for(int i=0;i<GRID_W*GRID_H;i++) soil_water[i]=sea[i]?FIELD_CAP:0.35f;
     for(int k=0;k<40;k++){                   // 降水と土壌水分を交互に収束させる
@@ -4195,7 +3781,7 @@ int main(int argc,char** argv){
     int placed=0,guard=0;
     while(placed<PLANT_INIT_N && guard++<200000){
         Plant p;
-        p.x=frand(0.f,(float)GRID_W); p.y=GRID_H/2.f+frand(-40.f,40.f);
+        p.x=frand(0.f,(float)GRID_W); p.y=frand(0.f,(float)GRID_H);
         int gx=(int)p.x, gy=(int)p.y;
         if(gx<0||gx>=GRID_W||gy<0||gy>=GRID_H) continue;
         if(!sea[idx(gx,gy)]) continue;              // 生命は海から始まる
@@ -4700,7 +4286,7 @@ int main(int argc,char** argv){
                 int put=0,g2=0;
                 while(put<ANIMAL_INIT_N && g2++<200000){
                     Animal a;
-                    a.x=frand(0.f,(float)GRID_W); a.y=GRID_H/2.f+frand(-50.f,50.f);
+                    a.x=frand(0.f,(float)GRID_W); a.y=frand(0.f,(float)GRID_H);
                     int gx=(int)a.x, gy=(int)a.y;
                     if(gx<0||gx>=GRID_W||gy<0||gy>=GRID_H) continue;
                     if(!sea[idx(gx,gy)]) continue;
@@ -5169,27 +4755,14 @@ int main(int argc,char** argv){
                                 (std::uint8_t)(20+230*(1-a)));
                 }
             } else if(view_mode==9){
-                int pl=plate_id[i];
-                float hue=std::fmod(0.11f+pl*0.61803399f,1.0f)*6.f;
-                int hi=(int)hue; float fr=hue-hi;
-                float q=plate_oce[pl]?0.55f:1.0f;
-                float r,g,b;
-                switch(hi){
-                    case 0: r=1;g=fr;b=0; break;   case 1: r=1-fr;g=1;b=0; break;
-                    case 2: r=0;g=1;b=fr; break;   case 3: r=0;g=1-fr;b=1; break;
-                    case 4: r=fr;g=0;b=1; break;   default:r=1;g=0;b=1-fr; break;
+                // 傾斜(m/m)。崖崩れの起きうる 30° 以上を赤で示す
+                if(sea[i]) c=sf::Color(16,34,66);
+                else {
+                    float t=clamp01(slope[i]/REPOSE_SLOPE);
+                    if(slope[i]>=SLIDE_SLOPE) c=sf::Color(230,70,50);
+                    else c=sf::Color((std::uint8_t)(40+160*t),(std::uint8_t)(60+150*t),
+                                     (std::uint8_t)(40+60*t));
                 }
-                float bt=bnd_type[i];
-                if(craton[i]>0.35f && std::fabs(bt)<0.15f){
-                    float cr=craton[i];
-                    c=sf::Color((std::uint8_t)(90+80*cr),(std::uint8_t)(70+50*cr),
-                                (std::uint8_t)(40+30*cr));
-                }
-                else if(bt>0.15f) c=sf::Color(255,90,60);
-                else if(bt<-0.15f)c=sf::Color(90,200,255);     // 発散境界
-                else c=sf::Color((std::uint8_t)(60+150*r*q),
-                                 (std::uint8_t)(60+150*g*q),
-                                 (std::uint8_t)(60+150*b*q));
             } else if(view_mode==8){
                 float nv=clamp01(soil_n[i]/1.2f);
                 if(sea[i]){
@@ -5252,12 +4825,10 @@ int main(int argc,char** argv){
                         case 7: r=118;g=134;b=52;  break;  // サバナ
                         default:r=24; g=92; b=38;  break;  // 熱帯雨林
                     }
-                    // 高所は岩肌が露出し、頂は雪を頂く
-                    if(elev[i]>MOUNTAIN_LEVEL){
-                        float m=clamp01((elev[i]-MOUNTAIN_LEVEL)/(1.f-MOUNTAIN_LEVEL));
-                        r=r*(1.f-m)+(96+150*m)*m;
-                        g=g*(1.f-m)+(94+150*m)*m;
-                        b=b*(1.f-m)+(90+155*m)*m;
+                    // 高い所ほど明るく塗り、起伏を見えるようにする
+                    {
+                        float m=0.25f*clamp01((elev[i]-SEA_LEVEL)/(1.f-SEA_LEVEL));
+                        r=r*(1.f-m)+180*m; g=g*(1.f-m)+170*m; b=b*(1.f-m)+150*m;
                     }
                     float s=show_night?(0.30f+0.70f*daylit[i]):0.92f;
                     c=sf::Color((std::uint8_t)clampf(r*s,0.f,255.f),
@@ -5715,7 +5286,7 @@ int main(int argc,char** argv){
             if(font_ok){
                 const char* vm[11]={"地形","気温","大気","腐植",
                                     "気候区分","病原体","匂い","昼夜","栄養",
-                                    "プレート","海流"};
+                                    "傾斜","海流"};
                 int span=N*SAMPLE_INTERVAL;
                 snprintf(b,240,"span -%.1fk .. now   t %d   zoom %.1fx   [V] %s%s",
                          span/1000.f,frame,zoom,vm[view_mode],paused?"   [PAUSED]":"");
@@ -6443,7 +6014,7 @@ int main(int argc,char** argv){
             // 下段: マップの切り替え
             {
                 const char* vmn[11]={"地形","気温","大気","腐植","気候区分",
-                                     "病原体","匂い","昼夜","栄養","プレート","海流"};
+                                     "病原体","匂い","昼夜","栄養","傾斜","海流"};
                 snprintf(sb,96,"%d / 11   %s",view_mode+1,vmn[view_mode]);
                 sf::Text t(font,jp(sb),16); t.setFillColor(sf::Color(230,238,245));
                 sf::FloatRect r=t.getLocalBounds();
