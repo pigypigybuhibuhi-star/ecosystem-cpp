@@ -70,6 +70,18 @@ constexpr double PMF (double f,double n=1){ return -c_log1p(-f)/(n*DT0); }
 constexpr float  LIN (double r,double n=1){ return (float)(r*n*DT); }
 constexpr float  FRAC(double k,double n=1){ return (float)(-c_expm1(-k*n*DT)); }
 constexpr long   TICKS(double m){ return (long)(m/DT+0.5); }
+// 回数で決まる速さ(一度に齧る回数、死骸を漁る回数、繁殖の判定)。
+// 段階 3 より前に 1 回の更新で n0 回だった行為は、1 分あたり n0/(n·DT0) 回の率で起きる。
+// 1 回の更新(n tick = n·DT 分)の回数は 率 × n·DT = n0·(DT/DT0)。端数は確率で決める
+constexpr double STEP_RATIO = DT/DT0;          // 段階 3 より前の 1 tick に対する、今の 1 tick の長さ
+constexpr double c_sqrt(double x){             // ニュートン法。x >= 0
+    if(x<=0.0) return 0.0;
+    double r=x>1.0?x:1.0;
+    for(int k=0;k<200;k++){ double nr=0.5*(r+x/r); if(nr==r) break; r=nr; }
+    return r;
+}
+// 向きのゆらぎはランダムウォークなので、角度の広がりは時間の平方根に比例する
+constexpr float  TURN_SCALE = (float)c_sqrt(STEP_RATIO);
 // 更新の間隔。計算の都合で何 tick ごとに処理するかで、物理量ではないので tick で持つ。
 // 1 回の更新は間隔ぶんの時間を進める(上の n)
 const int   PLANT_STRIDE    = 3;       // 植物の体の更新(光合成は毎 tick)
@@ -258,13 +270,13 @@ const float A_REACH_COST    = LIN(PM(0.018f,ANIMAL_STRIDE),ANIMAL_STRIDE);  // [
 const float A_SIZE_COST     = LIN(PM(0.020f,ANIMAL_STRIDE),ANIMAL_STRIDE);  // [1分あたり 9.72e-05]
 const float JAW_COST        = LIN(PM(0.012f,ANIMAL_STRIDE),ANIMAL_STRIDE);  // [1分あたり 5.83e-05]
 const float COLD_COST_A     = LIN(PM(0.050f,ANIMAL_STRIDE),ANIMAL_STRIDE);  // [1分あたり 0.000243]
-const float A_BITE          = FRAC(PMF(0.45f,ANIMAL_STRIDE),ANIMAL_STRIDE);  // [率 0.00291 /分]
+const float A_BITE          = 0.45f;   // 一口で植物から取る割合。時間は齧る回数の側が持つ(段階 3.5)
 const float GRAZE_DEFOLIATE = 0.18f;   // 採食が葉を奪う量。局所的な枯渇を生む
 const float A_DIVIDE_TH     = 6.0f;
 const float A_EAT_LOSS      = 0.50f;   // 同化効率50%。若い葉や種子は消化しやすい
 const float PRED_RATIO      = 1.15f;
 const float PRED_EFF        = FRAC(PMF(0.85f,ANIMAL_STRIDE),ANIMAL_STRIDE);  // [率 0.00922 /分]
-const float SCAV_EFF        = FRAC(PMF(0.85f,ANIMAL_STRIDE),ANIMAL_STRIDE);  // 死骸は抵抗しないので取り分が大きい [率 0.00922 /分]
+const float SCAV_EFF        = 0.85f;   // 一回漁って死骸から取る割合。死骸は抵抗しないので取り分が大きい。時間は漁る回数の側が持つ(段階 3.5)
 const float MEAT_LOSS       = 0.30f;
 const float DETRITUS_LOSS   = 0.80f;   // 分解物は栄養価が中間
 const float DETRITUS_COST   = LIN(PM(0.008f,ANIMAL_STRIDE),ANIMAL_STRIDE);  // 分解酵素の維持費 [1分あたり 3.89e-05]
@@ -464,6 +476,14 @@ double g_fps_time = 0.0;    // t>=50000 の経過時間の合計
 long   g_fps_n    = 0;      // t>=50000 のフレーム数
 std::uniform_real_distribution<float> dist01(0.f,1.f);
 inline float frand(float a,float b){ return a + (b-a)*dist01(rng); }
+// 1 回の更新あたり、平均 n0·STEP_RATIO 回。整数部はそのまま、端数は確率で 1 回足す。
+// 端数が 0 のときは乱数を引かない(段階 3.5 では DT = DT0 なので常に引かない)
+inline int count_by_rate(double n0){
+    double e=n0*STEP_RATIO;
+    int n=(int)e; double f=e-n;
+    if(f>0.0 && dist01(rng)<f) n++;
+    return n;
+}
 inline float clampf(float v,float lo,float hi){ return v<lo?lo:(v>hi?hi:v); }
 inline float clamp01(float v){ return v<0.f?0.f:(v>1.f?1.f:v); }
 inline float mutate(float v,float lo,float hi){
@@ -2258,7 +2278,8 @@ void update_plants(){
             continue;
         }
         if(!p.dormant && p.energy>=PLANT_DIVIDE_TH
-           && (int)plants.size()+(int)babies.size() < PLANT_MAX){
+           && (int)plants.size()+(int)babies.size() < PLANT_MAX
+           && count_by_rate(1.0)>0){      // 繁殖の判定は段階 3 より前の 1 回の更新に 1 回
             // 有性生殖を選ぶなら、まず相手を見つける必要がある
             const Plant* mate=nullptr;
             if(dist01(rng)<p.sexual){
@@ -2564,7 +2585,7 @@ void update_animals(){
         float o2fit = std::min(1.f, o2rel*(1.f+thr_half)/(o2rel+thr_half));
         a.aerobic = o2fit;
 
-        a.dir+=frand(-a.turn*turn_mult,a.turn*turn_mult);
+        a.dir+=frand(-a.turn*turn_mult,a.turn*turn_mult)*TURN_SCALE;   // 1 回の更新ぶんの向きのゆらぎ
         float sp=a.speed*A_MAX_SPEED*thrust_mult*terr*o2fit;
         float nx=a.x+std::cos(a.dir)*sp, ny=a.y+std::sin(a.dir)*sp;
         if(nx<0.f) nx+=GRID_W; if(nx>=GRID_W) nx-=GRID_W;
@@ -2619,8 +2640,9 @@ void update_animals(){
             float meat_dig  = a.diet;
             if(plant_dig>0.01f && want_eat>ACT_THRESH){
                 // 摂食量は体格に比例する。大きい体は多く処理できる
-                int max_bites=1+(int)(a.body*2.0f);
-                if(max_bites>6) max_bites=6;
+                int max_bites0=1+(int)(a.body*2.0f);   // 段階 3 より前の 1 回の更新あたり
+                if(max_bites0>6) max_bites0=6;
+                int max_bites=count_by_rate(max_bites0);
                 int bites=0;
                 for(int t=pgrid.b(ci);t<pgrid.e(ci)&&bites<max_bites;t++){
                     int pi=pgrid.items[t];
@@ -2647,7 +2669,7 @@ void update_animals(){
                 int cb=cgrid.b(ci), ce=cgrid.e(ci);
                 if(cb<ce && a.perch<0.5f && want_eat>ACT_THRESH){
                     int nd=ce-cb;
-                    int tries=1+(int)(3.f*detr_dig);        // 能力が高いほど多く処理する
+                    int tries=count_by_rate(1+(int)(3.f*detr_dig));   // 能力が高いほど多く処理する
                     for(int t=0;t<tries;t++){
                         int pk=cgrid.items[cb+(int)(frand(0.f,(float)nd-0.001f))];
                         bool is_plant=(corpses[pk].origin==0);
@@ -2762,7 +2784,8 @@ void update_animals(){
         }
         if((int)animals.size()+(int)babies.size() < ANIMAL_MAX
            && a.energy>=A_DIVIDE_TH*(1.4f-0.6f*a.repro_alloc)
-           && a.body>=a.size*MATURE_FRAC){
+           && a.body>=a.size*MATURE_FRAC
+           && count_by_rate(1.0)>0){      // 繁殖の判定は段階 3 より前の 1 回の更新に 1 回
             const Animal* mate=nullptr;
             if(dist01(rng)<a.sexual){
                 int r=(int)SEX_SEARCH;
