@@ -156,6 +156,7 @@ const float FIELD_CAP       = 1.00f;   // 土壌が保持できる上限
 const float WATER_RELAX     = FRAC(PMF(0.020f));  // 土壌水分が目標へ近づく速さ [率 0.000196 /分]
 const float RIVER_THRESHOLD = 260.f;   // 侵食後の地形に合わせて下げる
 const float RIVER_SUPPLY    = 0.60f;   // 河川が供給する水
+const float SOIL_W_INIT     = 0.35f;   // 起動時に降水を決めるための仮の陸の土壌水分(条件)
 const float DROUGHT_COST    = LIN(PM(0.055f));  // 耐乾装置の維持費 [1分あたり 0.000535]
 const float STORE_COST      = LIN(PM(0.030f));  // 貯水組織の維持費 [1分あたり 0.000292]
 const float STORE_FILL      = LIN(PM(0.020f,PLANT_STRIDE),PLANT_STRIDE);  // 湿っているとき貯める速さ [1分あたり 6.48e-05]
@@ -1517,6 +1518,17 @@ void compute_precip(){
     box_blur(precip,PRECIP_BLUR,2);
 }
 
+// 陸の土壌水分の目標(update_water の緩和の釣り合いの値)。乾燥指数も記録する
+inline float water_target(int i,float wet){
+    // 乾燥限界は気温に比例する。寒い土地は少ない雨でも乾かない
+    float thr=ARID_COEF*std::max(0.5f,temper[i]+7.f);
+    float A=precip[i]*wet/std::max(1e-9f,thr);
+    aridity[i]=A;
+    float target=A/(A+ARID_SOFT);          // 飽和させて差をなだらかにする
+    if(river[i]) target=std::max(target,RIVER_SUPPLY);
+    return target;
+}
+
 // 水収支: AW = [(1-RO)*AW + P - ET]+
 // ケッペンの乾燥指数にもとづいて土壌水分の目標を決め、そこへ緩やかに近づける
 void update_water(int frame){
@@ -1542,12 +1554,7 @@ void update_water(int frame){
                 g_bud.n_clamp+=soil_n[i]-pre;
                 continue;
             }
-            // 乾燥限界は気温に比例する。寒い土地は少ない雨でも乾かない
-            float thr=ARID_COEF*std::max(0.5f,temper[i]+7.f);
-            float A=precip[i]*wet/std::max(1e-9f,thr);
-            aridity[i]=A;
-            float target=A/(A+ARID_SOFT);          // 飽和させて差をなだらかにする
-            if(river[i]) target=std::max(target,RIVER_SUPPLY);
+            float target=water_target(i,wet);
             float w0=soil_water[i];
             soil_water[i]+=(target-soil_water[i])*WATER_RELAX;
             soil_water[i]=clamp01(soil_water[i]);
@@ -3857,10 +3864,21 @@ int main(int argc,char** argv){
                land?100.0*steep/land:0.0,land?100.0*riv/land:0.0);
     }
     update_climate(0);
-    for(int i=0;i<GRID_W*GRID_H;i++) soil_water[i]=sea[i]?FIELD_CAP:0.35f;
-    for(int k=0;k<40;k++){                   // 降水と土壌水分を交互に収束させる
+    {   // 起動時の土壌水分は条件。反復で近づけず、釣り合いの値(緩和の目標)を最初から置く
+        // 降水は陸からの再循環で土壌水分に依る。仮の値で降水を決め、その降水の目標を置き、
+        // 置いた土壌水分で降水を決め直す。残る食い違いは再循環の分だけで、ログに出す
+        for(int i=0;i<GRID_W*GRID_H;i++) soil_water[i]=sea[i]?FIELD_CAP:SOIL_W_INIT;
         compute_precip();
-        update_water(0);
+        for(int i=0;i<GRID_W*GRID_H;i++) if(!sea[i]) soil_water[i]=water_target(i,1.f);  // t=0 は雨季と乾季の境(wet=1)
+        compute_precip();
+        double sw=0, gap=0, gmax=0; long land=0;
+        for(int i=0;i<GRID_W*GRID_H;i++){
+            if(sea[i]) continue;
+            double g=std::fabs(water_target(i,1.f)-soil_water[i]);
+            sw+=soil_water[i]; gap+=g; if(g>gmax) gmax=g; land++;
+        }
+        printf("water init: land soil mean %.4f | |target-soil| mean %.5f max %.5f\n",
+               land?sw/land:0.0,land?gap/land:0.0,gmax);
     }
     classify_climate();
     int placed=0,guard=0;
