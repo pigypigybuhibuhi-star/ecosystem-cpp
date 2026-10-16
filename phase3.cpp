@@ -33,6 +33,55 @@ const float CELL_M          = 10.0f;   // 1マスの一辺(メートル)
 const int   GRID_W          = 900;     // 9 km
 const int   GRID_H          = 500;     // 5 km
 
+// --- 時間(移行の段階 3: 時間の下地) ---
+// 速さの定数は「1 分あたりの物理量 × DT」の形で持つ。DT は 1 tick の長さ(分)。
+// 段階 3 では DT を今までの 1 tick(1 日 = 14 tick、約 103 分)にとり、挙動を変えない。
+// 今までの値は「1 回の更新あたり」の量だったので、次の換算で 1 分あたりに直して持つ。
+//   PM(v,n)   n tick ごとの 1 回の更新で v だけ増減していた量 → 1 分あたりの量 v/(n·DT0)
+//   PMF(f,n)  n tick ごとの 1 回の更新で割合 f だけ減っていた(起きていた) → 1 分あたりの率 −ln(1−f)/(n·DT0)
+//   LIN(r,n)  1 分あたり r の量を、n tick ぶん = r·n·DT
+//   FRAC(k,n) 1 分あたりの率 k で、n tick の間に減る(起きる)割合 = 1−exp(−k·n·DT)
+//   TICKS(m)  m 分を tick に直す
+// 減衰と確率は指数の形で換算する(掛け算で DT 倍すると、DT が大きいとき 1 を超えるため)。
+// PM / PMF の中の値は、段階 3 より前の値をそのまま残したもの。段階 5 で実際の 1 分あたりの物理量に置き換える。
+// 換算は翻訳時に倍精度で行う。DT = DT0 のとき、float の値は今までとビット単位で同じになる
+constexpr double c_log1p(double y){            // log(1+y) = 2·atanh(y/(2+y))。|y| < 1
+    double z=y/(2.0+y), z2=z*z, t=z, sum=0.0;
+    for(int k=0;k<20000;k++){
+        double d=t/(2*k+1); sum+=d; t*=z2;
+        if((d<0?-d:d) <= 1e-18*(sum<0?-sum:sum)) break;
+    }
+    return 2.0*sum;
+}
+constexpr double c_expm1(double x){            // exp(x)−1 のテイラー級数。小さい x でも桁を落とさない
+    double t=x, sum=0.0;
+    for(int k=2;k<1000;k++){
+        sum+=t; t*=x/k;
+        if((t<0?-t:t) <= 1e-18*(sum<0?-sum:sum)) break;
+    }
+    return sum;
+}
+constexpr double DAY_MIN  = 1440.0;            // 1 日(分)
+constexpr double DT0      = DAY_MIN/14.0;      // 段階 3 より前の 1 tick(分)。換算にだけ使う
+constexpr double DT       = DT0;               // 1 tick(分)
+constexpr double YEAR_MIN = 500.0*DT0;         // 1 年(分)。段階 3 では今までの 500 tick(約 35.7 日)のまま
+constexpr double PM  (double v,double n=1){ return v/(n*DT0); }
+constexpr double PMF (double f,double n=1){ return -c_log1p(-f)/(n*DT0); }
+constexpr float  LIN (double r,double n=1){ return (float)(r*n*DT); }
+constexpr float  FRAC(double k,double n=1){ return (float)(-c_expm1(-k*n*DT)); }
+constexpr long   TICKS(double m){ return (long)(m/DT+0.5); }
+// 更新の間隔。計算の都合で何 tick ごとに処理するかで、物理量ではないので tick で持つ。
+// 1 回の更新は間隔ぶんの時間を進める(上の n)
+const int   PLANT_STRIDE    = 3;       // 植物の体の更新(光合成は毎 tick)
+const int   ANIMAL_STRIDE   = 2;       // 動物も2tickに分けて処理する
+const int   SEED_STRIDE     = 8;       // 土中の種子はさらに間引く
+const int   MICROBE_STRIDE  = 4;       // 個体数が桁違いに多い。4tickに分けて処理する
+const int   PATH_INTERVAL   = 3;       // 病原体を何tickごとに更新するか
+const int   ODOR_INTERVAL   = 4;       // 匂いを何tickごとに更新するか
+const int   GAS_INTERVAL    = 4;       // 大気の移流と拡散を何tickごとに更新するか
+const int   PARA_INTERVAL   = 4;       // 寄生の吸い取りを何tickごとに行うか
+const int   GENET_INTERVAL  = 10;      // 地下茎の融通を何tickごとに行うか
+
 // --- 地形 ---
 // 惑星ではなく一区画の土地。南の端が海に沈み、北へ丘陵が上がる海岸の土地とする。
 // 区画の外の地殻変動(隆起の量と向き)は条件として与え、区画の中の形は
@@ -68,14 +117,14 @@ const float LAT_N           = LATITUDE_DEG/90.f;
 const float TEMP_EQUATOR    = 30.0f;
 const float TEMP_POLE       = -15.0f;
 const float LAPSE_RATE      = 6.5e-3f*ELEV_M;  // 気温減率 6.5 °C/km を標高の尺度あたりに直したもの
-const int   SEASON_PERIOD   = 500;
+const int   SEASON_PERIOD   = (int)TICKS(YEAR_MIN);   // 1 年(tick)
 const float SEASON_AMP      = 24.0f;   // 年較差。緯度を掛けて使う
 const float SEA_SEASON      = 0.30f;   // 海の年較差は陸の3割ほど
 // 海面水温は気温と別の曲線を描く。凍結点より下がれないため、極でも−数度で止まる
 const float SST_EQUATOR     = 29.0f;
 const float SST_POLE        = -3.5f;
 const float CURRENT_HEAT    = 9.0f;    // 水温偏差の表示の幅(度)
-const float ICE_LAG         = 0.055f;  // 氷の成長と融解は季節に遅れる
+const float ICE_LAG         = FRAC(PMF(0.055f));  // 氷の成長と融解は季節に遅れる [率 0.00055 /分]
 const int   COAST_RANGE     = 7;       // 陸の冷気が海へ及ぶ距離
 const float COAST_CHILL     = 0.55f;   // 沿岸の海が陸の気温に引かれる強さ
 
@@ -92,12 +141,12 @@ const int   PRECIP_INTERVAL = 300;     // 降水場を計算し直す間隔
 const float ARID_COEF       = 0.0010f; // 乾燥限界の係数
 const float ARID_SOFT       = 1.20f;   // 大きいほど乾湿の差がなだらかになる
 const float FIELD_CAP       = 1.00f;   // 土壌が保持できる上限
-const float WATER_RELAX     = 0.020f;  // 土壌水分が目標へ近づく速さ
+const float WATER_RELAX     = FRAC(PMF(0.020f));  // 土壌水分が目標へ近づく速さ [率 0.000196 /分]
 const float RIVER_THRESHOLD = 260.f;   // 侵食後の地形に合わせて下げる
 const float RIVER_SUPPLY    = 0.60f;   // 河川が供給する水
-const float DROUGHT_COST    = 0.055f;  // 耐乾装置の維持費
-const float STORE_COST      = 0.030f;  // 貯水組織の維持費
-const float STORE_FILL      = 0.020f;  // 湿っているとき貯める速さ
+const float DROUGHT_COST    = LIN(PM(0.055f));  // 耐乾装置の維持費 [1分あたり 0.000535]
+const float STORE_COST      = LIN(PM(0.030f));  // 貯水組織の維持費 [1分あたり 0.000292]
+const float STORE_FILL      = LIN(PM(0.020f,PLANT_STRIDE),PLANT_STRIDE);  // 湿っているとき貯める速さ [1分あたり 6.48e-05]
 const float STORE_MAX       = 3.00f;   // 遺伝子が届く貯水量の上限
 
 // --- 大気 ---
@@ -108,12 +157,12 @@ const float O2_PER_METAB    = 0.020f;
 const float N2_BASE         = 24.0f;   // O2分圧を地球並み(約21%)にする
 const float SOIL_N_BASE     = 0.35f;   // 土壌の窒素
 const float N_PER_GROWTH    = 0.055f;  // 体を作るのに要する窒素
-const float N_FIX_COST      = 0.006f;  // 純益0.048に対して現実的な負担に
-const float N_FIX_RATE      = 0.0180f; // 共生菌は効率がよい
+const float N_FIX_COST      = LIN(PM(0.006f));  // 純益0.048に対して現実的な負担に [1分あたり 5.83e-05]
+const float N_FIX_RATE      = LIN(PM(0.0180f));  // 共生菌は効率がよい [1分あたり 0.000175]
 const float N_MINERALIZE    = 0.035f;
-const float N_SINK          = 0.022f;  // 沈降。外洋を貧栄養にするが、枯渇させない
-const float N_RUNOFF        = 0.045f;  // 河川が沿岸へ運ぶ栄養
-const float N_UPWELL        = 0.040f;  // 湧昇。深層水が栄養を持ち上げる
+const float N_SINK          = FRAC(PMF(0.022f));  // 沈降。外洋を貧栄養にするが、枯渇させない [率 0.000216 /分]
+const float N_RUNOFF        = LIN(PM(0.045f));  // 河川が沿岸へ運ぶ栄養 [1分あたり 0.000437]
+const float N_UPWELL        = LIN(PM(0.040f));  // 湧昇。深層水が栄養を持ち上げる [1分あたり 0.000389]
 const int   SHELF_RANGE     = 6;
 
 // --- 海氷 ---
@@ -124,12 +173,12 @@ const float ICE_LIGHT       = 0.08f;   // 氷が通す光
 
 const float PLANT_RESP_CO2  = 0.35f;   // 植物の呼吸(維持コストのうちCO2を出す割合)
 const float RESP_EFFICIENCY = 0.60f;   // 呼吸効率の遺伝子が持つ効き
-const float RESP_COST       = 0.032f;  // 高効率な呼吸器の維持費
+const float RESP_COST       = LIN(PM(0.032f,ANIMAL_STRIDE),ANIMAL_STRIDE);  // 高効率な呼吸器の維持費 [1分あたり 0.000156]
 const float DISSOLVED_O2    = 0.45f;   // 鰓は水から効率よく酸素を取り出す
 const float ALT_O2_DECAY    = ELEV_M/8400.f;  // 標高による空気の薄まり。大気のスケールハイト 8.4 km
-const float GAS_DIFFUSE     = 0.55f;   // 4tickに一度呼ぶぶん強める
-const float GAS_RELAX       = 0.0060f;
-const float WIND_STRENGTH   = 0.35f;   // 拡散に負けない強さにする
+const float GAS_DIFFUSE     = FRAC(PMF(0.55f,GAS_INTERVAL),GAS_INTERVAL);  // 4tickに一度呼ぶぶん強める [率 0.00194 /分]
+const float GAS_RELAX       = FRAC(PMF(0.0060f,GAS_INTERVAL),GAS_INTERVAL);  // [率 1.46e-05 /分]
+const float WIND_STRENGTH   = LIN(PM(0.35f,GAS_INTERVAL),GAS_INTERVAL);  // 拡散に負けない強さにする [1分あたり 0.000851]
 const float O2_PER_CO2      = 1.00f;
 
 // --- 火 ---
@@ -137,65 +186,64 @@ const float O2_PER_CO2      = 1.00f;
 // 地球の21%を1.0とした比。17%未満では広がらず、35%超で消火困難
 const float FIRE_O2_MIN     = 0.81f;   // 17% / 21%
 const float FIRE_O2_WET     = 1.67f;   // 35% / 21%
-const float FIRE_IGNITE     = 8.0e-8f; // 落雷による着火率/マス/tick
-const float FIRE_SPREAD     = 0.20f;   // 隣へ移る強さ
-const float FIRE_BURN       = 0.45f;   // 一tickで燃える燃料の割合
-const float FIRE_DECAY      = 0.38f;   // 火勢の減衰。燃え尽きたら消える
+const float FIRE_IGNITE     = FRAC(PMF(8.0e-8f));  // 落雷による着火率/マス/tick [率 7.78e-10 /分]
+const float FIRE_SPREAD     = FRAC(PMF(0.20f));  // 隣へ移る強さ [率 0.00217 /分]
+const float FIRE_BURN       = FRAC(PMF(0.45f));  // 一tickで燃える燃料の割合 [率 0.00581 /分]
+const float FIRE_DECAY      = FRAC(PMF(0.38f));  // 火勢の減衰。燃え尽きたら消える [率 0.00465 /分]
 const float FIRE_MOIST      = 0.55f;   // これ以上湿っていると燃えにくい
 const float FIRE_O2_USE     = 0.025f;  // 燃焼が消費する酸素
-const float FIRE_TOL_COST   = 0.075f;  // 厚い樹皮は高くつく
-const float FIRE_DAMAGE     = 9.0f;    // 炎そのものの破壊力
+const float FIRE_TOL_COST   = LIN(PM(0.075f));  // 厚い樹皮は高くつく [1分あたり 0.000729]
+const float FIRE_DAMAGE     = LIN(PM(9.0f,PLANT_STRIDE),PLANT_STRIDE);  // 炎そのものの破壊力 [1分あたり 0.0292]
 const float FIRE_FUEL_MIN   = 1.5f;
 
 // --- 撹乱 ---
 const float SLIDE_SLOPE     = 0.58f;   // これ以上の勾配(30°)で崩れうる。表層崩壊の多くは 30° を超える斜面で起きる
-const float SLIDE_RATE      = 1.2e-5f; // 崩落率/マス/tick
+const float SLIDE_RATE      = FRAC(PMF(1.2e-5f));  // 崩落率/マス/tick [率 1.17e-07 /分]
 
 // --- 変異 ---
 const float MUT_STRENGTH    = 0.02f;
 const float MUT_RATE_MAX    = 3.0f;    // 変異率の上限(基準の何倍まで)
-const float MUT_RATE_COST   = 0.004f;  // 修復機構を緩めることの代償
+const float MUT_RATE_COST   = LIN(PM(0.004f,ANIMAL_STRIDE),ANIMAL_STRIDE);  // 修復機構を緩めることの代償 [1分あたり 1.94e-05]
 
 // --- 植物 ---
-const float GROW_RATE       = 0.02f;
+const float GROW_RATE       = LIN(PM(0.02f));  // [1分あたり 0.000194]
 const float GROW_COST       = 3.00f;
-const float HEIGHT_COST     = 0.060f;
-const float RESP_COEF       = 0.120f;  // 真の昼夜で取り込みが半減したぶんを補正
-const float TOUGH_COST      = 0.070f;  // 防御を「今」張るための費用
-const float INDUCE_RATE     = 0.22f;   // 食害の匂いに応じて立ち上がる速さ
-const float INDUCE_DECAY    = 0.020f;  // 攻撃がなければ緩む
-const float CLONAL_COST     = 0.010f;  // 地下茎の維持費
-const float CLIMB_COST      = 0.022f;  // つるの維持費(巻きひげと気根)
+const float HEIGHT_COST     = LIN(PM(0.060f));  // [1分あたり 0.000583]
+const float RESP_COEF       = LIN(PM(0.120f));  // 真の昼夜で取り込みが半減したぶんを補正 [1分あたり 0.00117]
+const float TOUGH_COST      = LIN(PM(0.070f));  // 防御を「今」張るための費用 [1分あたり 0.000681]
+const float INDUCE_RATE     = FRAC(PMF(0.22f,PLANT_STRIDE),PLANT_STRIDE);  // 食害の匂いに応じて立ち上がる速さ [率 0.000805 /分]
+const float INDUCE_DECAY    = FRAC(PMF(0.020f,PLANT_STRIDE),PLANT_STRIDE);  // 攻撃がなければ緩む [率 6.55e-05 /分]
+const float CLONAL_COST     = LIN(PM(0.010f));  // 地下茎の維持費 [1分あたり 9.72e-05]
+const float CLIMB_COST      = LIN(PM(0.022f));  // つるの維持費(巻きひげと気根) [1分あたり 0.000214]
 const float CLIMB_GAIN      = 0.85f;   // 支えの高さをどれだけ利用できるか
 const float CLIMB_PENALTY   = 0.45f;
-const float COLD_COST_P     = 0.060f;
+const float COLD_COST_P     = LIN(PM(0.060f));  // [1分あたり 0.000583]
 const float DORM_UPKEEP     = 0.12f;   // 休眠中の維持費の割合
 const float DORM_HARDEN     = 30.0f;   // 休眠がもたらす耐凍性
 const float DORM_HYST       = 3.0f;    // 覚醒に要する余裕(ばたつき防止)
-const float GENET_SHARE     = 0.20f;
+const float GENET_SHARE     = FRAC(PMF(0.20f));  // [率 0.00217 /分]
 const float SEED_FAR        = 12.0f;
 const float PLANT_DIVIDE_TH = 8.0f;
 const float PLANT_INIT_E    = 6.0f;    // 立ち上がりの緩衝
 const int   PLANT_INIT_N    = 400;
 const int   PLANT_MAX       = 260000;  // これを超えると繁殖を止める。観察のための上限
 const int   ANIMAL_MAX      = 60000;
-const float SEX_COST        = 0.015f;  // 生殖器官の維持費
+const float SEX_COST        = LIN(PM(0.015f,ANIMAL_STRIDE),ANIMAL_STRIDE);  // 生殖器官の維持費 [1分あたり 7.29e-05]
 const float SEX_SEARCH      = 3.0f;    // 相手を探す範囲(マス)
 
 // --- 病原体 ---
 // 病原体はその土地で最も多い免疫型に適応する。
 // 稀な型が有利になり、組み換えで新しい型を作れる有性生殖に価値が生まれる
 const int   N_IMMUNE        = 3;       // 免疫の座位
-const float PATH_ADAPT      = 0.030f;  // 病原体が宿主の型へ寄る速さ
-const float PATH_GROW       = 0.020f;  // 宿主密度に応じた増殖
-const float PATH_DECAY      = 0.015f;  // 宿主がいなければ衰える
+const float PATH_ADAPT      = FRAC(PMF(0.030f,PATH_INTERVAL),PATH_INTERVAL);  // 病原体が宿主の型へ寄る速さ [率 9.87e-05 /分]
+const float PATH_GROW       = LIN(PM(0.020f,PATH_INTERVAL),PATH_INTERVAL);  // 宿主密度に応じた増殖 [1分あたり 6.48e-05]
+const float PATH_DECAY      = FRAC(PMF(0.015f,PATH_INTERVAL),PATH_INTERVAL);  // 宿主がいなければ衰える [率 4.9e-05 /分]
 const float PATH_LOAD_MAX   = 2.50f;
-const float PATH_VIRULENCE  = 0.055f;  // 型が一致したときの被害
+const float PATH_VIRULENCE  = LIN(PM(0.055f));  // 型が一致したときの被害 [1分あたり 0.000535]
 const float PATH_WIDTH      = 0.42f;   // 一致とみなす幅(狭いほど型が効く)
-const int   PATH_INTERVAL   = 3;       // 何tickごとに更新するか
 
 // --- 樹上生活 ---
-const float ARBOREAL_COST   = 0.028f;  // 登攀に適した体の維持費
+const float ARBOREAL_COST   = LIN(PM(0.028f,ANIMAL_STRIDE),ANIMAL_STRIDE);  // 登攀に適した体の維持費 [1分あたり 0.000136]
 const float CLIMB_UP_COST   = 0.55f;   // 高さ1を登るのに要するエネルギー
 const float PERCH_GAP       = 0.45f;   // 枝から枝へ渡れる高さの差
 const float BRANCH_SUPPORT  = 1.20f;   // 枝が支えられる体重の目安
@@ -203,45 +251,44 @@ const float FALL_DAMAGE     = 0.9f;    // 落下で失うエネルギー(高さ�
 const float TEMP_WIDTH_P    = 18.0f;
 
 // --- 動物 ---
-const float A_MAX_SPEED     = 0.20f;
-const float A_METAB         = 0.040f;
+const float A_MAX_SPEED     = LIN(PM(0.20f,ANIMAL_STRIDE),ANIMAL_STRIDE);  // [1分あたり 0.000972]
+const float A_METAB         = LIN(PM(0.040f,ANIMAL_STRIDE),ANIMAL_STRIDE);  // [1分あたり 0.000194]
 const float A_MOVE_COST     = 0.060f;
-const float A_REACH_COST    = 0.018f;
-const float A_SIZE_COST     = 0.020f;
-const float JAW_COST        = 0.012f;
-const float COLD_COST_A     = 0.050f;
-const float A_BITE          = 0.45f;
+const float A_REACH_COST    = LIN(PM(0.018f,ANIMAL_STRIDE),ANIMAL_STRIDE);  // [1分あたり 8.75e-05]
+const float A_SIZE_COST     = LIN(PM(0.020f,ANIMAL_STRIDE),ANIMAL_STRIDE);  // [1分あたり 9.72e-05]
+const float JAW_COST        = LIN(PM(0.012f,ANIMAL_STRIDE),ANIMAL_STRIDE);  // [1分あたり 5.83e-05]
+const float COLD_COST_A     = LIN(PM(0.050f,ANIMAL_STRIDE),ANIMAL_STRIDE);  // [1分あたり 0.000243]
+const float A_BITE          = FRAC(PMF(0.45f,ANIMAL_STRIDE),ANIMAL_STRIDE);  // [率 0.00291 /分]
 const float GRAZE_DEFOLIATE = 0.18f;   // 採食が葉を奪う量。局所的な枯渇を生む
 const float A_DIVIDE_TH     = 6.0f;
 const float A_EAT_LOSS      = 0.50f;   // 同化効率50%。若い葉や種子は消化しやすい
 const float PRED_RATIO      = 1.15f;
-const float PRED_EFF        = 0.85f;
-const float SCAV_EFF        = 0.85f;   // 死骸は抵抗しないので取り分が大きい
+const float PRED_EFF        = FRAC(PMF(0.85f,ANIMAL_STRIDE),ANIMAL_STRIDE);  // [率 0.00922 /分]
+const float SCAV_EFF        = FRAC(PMF(0.85f,ANIMAL_STRIDE),ANIMAL_STRIDE);  // 死骸は抵抗しないので取り分が大きい [率 0.00922 /分]
 const float MEAT_LOSS       = 0.30f;
 const float DETRITUS_LOSS   = 0.80f;   // 分解物は栄養価が中間
-const float DETRITUS_COST   = 0.008f;  // 分解酵素の維持費
+const float DETRITUS_COST   = LIN(PM(0.008f,ANIMAL_STRIDE),ANIMAL_STRIDE);  // 分解酵素の維持費 [1分あたり 3.89e-05]
 // 分解者。動かず、死骸だけを食い、炭素と窒素を土に返す
-const float MICROBE_COST    = 0.0004f; // 微生物の代謝は極小。休眠に近い状態で待てる
+const float MICROBE_COST    = LIN(PM(0.0004f));  // 微生物の代謝は極小。休眠に近い状態で待てる [1分あたり 3.89e-06]
 const float MICROBE_EFF     = 0.60f;
 const float MICROBE_BOOST   = 2.0f;    // 間引いたぶん、一回の分解量を増やす
 const float MICROBE_DIV     = 1.40f;   // 分裂の閾値を上げ、個体数を抑える
 const float MICROBE_RETURN  = 0.55f;   // 分解して大気と土に返す割合
 const float MICROBE_DISP    = 2.0f;    // 胞子が飛ぶ距離
 const int   MICROBE_INIT    = 3000;
-const int   MICROBE_STRIDE  = 4;       // 個体数が桁違いに多い。4tickに分けて処理する
-const float BODY_GROW_RATE  = 0.010f;
+const float BODY_GROW_RATE  = LIN(PM(0.010f,ANIMAL_STRIDE),ANIMAL_STRIDE);  // [1分あたり 4.86e-05]
 const float BODY_GROW_COST  = 4.00f;
 const float CORPSE_RETURN   = 2.50f;
 const float MATURE_FRAC     = 0.80f;
 const int   MAX_BROOD       = 12;      // 一度に産める上限
 const float BROOD_TAX       = 0.22f;   // 多産による取り分の目減り
-const float ROT_RATE        = 0.004f;  // 分解者が主役。これは物理的な風化だけ
+const float ROT_RATE        = FRAC(PMF(0.004f));  // 分解者が主役。これは物理的な風化だけ [率 3.9e-05 /分]
 const int   N_SENSOR        = 5;       // 感覚器の枠。使うかどうかは進化が決める
 const int   RAY_STEPS       = 3;       // レイの段数。多いほど重い
 const float SENSOR_MAX      = 14.0f;   // 射程の上限
 const float SENSOR_MIN      = 0.8f;
 const int   N_TUNE          = 13;      // 視覚7 + 嗅覚4 + 同種 + 水
-const float SENSOR_COST     = 0.0010f; // 射程あたりの維持費
+const float SENSOR_COST     = LIN(PM(0.0010f,ANIMAL_STRIDE),ANIMAL_STRIDE);  // 射程あたりの維持費 [1分あたり 4.86e-06]
 // 入力: 感覚器 + エネルギー・気温・水・体格・バイアス
 const int   N_REC           = 2;       // 再帰結合。何を覚えるかは進化が決める
 const int   N_IN            = N_SENSOR+5+N_REC;
@@ -259,17 +306,17 @@ const int   W_LL            = (MAX_LAYER-1)*MAX_NODE*MAX_NODE; // 層 → 層
 const int   W_OUT           = N_OUT*MAX_NODE;
 const int   W_DIR           = N_OUT*N_IN;
 const int   N_W             = W_L0+W_LL+W_OUT+W_DIR;
-const float NODE_COST       = 0.0022f; // 軍拡で代謝が膨らむと、脳が真っ先に切られる
-const float SYN_COST        = 0.00010f;
+const float NODE_COST       = LIN(PM(0.0022f,ANIMAL_STRIDE),ANIMAL_STRIDE);  // 軍拡で代謝が膨らむと、脳が真っ先に切られる [1分あたり 1.07e-05]
+const float SYN_COST        = LIN(PM(0.00010f,ANIMAL_STRIDE),ANIMAL_STRIDE);  // [1分あたり 4.86e-07]
 const int   ANIMAL_RELEASE  = 20000;
 const int   ANIMAL_INIT_N   = 500;
 
 // --- 水域と地形 ---
 const float WATER_ATTEN     = 3.0f;    // 水深による光の減衰
-const float BUOY_COST       = 0.030f;  // 浮くための組織の維持費
-const float BUOY_DRIFT      = 0.55f;   // 海流に流される強さ
-const float HABITAT_COST_P  = 0.35f;   // 生息環境の不適合(植物)
-const float HABITAT_COST_A  = 0.10f;   // 生息環境の不適合(動物)
+const float BUOY_COST       = LIN(PM(0.030f));  // 浮くための組織の維持費 [1分あたり 0.000292]
+const float BUOY_DRIFT      = LIN(PM(0.55f,PLANT_STRIDE),PLANT_STRIDE);  // 海流に流される強さ [1分あたり 0.00178]
+const float HABITAT_COST_P  = LIN(PM(0.35f));  // 生息環境の不適合(植物) [1分あたり 0.0034]
+const float HABITAT_COST_A  = LIN(PM(0.10f,ANIMAL_STRIDE),ANIMAL_STRIDE);  // 生息環境の不適合(動物) [1分あたり 0.000486]
 const float SLOPE_COEF      = 0.50f;   // 勾配による減速。45°(勾配 1)で速さが 2/3。小さな昆虫は体重あたりの登坂の仕事が小さい
 const float WATER_SPEED     = 1.30f;   // 水生が水中で得る速度
 const float SHALLOW_EASE    = 0.30f;   // 浅瀬の緩さ(小さいほど岸が入りやすい)
@@ -278,52 +325,51 @@ const float SHALLOW_EASE    = 0.30f;   // 浅瀬の緩さ(小さいほど岸が�
 // 4本のチャンネル。視覚と違い、時間に残り、遮蔽を回り込む
 const int   N_ODOR          = 4;   // 0=生体 1=腐敗 2=食害 3=災害
 const char* ODOR_NAME[4]    = {"生体","腐敗","食害","災害"};
-const float ODOR_DIFFUSE    = 0.42f;  // 拡散
-const float ODOR_DECAY      = 0.055f; // 散逸
-const float ODOR_WIND       = 0.30f;  // 風による移流
-const int   ODOR_INTERVAL   = 4;      // 何tickごとに更新するか
+const float ODOR_DIFFUSE    = FRAC(PMF(0.42f,ODOR_INTERVAL),ODOR_INTERVAL);  // 拡散 [率 0.00132 /分]
+const float ODOR_DECAY      = FRAC(PMF(0.055f,ODOR_INTERVAL),ODOR_INTERVAL);  // 散逸 [率 0.000137 /分]
+const float ODOR_WIND       = LIN(PM(0.30f,ODOR_INTERVAL),ODOR_INTERVAL);  // 風による移流 [1分あたり 0.000729]
 const float ODOR_SCALE      = 2.5f;   // 感覚器が飽和する濃さ
 // 放出量
-const float ODOR_PLANT      = 0.010f; // 植物の体臭(高さと毒に比例)
-const float ODOR_ANIMAL     = 0.035f; // 動物の体臭(体格に比例)
-const float ODOR_ESTRUS     = 0.055f; // 発情
-const float ODOR_SICK       = 0.045f; // 病んだ個体
-const float ODOR_ROT        = 0.008f; // 死骸
+const float ODOR_PLANT      = LIN(PM(0.010f,ODOR_INTERVAL),ODOR_INTERVAL);  // 植物の体臭(高さと毒に比例) [1分あたり 2.43e-05]
+const float ODOR_ANIMAL     = LIN(PM(0.035f,ODOR_INTERVAL),ODOR_INTERVAL);  // 動物の体臭(体格に比例) [1分あたり 8.51e-05]
+const float ODOR_ESTRUS     = LIN(PM(0.055f,ODOR_INTERVAL),ODOR_INTERVAL);  // 発情 [1分あたり 0.000134]
+const float ODOR_SICK       = LIN(PM(0.045f,ODOR_INTERVAL),ODOR_INTERVAL);  // 病んだ個体 [1分あたり 0.000109]
+const float ODOR_ROT        = LIN(PM(0.008f,ODOR_INTERVAL),ODOR_INTERVAL);  // 死骸 [1分あたり 1.94e-05]
 const float ODOR_WOUND      = 0.90f;  // 食害を受けた植物
-const float ODOR_SMOKE      = 0.45f;  // 煙
+const float ODOR_SMOKE      = LIN(PM(0.45f,ODOR_INTERVAL),ODOR_INTERVAL);  // 煙 [1分あたり 0.00109]
 
 // --- 昼夜 ---
 // 太陽高度 sin(h) = sinφ·sinδ + cosφ·cosδ·cosH を各マスで解く。
 // 昼夜の境界、極夜、白夜がすべてこの一式から出る
-const int   DAY_PERIOD      = 14;      // 自転の周期(tick)。夜が貯蔵を超えないように
+const int   DAY_PERIOD      = (int)TICKS(DAY_MIN);    // 自転の周期(tick)。1 日 = DAY_MIN 分
 const float AXIAL_TILT      = 23.4f;   // 地軸の傾き(度)。極夜・白夜の範囲を決める
-const float SOLAR_GAIN      = 2.30f;   // 正午に飽和で捨てるぶんを補う
+const float SOLAR_GAIN      = LIN(PM(2.30f));  // 正午に飽和で捨てるぶんを補う [1分あたり 0.0224]
 const float NIGHT_RESP      = 0.35f;   // 暗所では光化学系が止まり、呼吸が落ちる
 const float DIURNAL_LAND    = 9.0f;    // 陸の日較差(度)
 const float DIURNAL_SEA     = 1.2f;    // 海は熱容量が大きく、ほとんど振れない
 
 // --- 植物の新しい戦略 ---
-const float PARASITE_COST   = 0.030f;  // 吸器の維持費
-const float PARASITE_DRAIN  = 0.055f;  // 宿主から奪う割合
-const float CARNIVORY_COST  = 0.045f;  // 捕虫器の維持費
-const float CARNIVORY_CATCH = 0.14f;   // 捕獲率
+const float PARASITE_COST   = LIN(PM(0.030f));  // 吸器の維持費 [1分あたり 0.000292]
+const float PARASITE_DRAIN  = FRAC(PMF(0.055f));  // 宿主から奪う割合 [率 0.00055 /分]
+const float CARNIVORY_COST  = LIN(PM(0.045f));  // 捕虫器の維持費 [1分あたり 0.000437]
+const float CARNIVORY_CATCH = FRAC(PMF(0.14f,ANIMAL_STRIDE),ANIMAL_STRIDE);  // 捕獲率 [率 0.000733 /分]
 const float CARNIVORY_N     = 0.09f;   // 獲物から得る窒素
-const float FIRE_SEED_COST  = 0.012f;  // 休眠種子の維持費
-const int   BURN_WINDOW     = 900;
-const float BANK_COST       = 0.0035f;  // 土中でも呼吸し、食われ、朽ちる
-const float BANK_PREDATION  = 0.0012f;  // 種子食者に見つかる率/tick
-const int   BANK_MAX        = 1400;    // 待てる上限(tick)
+const float FIRE_SEED_COST  = LIN(PM(0.012f));  // 休眠種子の維持費 [1分あたり 0.000117]
+const int   BURN_WINDOW     = (int)TICKS(900*DT0);  // [64.3 日]
+const float BANK_COST       = LIN(PM(0.0035f));  // 土中でも呼吸し、食われ、朽ちる [1分あたり 3.4e-05]
+const float BANK_PREDATION  = FRAC(PMF(0.0012f));  // 種子食者に見つかる率/tick [率 1.17e-05 /分]
+const int   BANK_MAX        = (int)TICKS(1400*DT0);  // 待てる上限 [100 日]
 
 // --- 動物の新しい戦略 ---
-const float TOXIN_COST      = 0.035f;  // 毒の合成費
+const float TOXIN_COST      = LIN(PM(0.035f,ANIMAL_STRIDE),ANIMAL_STRIDE);  // 毒の合成費 [1分あたり 0.00017]
 const float TOXIN_HARM      = 0.55f;   // 毒が捕食者に与える損害
-const float TOXRES_COST     = 0.022f;  // 解毒の維持費
-const float BURROW_COST     = 0.020f;  // 掘る体の維持費
+const float TOXRES_COST     = LIN(PM(0.022f,ANIMAL_STRIDE),ANIMAL_STRIDE);  // 解毒の維持費 [1分あたり 0.000107]
+const float BURROW_COST     = LIN(PM(0.020f,ANIMAL_STRIDE),ANIMAL_STRIDE);  // 掘る体の維持費 [1分あたり 9.72e-05]
 const float BURROW_BUFFER   = 0.75f;   // 地中が和らげる気温の割合
-const float FAT_COST        = 0.012f;  // 脂肪を担ぐ維持費
+const float FAT_COST        = LIN(PM(0.012f,ANIMAL_STRIDE),ANIMAL_STRIDE);  // 脂肪を担ぐ維持費 [1分あたり 5.83e-05]
 const float FAT_MAX         = 8.0f;
-const float FAT_RATE        = 0.12f;   // 余剰を脂肪に回す速さ
-const float NOCTURNAL_COST  = 0.014f;  // 夜目の維持費
+const float FAT_RATE        = FRAC(PMF(0.12f,ANIMAL_STRIDE),ANIMAL_STRIDE);  // 余剰を脂肪に回す速さ [率 0.000621 /分]
+const float NOCTURNAL_COST  = LIN(PM(0.014f,ANIMAL_STRIDE),ANIMAL_STRIDE);  // 夜目の維持費 [1分あたり 6.81e-05]
 
 // --- 系統 ---
 const float SPECIES_THRESHOLD = 0.85f;
@@ -331,16 +377,32 @@ const int   REP_N             = 14;   // Lineage の rep / mean の長さ
 const int   LINEAGE_INTERVAL  = 300;
 const int   LINEAGE_SAMPLE    = 5000;
 const int   LINEAGE_GRACE     = 3;      // 連続でこの回数見失って初めて絶滅とする
+// --- コードの中に直に書かれていた速さ(段階 3 で名前を付けた。値は同じ) ---
+const float MICROBE_DECOMP  = FRAC(PMF(0.10f));   // 微生物が 1 tick に死骸を分解する割合の基準(rate·act·間隔·BOOST を掛ける)
+const float MICROBE_COLD_COST = LIN(PM(0.0015f));  // 低温に耐える酵素の維持費
+const float STORE_DRAW      = FRAC(PMF(0.02f));   // 土の水が足りないとき、不足分のうち体の貯水から補う割合
+const float STORE_SURPLUS   = FRAC(PMF(0.5f,PLANT_STRIDE),PLANT_STRIDE);   // 余った土の水のうち、1 回の更新で貯水に回せる割合
+const float FIRE_SHOOT_LOSS = LIN(PM(0.60f,PLANT_STRIDE),PLANT_STRIDE);  // 炎が幹と葉を焼く速さ(高さ/火勢)
+const float N_UPTAKE        = LIN(PM(0.010f));    // 根が土から窒素を吸う速さの上限(同じマスの株で分ける)
+const float CROWD_COST      = LIN(PM(0.020f));    // 自己間引き。混み合った株 1 本あたりの消耗
+const float SAT_FLUX        = LIN(PM(1.0f));      // 光合成の飽和(saturation の値 1 が 1 tick に受けられる光)
+const float CLIMB_RATE0     = LIN(PM(0.08f,ANIMAL_STRIDE),ANIMAL_STRIDE);  // 登る速さ(高さ/更新)
+const float CLIMB_RATE1     = LIN(PM(0.25f,ANIMAL_STRIDE),ANIMAL_STRIDE);  // 登攀の巧さで足される速さ
+const float DESCEND_RATE    = LIN(PM(0.15f,ANIMAL_STRIDE),ANIMAL_STRIDE);  // 降りる速さ
+const float BURROW_RATE     = FRAC(PMF(0.15f,ANIMAL_STRIDE),ANIMAL_STRIDE);  // 潜り具合が遺伝子の値へ近づく割合
+const float DIGEST_COST     = LIN(PM(0.018f,ANIMAL_STRIDE),ANIMAL_STRIDE);  // 長い腸の維持費
+const float FAT_DRAW        = LIN(PM(0.05f,ANIMAL_STRIDE),ANIMAL_STRIDE);  // 飢えたとき脂肪を取り崩す速さ
+const int   BANK_MIN        = (int)TICKS(40*DT0);     // 土中で待つ最短
+const int   SEED_RETRY      = (int)TICKS(48*DT0);     // 乾いていて発芽できなかった種子が、次に土を見るまで
+const int   RELEASE_TICK    = (int)TICKS(150*DT0);    // 植物が増えなくても、この時刻には動物を放つ
+
 // --- 記録 ---
 const int   HIST_MAX        = 200;   // 300tick刻みで6万tick。直近の変化が見える
-const int   PLANT_STRIDE    = 3;
-const int   ANIMAL_STRIDE   = 2;       // 動物も2tickに分けて処理する
-const int   SEED_STRIDE     = 8;       // 土中の種子はさらに間引く
 const float SENESCE_START   = 0.55f;   // 寿命のこの割合を過ぎると衰えが始まる
 const float SENESCE_RATE    = 2.4f;    // 衰えの速さ
-const float LIFESPAN_COST   = 0.030f;  // 長命な体の維持費
-const int   LIFE_MIN        = 900;     // 最短の寿命(tick)
-const int   LIFE_MAX        = 40000;   // 最長の寿命
+const float LIFESPAN_COST   = LIN(PM(0.030f));  // 長命な体の維持費 [1分あたり 0.000292]
+const int   LIFE_MIN        = (int)TICKS(900*DT0);  // 最短の寿命 [64.3 日]
+const int   LIFE_MAX        = (int)TICKS(40000*DT0);  // 最長の寿命 [2.86e+03 日]
 const int   SAMPLE_INTERVAL = 300;
 const int   AUTOSAVE_EVERY  = 7200;
 const int   PRINT_EVERY     = 60;
@@ -1814,7 +1876,7 @@ void update_microbes(){
         int cb=cgrid.b(ci), ce=cgrid.e(ci);
         if(cb<ce){
             int pk=cgrid.items[cb+(int)(frand(0.f,(float)(ce-cb)-0.001f))];
-            float dec=corpses[pk].energy*m.rate*0.10f*act*MICROBE_STRIDE*MICROBE_BOOST;
+            float dec=corpses[pk].energy*m.rate*MICROBE_DECOMP*act*MICROBE_STRIDE*MICROBE_BOOST;
             corpses[pk].energy-=dec;
             m.energy+=dec*MICROBE_EFF;
             // 残りは大気と土へ
@@ -1822,7 +1884,7 @@ void update_microbes(){
             soil_n[ci]+= dec*(1.f-MICROBE_EFF)*MICROBE_RETURN*N_MINERALIZE*3.f;
             if(soil_n[ci]>3.f) soil_n[ci]=3.f;
         }
-        m.energy -= (MICROBE_COST*(0.5f+m.rate)+m.cold_tol*0.0015f)*MICROBE_STRIDE;
+        m.energy -= (MICROBE_COST*(0.5f+m.rate)+m.cold_tol*MICROBE_COLD_COST)*MICROBE_STRIDE;
         if(m.energy<=0.f){ m.alive=false; d_micro++; continue; }
         if(m.energy>=MICROBE_DIV && (int)microbes.size()<800000){
             m.energy*=0.5f;
@@ -1986,7 +2048,7 @@ void update_plants(){
             // 浮く個体は水面近くに留まり、深さに関わらず光を受ける
             float att=1.f;
             if(sea[ci]) att=std::exp(-WATER_ATTEN*depthn(ci)*(1.f-p.buoyancy));
-            float got=std::min(remaining*att,saturation(p));
+            float got=std::min(remaining*att,saturation(p)*SAT_FLUX);
             remaining -= got/std::max(0.05f,att);
             float dT=(temper[ci]-opt_temp_p(p))/TEMP_WIDTH_P;
             float tf=std::exp(-dT*dT);
@@ -1999,7 +2061,7 @@ void update_plants(){
             float wf = clamp01(avail_w/std::max(0.02f,wneed));
             gain *= wf;
             if(soil_water[ci]<wneed && p.water_store>0.f){
-                float draw=std::min(p.water_store,(wneed-soil_water[ci])*0.02f);
+                float draw=std::min(p.water_store,(wneed-soil_water[ci])*STORE_DRAW);
                 p.water_store-=draw;
             }
             soil_water[ci] = std::max(0.f, soil_water[ci]-gain*0.010f);  // 蒸散
@@ -2027,7 +2089,7 @@ void update_plants(){
     // 寄生: 吸器を同じマスの最も大きな株に刺し、エネルギーを直接奪う。
     // 宿主の tough が防御として働く
     static int para_tick=0;
-    if(++para_tick%4==0)
+    if(++para_tick%PARA_INTERVAL==0)
     for(int ci=0;ci<GRID_W*GRID_H;ci++){
         int b0=pgrid.start[ci], e0=pgrid.start[ci+1];
         if(e0-b0<2) continue;
@@ -2044,14 +2106,14 @@ void update_plants(){
             Plant& q=plants[pi];
             if(q.parasite<0.10f) continue;
             float pierce=q.parasite/(q.parasite+plants[host].defense);
-            float drain=plants[host].energy*PARASITE_DRAIN*pierce*4.f;
+            float drain=plants[host].energy*PARASITE_DRAIN*pierce*PARA_INTERVAL;
             plants[host].energy-=drain;
             q.energy+=drain*0.85f;
             q.n_store=std::min(1.5f,q.n_store+drain*0.02f);
         }
     }
     static int genet_tick=0;
-    if(++genet_tick%10==0){          // 地下茎の融通は10tickに一度で足りる
+    if(++genet_tick%GENET_INTERVAL==0){   // 地下茎の融通は10tickに一度で足りる
         static std::unordered_map<int,std::pair<double,int>> genet;
         genet.clear();
         for(const auto& p:plants){
@@ -2063,7 +2125,7 @@ void update_plants(){
             auto it=genet.find(p.genet);
             if(it==genet.end()||it->second.second<2) continue;
             float mean=(float)(it->second.first/it->second.second);
-            p.energy+=(mean-p.energy)*std::min(1.f,GENET_SHARE*10.f)*p.clonal;
+            p.energy+=(mean-p.energy)*std::min(1.f,GENET_SHARE*GENET_INTERVAL)*p.clonal;
         }
     }
     static int pphase=0;
@@ -2085,7 +2147,7 @@ void update_plants(){
                 // 発芽の時だけ環境を見る
                 int gx0=(int)p.x, gy0=(int)p.y;
                 int ci0=(gx0>=0&&gx0<GRID_W&&gy0>=0&&gy0<GRID_H)?idx(gx0,gy0):0;
-                if(soil_water[ci0]<0.25f){ p.seed_wait=SEED_STRIDE*6; continue; }
+                if(soil_water[ci0]<0.25f){ p.seed_wait=SEED_RETRY; continue; }
                 p.seed_wait=0; p.height=0.05f;
             }
             continue;
@@ -2108,7 +2170,7 @@ void update_plants(){
             // 厚い樹皮でも完全には守れない。炎は幹を焼き、葉を奪う
             float dmg=fire[ci]*(1.f-p.fire_tol*0.65f);
             p.energy-=dmg*FIRE_DAMAGE;
-            p.height=std::max(0.03f,p.height-dmg*0.60f);
+            p.height=std::max(0.03f,p.height-dmg*FIRE_SHOOT_LOSS);
             if(p.energy<=0.f){
                 p.alive=false;
                 corpses.push_back({p.x,p.y,p.height*0.25f,0});   // 大半は灰になる
@@ -2120,7 +2182,7 @@ void update_plants(){
             p.n_store += N_FIX_RATE*p.n_fix*PLANT_STRIDE;
             // 同じマスの株数で分け合う。密集すれば一株あたりの取り分が減る
             int nn2=std::max(1,pgrid.n_at(ci));
-            float take=std::min(soil_n[ci],0.010f*PLANT_STRIDE/(float)nn2);
+            float take=std::min(soil_n[ci],N_UPTAKE*PLANT_STRIDE/(float)nn2);
             soil_n[ci]-=take; p.n_store+=take;
             if(p.n_store>1.5f) p.n_store=1.5f;
         }
@@ -2150,7 +2212,7 @@ void update_plants(){
         // 余裕があるとき、組織に水を貯める
         if(!p.dormant && p.water_store<p.store_cap && soil_water[ci]>0.5f){
             float f=std::min(STORE_FILL,p.store_cap-p.water_store);
-            f=std::min(f,(soil_water[ci]-0.5f)*0.5f);
+            f=std::min(f,(soil_water[ci]-0.5f)*STORE_SURPLUS);
             if(f>0.f){ p.water_store+=f; soil_water[ci]-=f*0.5f; }
         }
         // 誘導防御。食害の匂いを感じて初めて武装する。常時ではコストが高い
@@ -2179,7 +2241,7 @@ void update_plants(){
         // 自己間引き。混み合うほど、光以外の要因でも消耗する
         {
             int nn=pgrid.n_at(ci);
-            if(nn>4) upkeep += (nn-4)*0.020f;
+            if(nn>4) upkeep += (nn-4)*CROWD_COST;
         }
         if(p.dormant) upkeep*=DORM_UPKEEP;   // 葉を落として代謝を絞る
         // 発病。この土地の病原体と型が合ってしまった個体が病む
@@ -2253,7 +2315,7 @@ void update_plants(){
             c.defense=0.f;
             // 土中で待つか、すぐ芽吹くか
             c.seed_wait = (dist01(rng)<p.seed_bank)
-                        ? (int)(frand(40.f,(float)BANK_MAX)) : 0;
+                        ? (int)(frand((float)BANK_MIN,(float)BANK_MAX)) : 0;
             c.id=next_plant_id++;
             c.genet=stay?p.genet:c.id;
             c.absorb    =mutate(p.absorb,    0.05f,1.0f);
@@ -2470,7 +2532,7 @@ void update_animals(){
         // 登り降り。登攀が巧いほど安く登れる
         float want = reachable*a.arboreal;
         if(want>a.perch+0.02f){
-            float up=std::min(want-a.perch,0.08f+0.25f*a.arboreal);
+            float up=std::min(want-a.perch,CLIMB_RATE0+CLIMB_RATE1*a.arboreal);
             a.perch+=up;
             a.energy-=up*CLIMB_UP_COST/(0.25f+a.arboreal);
         } else if(a.perch>reachable){
@@ -2479,7 +2541,7 @@ void update_animals(){
             a.perch=reachable;
             if(drop>0.5f) a.energy-=drop*FALL_DAMAGE*(1.f-a.arboreal*0.7f);
         } else if(a.perch>want){
-            a.perch=std::max(want,a.perch-0.15f);    // 降りるのは安い
+            a.perch=std::max(want,a.perch-DESCEND_RATE);    // 降りるのは安い
         }
         if(a.perch<0.f) a.perch=0.f;
 
@@ -2528,7 +2590,7 @@ void update_animals(){
         int gx=(int)a.x, gy=(int)a.y;
         int ci=(gx>=0&&gx<GRID_W&&gy>=0&&gy<GRID_H)?idx(gx,gy):0;
         // 潜り具合。地中は気温が和らぐ
-        a.depth += (a.burrow - a.depth)*0.15f;
+        a.depth += (a.burrow - a.depth)*BURROW_RATE;
         float felt = temper[ci];
         if(a.depth>0.05f){
             float year_mean=TEMP_EQUATOR
@@ -2661,7 +2723,7 @@ void update_animals(){
                    +brain_use*SYN_COST
                    +a.sexual*SEX_COST+a.arboreal*ARBOREAL_COST
                    +(1.f-a.mut_rate)*MUT_RATE_COST   // 精密な修復は高くつく
-                   +a.digest*0.018f                   // 長い腸は重い
+                   +a.digest*DIGEST_COST                   // 長い腸は重い
                    +a.toxin*TOXIN_COST+a.tox_resist*TOXRES_COST
                    +a.burrow*BURROW_COST+a.nocturnal*NOCTURNAL_COST
                    +a.fat*FAT_COST;
@@ -2689,7 +2751,7 @@ void update_animals(){
                                a.store_fat*FAT_MAX-a.fat);
             a.energy-=put; a.fat+=put*0.85f;
         } else if(a.energy<A_DIVIDE_TH*0.25f && a.fat>0.f){
-            float take=std::min(a.fat,0.05f);
+            float take=std::min(a.fat,FAT_DRAW);
             a.fat-=take; a.energy+=take;
         }
         if(a.energy<=0.f){
@@ -4263,7 +4325,7 @@ int main(int argc,char** argv){
               }
             }
             prof_begin();
-            if(frame%4==0) update_gases();      // 拡散は4tickに一度で足りる
+            if(frame%GAS_INTERVAL==0) update_gases();   // 拡散は4tickに一度で足りる
             prof_end(5);
             frame++;
             if(g_stop_at>0 && frame>=g_stop_at){
@@ -4282,7 +4344,7 @@ int main(int argc,char** argv){
 
             // 植物の数だけを待つと、その間に抑制なしで増え続ける。
             // 時間でも切って、暴走する前に消費者を入れる
-            if(!released && ((int)plants.size()>ANIMAL_RELEASE || frame>=150)){
+            if(!released && ((int)plants.size()>ANIMAL_RELEASE || frame>=RELEASE_TICK)){
                 int put=0,g2=0;
                 while(put<ANIMAL_INIT_N && g2++<200000){
                     Animal a;
