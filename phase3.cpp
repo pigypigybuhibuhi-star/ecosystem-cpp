@@ -473,6 +473,7 @@ inline int idx(int x,int y){ return y*GRID_W + x; }
 std::mt19937 rng(12344);
 // 夜間の自動実行用。起動引数で上書きする
 long   g_stop_at  = -1;     // この tick に達したら終了する(-1 で無制限)
+bool   g_headless = false;  // 画面を描かずに回す。描画は状態を変えないので結果は同じ
 double g_fps_time = 0.0;    // t>=50000 の経過時間の合計
 long   g_fps_n    = 0;      // t>=50000 のフレーム数
 std::uniform_real_distribution<float> dist01(0.f,1.f);
@@ -3818,7 +3819,7 @@ std::string save_summary(const std::string& fn){
 }
 
 int main(int argc,char** argv){
-    // 起動引数: --seed N  --stop-at N  --record FILE  --replay FILE --shuffle-seed N
+    // 起動引数: --seed N  --stop-at N  --record FILE  --replay FILE --shuffle-seed N  --headless
     std::string rec_path, replay_path; unsigned shuffle_seed=1;
     for(int i=1;i<argc;i++){
         std::string a=argv[i];
@@ -3827,6 +3828,7 @@ int main(int argc,char** argv){
         if(a=="--record"  && i+1<argc) rec_path=argv[++i];
         if(a=="--replay"  && i+1<argc) replay_path=argv[++i];
         if(a=="--shuffle-seed" && i+1<argc) shuffle_seed=(unsigned)std::stoul(argv[++i]);
+        if(a=="--headless") g_headless=true;
     }
     if(!rec_path.empty()){
         g_rec=fopen(rec_path.c_str(),"w");
@@ -3917,8 +3919,11 @@ int main(int argc,char** argv){
     }
     sf::VideoMode desktop=sf::VideoMode::getDesktopMode();
     SCREEN_W=(float)desktop.size.x; SCREEN_H=(float)desktop.size.y;
-    sf::RenderWindow window(desktop,"Phase 3",sf::State::Fullscreen);
-    window.setFramerateLimit(60);
+    sf::RenderWindow window;   // --headless では開かない
+    if(!g_headless){
+        window.create(desktop,"Phase 3",sf::State::Fullscreen);
+        window.setFramerateLimit(60);
+    }
     bool fullscreen=true;
 
     sf::Font font;
@@ -3944,7 +3949,7 @@ int main(int argc,char** argv){
 
     sf::Image image({(unsigned)GRID_W,(unsigned)GRID_H},sf::Color::Black);
     sf::Texture texture;
-    if(!texture.loadFromImage(image)){ printf("texture failed\n"); return 1; }
+    if(!g_headless && !texture.loadFromImage(image)){ printf("texture failed\n"); return 1; }
     sf::Sprite sprite(texture);
 
     float zoom=std::min(SCREEN_W/(float)GRID_W,SCREEN_H/(float)GRID_H);
@@ -4019,14 +4024,15 @@ int main(int argc,char** argv){
     struct FilterHit { int f; float x,y,w,h; };
     std::vector<FilterHit> filter_hits;
 
-    while(window.isOpen()){
+    bool running=true;
+    while(running && (g_headless || window.isOpen())){
         // 1フレームの実時間を測る。t>=50000 の平均 fps を夜間の比較に使う
         { static auto last=std::chrono::steady_clock::now();
           auto now=std::chrono::steady_clock::now();
           double dt=std::chrono::duration<double>(now-last).count();
           last=now;
           if(frame>=50000){ g_fps_time+=dt; g_fps_n++; } }
-        while(const std::optional event=window.pollEvent()){
+        while(const std::optional event = g_headless ? std::optional<sf::Event>{} : window.pollEvent()){
             if(event->is<sf::Event::Closed>()) window.close();
 
             if(const auto* te=event->getIf<sf::Event::TextEntered>()){
@@ -4376,6 +4382,7 @@ int main(int argc,char** argv){
                                     g_replay_done[EV_FIRE],g_replay_done[EV_SLIDE],g_replay_ev.size());
                 if(g_rec){ fclose(g_rec); g_rec=nullptr; }
                 fflush(stdout);
+                running=false;
                 window.close();
             }
 
@@ -4811,6 +4818,8 @@ int main(int argc,char** argv){
         }
 
         // ===== 背景 =====
+        // ここから window.display() までは描画だけ。--headless では丸ごと飛ばす
+        if(!g_headless){
         ui_hits.clear();   // 当たり判定はフレームの先頭で作り直す
         prof_begin();
         if(frame%2==0 || view_mode!=g_last_view || paused){
@@ -6175,6 +6184,7 @@ int main(int argc,char** argv){
             }
         }
         window.display();
+        }   // !g_headless
     }
     prevent_sleep_end();
     return 0;
