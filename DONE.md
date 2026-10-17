@@ -9,3 +9,4 @@ CLAUDE.md の作業の項目のうち、main に取り込んだもの。
 - 2026-10-16 / fb27d1b(取り込み: claude/time-dt-stage35)/ 段階 3.5「回数の下地」。一度に齧る回数・死骸を漁る回数・繁殖の判定を count_by_rate(率 × DT、端数は確率、端数0なら乱数なし)で決め、向きのゆらぎに √(DT/DT0) を掛けた。ログは main と(prof・fps・autosave の行を除き)バイト単位で一致。
 - 2026-10-16 / 616212b(取り込み: claude/water-init-stage36)/ 段階 3.6「起動時の水: 40回の反復の代わりに、土壌水分の釣り合いの値を最初から置く」。update_water の緩和の目標 water_target を括り出し、起動時に陸へ置いて降水を決め直す。陸の土壌水分の平均 0.3511、目標との差の平均 0.019。
 - 2026-10-18 / 4953a87(取り込み: claude/time-stage4)/ 段階 4「時間の切り替え: DT = 1(1 tick = 1分)、1日 = 1440 tick、1年 = 525600 tick にする。変えるのはこれらの定数だけ」。DT = 1.0、YEAR_MIN = 365·DAY_MIN にし、DAY_PERIOD = 1440・SEASON_PERIOD = 525600 はそこから導く。t=70000 を完走、nan 0、fps 18.91。
+- 2026-10-18 / 639d30f(取り込み: claude/plant-age-stride)/ 段階 5 の既知の誤り「植物の年齢が PLANT_STRIDE に一度しか進まず、寿命が実際の3倍になっている」。`p.age++` を `p.age+=PLANT_STRIDE` にした(動物・微生物と同じ書き方)。t=70000 を完走、nan 0、fps 18.93。
