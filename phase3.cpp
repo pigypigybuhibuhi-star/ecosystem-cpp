@@ -2181,7 +2181,7 @@ void update_plants(){
             continue;
         }
         if((pidx+pphase)%PLANT_STRIDE!=0) continue;
-        p.age++;
+        p.age+=PLANT_STRIDE;   // 体の更新は PLANT_STRIDE tick に一度。その間に過ぎた分だけ歳をとる
         int gx=(int)p.x, gy=(int)p.y;
         int ci=(gx>=0&&gx<GRID_W&&gy>=0&&gy<GRID_H)?idx(gx,gy):0;
         // 休眠の切り替え。覚醒には余裕をもたせ、境界でばたつかせない
