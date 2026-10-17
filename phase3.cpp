@@ -28,14 +28,14 @@
 // ==========================================================
 // --- 空間(作者が決定) ---
 // 惑星ではなく一区画の土地。1マス = 10 m、900×500 マス = 9 km × 5 km
-// 昼夜と季節の長さ(DAY_PERIOD・SEASON_PERIOD)は移行の段階 4 まで変えない
+// 1 tick = 1 分。1 日 = 1440 tick、1 年 = 365 日 = 525600 tick(移行の段階 4)
 const float CELL_M          = 10.0f;   // 1マスの一辺(メートル)
 const int   GRID_W          = 900;     // 9 km
 const int   GRID_H          = 500;     // 5 km
 
-// --- 時間(移行の段階 3: 時間の下地) ---
+// --- 時間(移行の段階 3: 時間の下地、段階 4: 1 tick = 1 分) ---
 // 速さの定数は「1 分あたりの物理量 × DT」の形で持つ。DT は 1 tick の長さ(分)。
-// 段階 3 では DT を今までの 1 tick(1 日 = 14 tick、約 103 分)にとり、挙動を変えない。
+// 段階 3 では DT を今までの 1 tick(1 日 = 14 tick、約 103 分)にとり、挙動を変えなかった。段階 4 で DT = 1 分にした。
 // 今までの値は「1 回の更新あたり」の量だったので、次の換算で 1 分あたりに直して持つ。
 //   PM(v,n)   n tick ごとの 1 回の更新で v だけ増減していた量 → 1 分あたりの量 v/(n·DT0)
 //   PMF(f,n)  n tick ごとの 1 回の更新で割合 f だけ減っていた(起きていた) → 1 分あたりの率 −ln(1−f)/(n·DT0)
@@ -63,8 +63,8 @@ constexpr double c_expm1(double x){            // exp(x)−1 のテイラー級�
 }
 constexpr double DAY_MIN  = 1440.0;            // 1 日(分)
 constexpr double DT0      = DAY_MIN/14.0;      // 段階 3 より前の 1 tick(分)。換算にだけ使う
-constexpr double DT       = DT0;               // 1 tick(分)
-constexpr double YEAR_MIN = 500.0*DT0;         // 1 年(分)。段階 3 では今までの 500 tick(約 35.7 日)のまま
+constexpr double DT       = 1.0;               // 1 tick(分)
+constexpr double YEAR_MIN = 365.0*DAY_MIN;     // 1 年(分)= 365 日 = 525600 分
 constexpr double PM  (double v,double n=1){ return v/(n*DT0); }
 constexpr double PMF (double f,double n=1){ return -c_log1p(-f)/(n*DT0); }
 constexpr float  LIN (double r,double n=1){ return (float)(r*n*DT); }
