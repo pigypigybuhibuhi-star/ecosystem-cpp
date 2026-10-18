@@ -1849,7 +1849,8 @@ void slide_at(int ci){
         Plant& p=plants[pgrid.items[t]];
         if(!p.alive) continue;
         p.alive=false;
-        corpses.push_back({p.x,p.y,p.height*0.8f,0});
+        // 体の炭素(建設に払った GROW_COST ぶん)と残りのエネルギーは死骸として運ばれる
+        corpses.push_back({p.x,p.y,std::max(0.f,p.energy)+p.height*GROW_COST,0});
     }
     soil_n[ci]*=0.35f;                 // 表土が流される
 }
@@ -2194,20 +2195,27 @@ void update_plants(){
 
         if(temper[ci]<kill_temp_p(p)){
             p.alive=false;
-            corpses.push_back({p.x,p.y,p.energy+p.height*2.0f,0});
+            corpses.push_back({p.x,p.y,std::max(0.f,p.energy)+p.height*GROW_COST,0});   // 体の炭素はすべて死骸に
             continue;
         }
         // 炎。厚い樹皮を持つ個体は耐える
         if(fire[ci]>0.05f){
             // 厚い樹皮でも完全には守れない。炎は幹を焼き、葉を奪う
             float dmg=fire[ci]*(1.f-p.fire_tol*0.65f);
+            // 焼けた組織の炭素は燃焼で CO2 になり、死骸の燃焼と同じ割合で O2 を使う
+            float h0=p.height;
+            float burnt=std::min(dmg*FIRE_DAMAGE,std::max(0.f,p.energy));
             p.energy-=dmg*FIRE_DAMAGE;
             p.height=std::max(0.03f,p.height-dmg*FIRE_SHOOT_LOSS);
+            burnt+=(h0-p.height)*GROW_COST;
             if(p.energy<=0.f){
                 p.alive=false;
-                corpses.push_back({p.x,p.y,p.height*0.25f,0});   // 大半は灰になる
-                continue;
+                corpses.push_back({p.x,p.y,p.height*0.25f,0});   // 炭として残るぶん
+                burnt+=p.height*(GROW_COST-0.25f);              // 残りの体は燃える
             }
+            co2[ci]+=burnt*CO2_PER_ENERGY;
+            o2[ci]=std::max(0.f,o2[ci]-burnt*FIRE_O2_USE);
+            if(!p.alive) continue;
         }
         // 窒素を取り込む。固定できる個体は大気から、できない個体は土壌から
         if(!p.dormant){
@@ -2289,7 +2297,7 @@ void update_plants(){
         dbg_cost+=upkeep;      // 更新を飛ばしたぶんをまとめて払う
         if(p.energy<=0.f){
             p.alive=false;
-            corpses.push_back({p.x,p.y,p.height*2.0f});
+            corpses.push_back({p.x,p.y,p.height*GROW_COST,0});   // 体の炭素はすべて死骸に
             continue;
         }
         if(!p.dormant && p.energy>=PLANT_DIVIDE_TH
