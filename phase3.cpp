@@ -2766,8 +2766,6 @@ void update_animals(){
             metab+=inf*PATH_VIRULENCE;
             infect_a+=inf;
         }
-        metab+=0.f
-                   +HABITAT_COST_A*hma*hma;
         // 呼吸: 酸素の分圧で効率が決まる。水中と高所は薄い
         float o2_need = metab*O2_PER_METAB*(1.f-RESP_EFFICIENCY*a.resp);
         float avail   = std::min(o2_need,o2[ci]);
