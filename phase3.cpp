@@ -399,6 +399,10 @@ const float FIRE_SHOOT_LOSS = LIN(PM(0.60f,PLANT_STRIDE),PLANT_STRIDE);  // 炎�
 const float N_UPTAKE        = LIN(PM(0.010f));    // 根が土から窒素を吸う速さの上限(同じマスの株で分ける)
 const float CROWD_COST      = LIN(PM(0.020f));    // 自己間引き。混み合った株 1 本あたりの消耗
 const float SAT_FLUX        = LIN(PM(1.0f));      // 光合成の飽和(saturation の値 1 が 1 tick に受けられる光)
+// 植物の代謝の速さ(段階 5)。光で飽和した光合成・維持の呼吸・伸長を、体のエネルギーに対して同じ割合で遅くする。
+// 段階 3 より前の値は 1 年 = 500 tick(約 36 日)の世界に合わせてあり、相対成長速度 RGR が約 1 /日だった。
+// 速く育つ草本でも最大 RGR は約 0.3 /日(Grime & Hunt 1975、Poorter 1989)なので 1/3 にする
+const float PLANT_PACE      = 1.0f/3.0f;
 const float CLIMB_RATE0     = LIN(PM(0.08f,ANIMAL_STRIDE),ANIMAL_STRIDE);  // 登る速さ(高さ/更新)
 const float CLIMB_RATE1     = LIN(PM(0.25f,ANIMAL_STRIDE),ANIMAL_STRIDE);  // 登攀の巧さで足される速さ
 const float DESCEND_RATE    = LIN(PM(0.15f,ANIMAL_STRIDE),ANIMAL_STRIDE);  // 降りる速さ
@@ -2076,7 +2080,7 @@ void update_plants(){
             // 浮く個体は水面近くに留まり、深さに関わらず光を受ける
             float att=1.f;
             if(sea[ci]) att=std::exp(-WATER_ATTEN*depthn(ci)*(1.f-p.buoyancy));
-            float got=std::min(remaining*att,saturation(p)*SAT_FLUX);
+            float got=std::min(remaining*att,saturation(p)*SAT_FLUX*PLANT_PACE);
             remaining -= got/std::max(0.05f,att);
             float dT=(temper[ci]-opt_temp_p(p))/TEMP_WIDTH_P;
             float tf=std::exp(-dT*dT);
@@ -2215,7 +2219,7 @@ void update_plants(){
             if(p.n_store>1.5f) p.n_store=1.5f;
         }
         if(!p.dormant && daylit[ci]>0.3f && p.height<p.max_height && p.energy>0.5f){
-            float g=std::min(GROW_RATE*PLANT_STRIDE,p.max_height-p.height);
+            float g=std::min(GROW_RATE*PLANT_PACE*PLANT_STRIDE,p.max_height-p.height);
             float nn=g*N_PER_GROWTH;
             if(p.n_store<nn) g*=p.n_store/std::max(1e-6f,nn);   // 窒素が律速する
             p.n_store=std::max(0.f,p.n_store-g*N_PER_GROWTH);
@@ -2232,7 +2236,7 @@ void update_plants(){
         // 植物も呼吸する: 維持のために酸素を使い、二酸化炭素を出す
         {
             float need = upkeep*PLANT_RESP_CO2*CO2_PER_ENERGY
-                       * (p.dormant?DORM_UPKEEP:1.f);
+                       * (p.dormant?DORM_UPKEEP:1.f)*PLANT_PACE;
             float got  = std::min(need,o2[ci]);
             o2[ci]-=got; co2[ci]+=got;
             if(need>1e-9f && got<need*0.5f) upkeep *= 1.3f;   // 酸欠は割高になる
@@ -2278,6 +2282,7 @@ void update_plants(){
             upkeep+=inf*PATH_VIRULENCE;
             infect_p+=inf;
         }
+        upkeep*=PLANT_PACE;
         p.energy-=upkeep*PLANT_STRIDE;
         dbg_cost+=upkeep;      // 更新を飛ばしたぶんをまとめて払う
         if(p.energy<=0.f){
