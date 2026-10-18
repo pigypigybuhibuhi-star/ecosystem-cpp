@@ -184,7 +184,7 @@ const float FREEZE_TEMP     = -5.0f;
 const float THAW_TEMP       = -1.5f;
 const float ICE_LIGHT       = 0.08f;   // 氷が通す光
 
-const float PLANT_RESP_CO2  = 0.35f;   // 植物の呼吸(維持コストのうちCO2を出す割合)
+const float PLANT_RESP_CO2  = 1.00f;   // 植物の呼吸(維持コストのうちCO2を出す割合)。維持の仕事は糖の酸化でまかなうので全量
 const float RESP_EFFICIENCY = 0.60f;   // 呼吸効率の遺伝子が持つ効き
 const float RESP_COST       = LIN(PM(0.032f,ANIMAL_STRIDE),ANIMAL_STRIDE);  // 高効率な呼吸器の維持費 [1分あたり 0.000156]
 const float DISSOLVED_O2    = 0.45f;   // 鰓は水から効率よく酸素を取り出す
@@ -221,6 +221,7 @@ const float MUT_RATE_COST   = LIN(PM(0.004f,ANIMAL_STRIDE),ANIMAL_STRIDE);  // �
 // --- 植物 ---
 const float GROW_RATE       = LIN(PM(0.02f));  // [1分あたり 0.000194]
 const float GROW_COST       = 3.00f;
+const float GROW_RESP       = 0.50f;   // 建設の呼吸。体にする炭素とは別に、その半分を糖の酸化で払う(建設に要るブドウ糖は体の約 1.5 倍、Penning de Vries 1974)
 const float HEIGHT_COST     = LIN(PM(0.060f));  // [1分あたり 0.000583]
 const float RESP_COEF       = LIN(PM(0.120f));  // 真の昼夜で取り込みが半減したぶんを補正 [1分あたり 0.00117]
 const float TOUGH_COST      = LIN(PM(0.070f));  // 防御を「今」張るための費用 [1分あたり 0.000681]
@@ -1896,7 +1897,8 @@ void update_microbes(){
         int ci=idx(gx,gy);
         // 気温。低温では活動が落ちる
         float kill=-8.f-30.f*m.cold_tol;   // 胞子は凍結にも耐える
-        if(temper[ci]<kill){ m.alive=false; d_micro++; continue; }
+        // 死んだ細胞の炭素は、他の微生物にすぐ分解されて大気へ戻る
+        if(temper[ci]<kill){ co2[ci]+=std::max(0.f,m.energy)*CO2_PER_ENERGY; m.alive=false; d_micro++; continue; }
         float dT=(temper[ci]-(24.f-20.f*m.cold_tol))/22.f;
         float act=std::exp(-dT*dT);
 
@@ -1907,12 +1909,14 @@ void update_microbes(){
             float dec=corpses[pk].energy*m.rate*MICROBE_DECOMP*act*MICROBE_STRIDE*MICROBE_BOOST;
             corpses[pk].energy-=dec;
             m.energy+=dec*MICROBE_EFF;
-            // 残りは大気と土へ
-            co2[ci]   += dec*(1.f-MICROBE_EFF)*MICROBE_RETURN*CO2_PER_ENERGY;
+            // 残りは大気と土へ。体にしなかった分は呼吸で酸化されるので、炭素は全量が CO2 になる
+            co2[ci]   += dec*(1.f-MICROBE_EFF)*CO2_PER_ENERGY;
             soil_n[ci]+= dec*(1.f-MICROBE_EFF)*MICROBE_RETURN*N_MINERALIZE*3.f;
             if(soil_n[ci]>3.f) soil_n[ci]=3.f;
         }
-        m.energy -= (MICROBE_COST*(0.5f+m.rate)+m.cold_tol*MICROBE_COLD_COST)*MICROBE_STRIDE;
+        { float spend=(MICROBE_COST*(0.5f+m.rate)+m.cold_tol*MICROBE_COLD_COST)*MICROBE_STRIDE;
+          co2[ci]+=std::min(spend,std::max(0.f,m.energy))*CO2_PER_ENERGY;   // 維持の呼吸
+          m.energy-=spend; }
         if(m.energy<=0.f){ m.alive=false; d_micro++; continue; }
         if(m.energy>=MICROBE_DIV && (int)microbes.size()<800000){
             m.energy*=0.5f;
@@ -2220,22 +2224,22 @@ void update_plants(){
             if(p.n_store<nn) g*=p.n_store/std::max(1e-6f,nn);   // 窒素が律速する
             p.n_store=std::max(0.f,p.n_store-g*N_PER_GROWTH);
             p.height+=g; p.energy-=g*GROW_COST;
-            // 建設は呼吸を伴う
-            float need=g*GROW_COST*CO2_PER_ENERGY*0.5f;
-            float got=std::min(need,o2[ci]);
-            o2[ci]-=got; co2[ci]+=got;
+            // 建設は呼吸を伴う。出す炭素は体のエネルギーから払う
+            float r=std::min(g*GROW_COST*GROW_RESP,std::max(0.f,p.energy));
+            p.energy-=r;
+            float need=r*CO2_PER_ENERGY;
+            o2[ci]-=std::min(need,o2[ci]); co2[ci]+=need;
         }
         float hm=habitat_p(p,ci);
         float upkeep = RESP_COEF*saturation(p)+HEIGHT_COST*p.height
                  +TOUGH_COST*p.defense+CLONAL_COST*p.clonal+COLD_COST_P*p.cold_tol
                      +HABITAT_COST_P*hm*hm+DROUGHT_COST*p.drought_tol;
-        // 植物も呼吸する: 維持のために酸素を使い、二酸化炭素を出す
+        // 植物も呼吸する: 維持のために酸素を使い、二酸化炭素を出す。
+        // 気体のやりとりは、実際に払った維持費に合わせて下でまとめて行う。ここでは酸欠かどうかだけを見る
         {
-            float need = upkeep*PLANT_RESP_CO2*CO2_PER_ENERGY
+            float need = upkeep*PLANT_RESP_CO2*CO2_PER_ENERGY*PLANT_STRIDE
                        * (p.dormant?DORM_UPKEEP:1.f);
-            float got  = std::min(need,o2[ci]);
-            o2[ci]-=got; co2[ci]+=got;
-            if(need>1e-9f && got<need*0.5f) upkeep *= 1.3f;   // 酸欠は割高になる
+            if(need>1e-9f && o2[ci]<need*0.5f) upkeep *= 1.3f;   // 酸欠は割高になる
         }
         // 余裕があるとき、組織に水を貯める
         if(!p.dormant && p.water_store<p.store_cap && soil_water[ci]>0.5f){
@@ -2278,6 +2282,9 @@ void update_plants(){
             upkeep+=inf*PATH_VIRULENCE;
             infect_p+=inf;
         }
+        // 払った維持費の炭素は呼吸で CO2 になる(体に無いぶんは出せない)
+        { float c=std::min(upkeep*PLANT_STRIDE,std::max(0.f,p.energy))*PLANT_RESP_CO2*CO2_PER_ENERGY;
+          o2[ci]-=std::min(c,o2[ci]); co2[ci]+=c; }
         p.energy-=upkeep*PLANT_STRIDE;
         dbg_cost+=upkeep;      // 更新を飛ばしたぶんをまとめて払う
         if(p.energy<=0.f){
@@ -2769,10 +2776,13 @@ void update_animals(){
         // 呼吸: 酸素の分圧で効率が決まる。水中と高所は薄い
         float o2_need = metab*O2_PER_METAB*(1.f-RESP_EFFICIENCY*a.resp);
         float avail   = std::min(o2_need,o2[ci]);
-        o2[ci]-=avail; co2[ci]+=avail;
+        o2[ci]-=avail;
         float eff=(o2_need>1e-9f)?avail/o2_need:1.f;
         if(eff<0.15f) eff=0.15f;
-        a.energy -= metab/eff + a.resp*RESP_COST;
+        // 使ったエネルギーは糖の酸化(または発酵)でまかなう。その炭素は全量 CO2 として出る
+        { float spent=metab/eff + a.resp*RESP_COST;
+          co2[ci]+=std::min(spent,std::max(0.f,a.energy))*CO2_PER_ENERGY;
+          a.energy -= spent; }
         // 余剰を脂肪に回す。飢えれば取り崩す
         if(a.energy>A_DIVIDE_TH*0.6f && a.fat<a.store_fat*FAT_MAX){
             float put=std::min((a.energy-A_DIVIDE_TH*0.6f)*FAT_RATE,
