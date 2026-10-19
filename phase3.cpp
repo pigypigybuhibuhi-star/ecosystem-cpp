@@ -453,7 +453,11 @@ struct Budget {
     double n_fire=0;                 // 燃えた組織の窒素は揮発して大気へ出る(N2・NOx。大気は帳簿の外)
     double n_carn=0;                 // 食虫植物が獲物から得る窒素(動物は窒素の在庫を持たないので、帳簿の外から入る)
     double w_relax=0;                // 陸の土壌水: 降水・河川・流出による目標への緩和(上下限込み)
+    double w_transp=0;               // 蒸散: 陸の土の水と植物の貯水から大気へ出る水(大気の水蒸気は帳簿の外)
+    double w_sea=0;                  // 海のマスの植物と海との水のやりとり(海の水は帳簿の外)
 } g_bud;
+// 光合成ループは並列なので、蒸散の帳簿はマスごとに積み、帳簿を出すときに順に足す(足す順を固定して決定性を保つ)
+std::vector<double> w_transp_cell(GRID_W*GRID_H, 0.0);
 std::vector<float> shelf(GRID_W*GRID_H, 0.f);   // 陸への近さ(1=岸 0=外洋)
 std::vector<char>  upwell(GRID_W*GRID_H, 0);
 std::vector<char>  ice(GRID_W*GRID_H, 0);
@@ -1561,7 +1565,6 @@ void update_water(int frame){
                 if(upwell[i]){ float n2=soil_n[i]; soil_n[i]+=N_UPWELL; g_bud.n_upwell+=soil_n[i]-n2; }
                 float pre=soil_n[i];
                 if(soil_n[i]<0.f) soil_n[i]=0.f;
-                if(soil_n[i]>3.f) soil_n[i]=3.f;
                 g_bud.n_clamp+=soil_n[i]-pre;
                 continue;
             }
@@ -2118,8 +2121,11 @@ void update_plants(){
             if(soil_water[ci]<wneed && p.water_store>0.f){
                 float draw=std::min(p.water_store,(wneed-soil_water[ci])*STORE_DRAW);
                 p.water_store-=draw;
+                w_transp_cell[ci]-=draw;                  // 貯水は蒸散で大気へ出る
             }
-            soil_water[ci] = std::max(0.f, soil_water[ci]-gain*0.010f);  // 蒸散
+            { float w0=soil_water[ci];
+              soil_water[ci] = std::max(0.f, soil_water[ci]-gain*0.010f);  // 蒸散
+              if(!sea[ci]) w_transp_cell[ci]+=soil_water[ci]-w0; }
             // 炭素(リービッヒの最小律)
             float need=gain*CO2_PER_ENERGY;
             float avail=std::min(need,co2[ci]);
@@ -2289,7 +2295,8 @@ void update_plants(){
         if(!p.dormant && p.water_store<p.store_cap && soil_water[ci]>0.5f){
             float f=std::min(STORE_FILL,p.store_cap-p.water_store);
             f=std::min(f,(soil_water[ci]-0.5f)*STORE_SURPLUS);
-            if(f>0.f){ p.water_store+=f; soil_water[ci]-=f*0.5f; }
+            // 貯めた水は土から来る。貯めたぶんだけ土の水が減る(海のマスでは海から入る)
+            if(f>0.f){ p.water_store+=f; soil_water[ci]-=f; if(sea[ci]) g_bud.w_sea+=f; }
         }
         // 誘導防御。食害の匂いを感じて初めて武装する。常時ではコストが高い
         float threat=clamp01(odor[2][ci]/1.5f);
@@ -2448,6 +2455,14 @@ void update_plants(){
         }
     }
     for(auto& b:babies) plants.push_back(b);
+    // 死んだ株の貯水は、そのマスの土へ戻る(海のマスでは海へ)
+    for(const auto& p:plants){
+        if(p.alive||p.water_store<=0.f) continue;
+        int gx=(int)p.x, gy=(int)p.y;
+        int ci=(gx>=0&&gx<GRID_W&&gy>=0&&gy<GRID_H)?idx(gx,gy):-1;
+        if(ci>=0&&!sea[ci]) soil_water[ci]+=p.water_store;
+        else g_bud.w_sea-=p.water_store;
+    }
     plants.erase(std::remove_if(plants.begin(),plants.end(),
         [](const Plant& p){ return !p.alive; }),plants.end());
 }
@@ -4709,9 +4724,9 @@ int main(int argc,char** argv){
                 if(frame%BUDGET_EVERY==0){
                     // 在庫。生体の炭素はエネルギー×CO2_PER_ENERGY(光合成の換算と同じ)で数える。
                     // 植物の体(高さ)は建設に GROW_COST を払ったぶんの炭素を持つとみなす
-                    double ep=0,ea=0,ec=0,em=0,np=0,nc=0,ns=0,nl=0,wl=0;
+                    double ep=0,ea=0,ec=0,em=0,np=0,nc=0,ns=0,nl=0,wl=0,wp=0;
                     // 植物の窒素 = 貯え + 体(高さ)を作るのに使った N_PER_GROWTH ぶん
-                    for(const auto& p:plants){ ep+=p.energy+p.height*GROW_COST; np+=p.n_store+p.height*N_PER_GROWTH; }
+                    for(const auto& p:plants){ ep+=p.energy+p.height*GROW_COST; np+=p.n_store+p.height*N_PER_GROWTH; wp+=p.water_store; }
                     // 動物の体の組織は CORPSE_RETURN ぶんの炭素を持つ
                     for(const auto& a:animals) ea+=a.energy+a.fat+a.body*CORPSE_RETURN;
                     for(const auto& c:corpses){ ec+=c.energy; nc+=c.n; }
@@ -4721,6 +4736,8 @@ int main(int argc,char** argv){
                     double catm=grid_sum(co2), oatm=grid_sum(o2);
                     double cbio=(ep+ea+ec+em)*CO2_PER_ENERGY;
                     double ctot=catm+cbio, ntot=np+nc+ns+nl;
+                    for(int i=0;i<GRID_W*GRID_H;i++){ g_bud.w_transp+=w_transp_cell[i]; w_transp_cell[i]=0.0; }
+                    double wtot=wl+wp;
                     static bool have=false; static double pc=0,po=0,pn=0,pw=0;
                     if(have){
                         double cext=g_bud.c_relax+g_bud.c_trans;
@@ -4732,10 +4749,11 @@ int main(int argc,char** argv){
                                oatm,oatm-po,g_bud.o_relax,g_bud.o_trans,oatm-po-g_bud.o_relax-g_bud.o_trans);
                         printf("      budget N: soil land %.1f sea %.1f plant %.1f dead %.1f | dN %+.2f = sink %+.2f runoff %+.2f upwell %+.2f clamp %+.3f fix %+.2f fire %+.3f carn %+.3f + internal %+.2f\n",
                                nl,ns,np,nc,ntot-pn,g_bud.n_sink,g_bud.n_runoff,g_bud.n_upwell,g_bud.n_clamp,g_bud.n_fix,g_bud.n_fire,g_bud.n_carn,ntot-pn-next);
-                        printf("      budget W: soil land %.1f | dW %+.2f = relax %+.2f + internal %+.2f\n",
-                               wl,wl-pw,g_bud.w_relax,wl-pw-g_bud.w_relax);
+                        double wext=g_bud.w_relax+g_bud.w_transp+g_bud.w_sea;
+                        printf("      budget W: soil land %.1f plant %.1f | dW %+.2f = relax %+.2f transp %+.2f sea %+.3f + internal %+.2f\n",
+                               wl,wp,wtot-pw,g_bud.w_relax,g_bud.w_transp,g_bud.w_sea,wtot-pw-wext);
                     }
-                    have=true; pc=ctot; po=oatm; pn=ntot; pw=wl;
+                    have=true; pc=ctot; po=oatm; pn=ntot; pw=wtot;
                     g_bud=Budget();
                 }
                 { double sfi=0,scl2=0,sx=0;
