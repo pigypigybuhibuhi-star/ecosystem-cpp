@@ -292,7 +292,13 @@ const float MICROBE_DISP    = 2.0f;    // 胞子が飛ぶ距離
 const int   MICROBE_INIT    = 3000;
 const float BODY_GROW_RATE  = LIN(PM(0.010f,ANIMAL_STRIDE),ANIMAL_STRIDE);  // [1分あたり 4.86e-05]
 const float BODY_GROW_COST  = 4.00f;
-const float CORPSE_RETURN   = 2.50f;
+const float CORPSE_RETURN   = 2.50f;   // 体 1 あたりの組織が持つエネルギー(炭素)。死骸に残るのもこの量
+// 動物がエネルギーを使えば、その炭素は酸化されて CO2 になる(O2 は 1:1)。
+// 体にある分(正のエネルギー)までしか出せない
+inline void a_burn(float* co2g,float* o2g,int cell,float e){
+    if(e<=0.f) return;
+    float c=e*CO2_PER_ENERGY; o2g[cell]-=std::min(c,o2g[cell]); co2g[cell]+=c;
+}
 const float MATURE_FRAC     = 0.80f;
 const int   MAX_BROOD       = 12;      // 一度に産める上限
 const float BROOD_TAX       = 0.22f;   // 多産による取り分の目減り
@@ -2566,12 +2572,14 @@ void update_animals(){
         float brain_use=n_node*(NODE_COST/SYN_COST)+n_syn;
         float turn_mult=(o0+1.f)*0.5f, thrust_mult=(o1+1.f)*0.5f;
 
+        int hci=idx(std::max(0,std::min(GRID_W-1,(int)a.x)),
+                    std::max(0,std::min(GRID_H-1,(int)a.y)));
         if(a.body<a.size && a.energy>1.0f){
             float g=std::min(BODY_GROW_RATE,a.size-a.body);
             a.body+=g; a.energy-=g*BODY_GROW_COST;
+            // 組織に残るのは CORPSE_RETURN ぶん。残りは合成の呼吸で CO2 になる
+            a_burn(co2.data(),o2.data(),hci,g*(BODY_GROW_COST-CORPSE_RETURN));
         }
-        int hci=idx(std::max(0,std::min(GRID_W-1,(int)a.x)),
-                    std::max(0,std::min(GRID_H-1,(int)a.y)));
 
         // 枝が支えられる高さ。重い体は高くまで登れない
         float bearable = canopy_h[hci]*BRANCH_SUPPORT/std::max(0.15f,a.body);
@@ -2582,12 +2590,19 @@ void update_animals(){
         if(want>a.perch+0.02f){
             float up=std::min(want-a.perch,CLIMB_RATE0+CLIMB_RATE1*a.arboreal);
             a.perch+=up;
-            a.energy-=up*CLIMB_UP_COST/(0.25f+a.arboreal);
+            float e=up*CLIMB_UP_COST/(0.25f+a.arboreal);
+            a_burn(co2.data(),o2.data(),hci,std::min(e,a.energy));
+            a.energy-=e;
         } else if(a.perch>reachable){
             // 支えが失われた。滑り落ちる
             float drop=a.perch-reachable;
             a.perch=reachable;
-            if(drop>0.5f) a.energy-=drop*FALL_DAMAGE*(1.f-a.arboreal*0.7f);
+            if(drop>0.5f){
+                // 傷を治すのに使うエネルギー。これも呼吸で CO2 になる
+                float e=drop*FALL_DAMAGE*(1.f-a.arboreal*0.7f);
+                a_burn(co2.data(),o2.data(),hci,std::min(e,a.energy));
+                a.energy-=e;
+            }
         } else if(a.perch>want){
             a.perch=std::max(want,a.perch-DESCEND_RATE);    // 降りるのは安い
         }
@@ -2630,7 +2645,9 @@ void update_animals(){
             // 樹上を渡る: 隣の林冠が近い高さでないと渡れず、降りるしかない
             if(a.perch>0.25f && canopy_h[ni] < a.perch-PERCH_GAP){
                 a.perch=std::max(0.f,canopy_h[ni]);         // 木が途切れた。降りる
-                a.energy-=0.04f*(1.f-a.arboreal*0.6f);
+                float e=0.04f*(1.f-a.arboreal*0.6f);
+                a_burn(co2.data(),o2.data(),ni,std::min(e,a.energy));
+                a.energy-=e;
             }
         }
         if(blocked) a.dir+=3.14159f;
@@ -2647,7 +2664,7 @@ void update_animals(){
         }
         if(felt<kill_temp_a(a)){
             a.alive=false; d_cold++;
-            corpses.push_back({a.x,a.y,a.body*CORPSE_RETURN+a.energy,1});
+            corpses.push_back({a.x,a.y,a.body*CORPSE_RETURN+std::max(0.f,a.energy)+a.fat,1});
             continue;
         }
         float dT=(felt-opt_temp_a(a))/25.f;
@@ -2735,11 +2752,13 @@ void update_animals(){
                     float tox=v.toxin*(1.f-a.tox_resist);
                     a.energy+=bite*(1.f-MEAT_LOSS)*(1.f-tox);
                     life_note(a.id,g_frame,"捕食",bite);
-                    a.energy-=v.toxin*TOXIN_HARM*(1.f-a.tox_resist);
+                    { float e=v.toxin*TOXIN_HARM*(1.f-a.tox_resist);   // 解毒に使うエネルギー
+                      a_burn(co2.data(),o2.data(),ci,std::min(e,a.energy));
+                      a.energy-=e; }
                     a.eaten++;
                     if(v.energy<=0.f){
                         v.alive=false; d_preyed++;
-                        corpses.push_back({v.x,v.y,v.body*CORPSE_RETURN+v.energy,1});
+                        corpses.push_back({v.x,v.y,v.body*CORPSE_RETURN+std::max(0.f,v.energy)+v.fat,1});
                     }
                 }
             }
@@ -2752,16 +2771,19 @@ void update_animals(){
                 if(!tp.alive||tp.carnivory<0.12f) continue;
                 float catch_p=tp.carnivory*CARNIVORY_CATCH/(1.f+a.body*1.5f);
                 if(dist01(rng)>=catch_p) continue;
-                float taken=a.energy*0.55f+a.fat*0.4f;
-                a.energy-=taken; a.fat*=0.6f;
+                // 体のエネルギーの 55% と脂肪の 40% を奪われる(脂肪は脂肪からだけ引く)
+                float te=std::max(0.f,a.energy)*0.55f, tf=a.fat*0.4f;
+                float taken=te+tf;
+                a.energy-=te; a.fat-=tf;
                 tp.energy  += taken*0.70f;                 // 直接エネルギーになる
+                a_burn(co2.data(),o2.data(),ci,taken*0.30f);   // 残りは消化の呼吸で CO2
                 tp.n_store  = std::min(1.5f,tp.n_store+taken*CARNIVORY_N);
                 a.eaten--;
                 break;
             }
             if(a.energy<=0.f){
                 a.alive=false; d_preyed++;
-                corpses.push_back({a.x,a.y,a.body*CORPSE_RETURN,1});
+                corpses.push_back({a.x,a.y,a.body*CORPSE_RETURN+a.fat,1});
                 continue;
             }
         }
@@ -2800,6 +2822,7 @@ void update_animals(){
             float put=std::min((a.energy-A_DIVIDE_TH*0.6f)*FAT_RATE,
                                a.store_fat*FAT_MAX-a.fat);
             a.energy-=put; a.fat+=put*0.85f;
+            a_burn(co2.data(),o2.data(),ci,put*0.15f);   // 脂肪の合成の呼吸
         } else if(a.energy<A_DIVIDE_TH*0.25f && a.fat>0.f){
             float take=std::min(a.fat,FAT_DRAW);
             a.fat-=take; a.energy+=take;
@@ -2807,7 +2830,7 @@ void update_animals(){
         if(a.energy<=0.f){
             a.alive=false; d_starve++;
             life_note(a.id,g_frame,"餓死",(float)a.age);
-            corpses.push_back({a.x,a.y,a.body*CORPSE_RETURN+a.energy,1});
+            corpses.push_back({a.x,a.y,a.body*CORPSE_RETURN+std::max(0.f,a.energy)+a.fat,1});
             continue;
         }
         if((int)animals.size()+(int)babies.size() < ANIMAL_MAX
@@ -2846,8 +2869,14 @@ void update_animals(){
               float c=invest*(1.f-nb*share)*CO2_PER_ENERGY;
               o2[bi0]-=std::min(c,o2[bi0]); co2[bi0]+=c; }
             for(int bi=0;bi<nb;bi++){
+            // 子の体 0.10 を作る費用は子の取り分から払う。足りない卵は育たずに死骸になる
+            float cE=invest*share, body0=0.10f*BODY_GROW_COST;
+            if(cE<=body0){ corpses.push_back({a.x,a.y,cE,1}); continue; }
+            { int bx=(int)a.x, by=(int)a.y;
+              int bi0=(bx>=0&&bx<GRID_W&&by>=0&&by<GRID_H)?idx(bx,by):0;
+              a_burn(co2.data(),o2.data(),bi0,0.10f*(BODY_GROW_COST-CORPSE_RETURN)); }
             Animal c=a;
-            c.energy=invest*share;
+            c.energy=cE-body0;
             if(mate){
                 #define PICK(F) c.F = (dist01(rng)<0.5f)? a.F : mate->F
                 PICK(speed); PICK(turn); PICK(reach); PICK(size); PICK(diet);
@@ -4593,7 +4622,8 @@ int main(int argc,char** argv){
                     // 植物の体(高さ)は建設に GROW_COST を払ったぶんの炭素を持つとみなす
                     double ep=0,ea=0,ec=0,em=0,np=0,ns=0,nl=0,wl=0;
                     for(const auto& p:plants){ ep+=p.energy+p.height*GROW_COST; np+=p.n_store; }
-                    for(const auto& a:animals) ea+=a.energy+a.fat;
+                    // 動物の体の組織は CORPSE_RETURN ぶんの炭素を持つ
+                    for(const auto& a:animals) ea+=a.energy+a.fat+a.body*CORPSE_RETURN;
                     for(const auto& c:corpses) ec+=c.energy;
                     for(const auto& m:microbes) if(m.alive) em+=m.energy;
                     for(int i=0;i<GRID_W*GRID_H;i++){
