@@ -172,7 +172,6 @@ const float SOIL_N_BASE     = 0.35f;   // 土壌の窒素
 const float N_PER_GROWTH    = 0.055f;  // 体を作るのに要する窒素
 const float N_FIX_COST      = LIN(PM(0.006f));  // 純益0.048に対して現実的な負担に [1分あたり 5.83e-05]
 const float N_FIX_RATE      = LIN(PM(0.0180f));  // 共生菌は効率がよい [1分あたり 0.000175]
-const float N_MINERALIZE    = 0.035f;
 const float N_STORE_MAX     = 1.5f;    // 植物が体内に貯められる窒素の上限
 const float N_SINK          = FRAC(PMF(0.022f));  // 沈降。外洋を貧栄養にするが、枯渇させない [率 0.000216 /分]
 const float N_RUNOFF        = LIN(PM(0.045f));  // 河川が沿岸へ運ぶ栄養 [1分あたり 0.000437]
@@ -451,6 +450,8 @@ struct Budget {
     double o_relax=0, o_trans=0;     // 大気O2: 同上
     double n_sink=0, n_runoff=0, n_upwell=0, n_clamp=0;   // 海の窒素: 沈降・河川流入・湧昇・上下限の切り捨て
     double n_fix=0;                  // 大気の N2 からの窒素固定(大気の N2 は帳簿の外)
+    double n_fire=0;                 // 燃えた組織の窒素は揮発して大気へ出る(N2・NOx。大気は帳簿の外)
+    double n_carn=0;                 // 食虫植物が獲物から得る窒素(動物は窒素の在庫を持たないので、帳簿の外から入る)
     double w_relax=0;                // 陸の土壌水: 降水・河川・流出による目標への緩和(上下限込み)
 } g_bud;
 std::vector<float> shelf(GRID_W*GRID_H, 0.f);   // 陸への近さ(1=岸 0=外洋)
@@ -632,7 +633,7 @@ inline void sg_vec_p(const Plant& p,double* v){
 std::vector<std::vector<int>> animal_grid(GRID_W*GRID_H);
 int next_animal_id = 0;
 
-struct Corpse { float x,y,energy; int origin; };   // 0=植物由来 1=動物由来
+struct Corpse { float x,y,energy; int origin; float n=0.f; };   // 0=植物由来 1=動物由来。n は体に含まれる窒素
 std::vector<Corpse> corpses;
 std::vector<std::vector<int>> corpse_grid(GRID_W*GRID_H);
 std::vector<float> corpse_density(GRID_W*GRID_H,0.f);
@@ -1858,7 +1859,7 @@ void slide_at(int ci){
         if(!p.alive) continue;
         p.alive=false;
         // 体の炭素(建設に払った GROW_COST ぶん)と残りのエネルギーは死骸として運ばれる
-        corpses.push_back({p.x,p.y,std::max(0.f,p.energy)+p.height*GROW_COST,0});
+        corpses.push_back({p.x,p.y,std::max(0.f,p.energy)+p.height*GROW_COST,0,p.n_store+p.height*N_PER_GROWTH});
     }
     // 表土が流される。窒素は消さず、いちばん低い隣のマスへ運ぶ(低い隣が無ければその場に残る)
     { int x=ci%GRID_W, y=ci/GRID_W, lo=ci; float le=elev[ci];
@@ -1925,12 +1926,15 @@ void update_microbes(){
         if(cb<ce){
             int pk=cgrid.items[cb+(int)(frand(0.f,(float)(ce-cb)-0.001f))];
             float dec=corpses[pk].energy*m.rate*MICROBE_DECOMP*act*MICROBE_STRIDE*MICROBE_BOOST;
+            // 分解した割合だけ、死骸の窒素も無機化して土へ出る
+            float dn=corpses[pk].n*std::min(1.f,dec/std::max(1e-9f,corpses[pk].energy));
+            corpses[pk].n-=dn;
             corpses[pk].energy-=dec;
             m.energy+=dec*MICROBE_EFF;
             // 残りは大気と土へ。体にしなかった分は呼吸で酸化されるので、炭素は全量が CO2 になる
             // 好気的な呼吸なので O2 を 1:1 で使う
             a_burn(co2.data(),o2.data(),ci,dec*(1.f-MICROBE_EFF));
-            soil_n[ci]+= dec*(1.f-MICROBE_EFF)*MICROBE_RETURN*N_MINERALIZE*3.f;
+            soil_n[ci]+= dn;
         }
         { float spend=(MICROBE_COST*(0.5f+m.rate)+m.cold_tol*MICROBE_COLD_COST)*MICROBE_STRIDE;
           a_burn(co2.data(),o2.data(),ci,std::min(spend,std::max(0.f,m.energy)));   // 維持の呼吸(O2 を 1:1)
@@ -2029,6 +2033,7 @@ void update_fire(int frame){
         if(fire[i]<0.05f) continue;
         float burn=cp.energy*FIRE_BURN*std::min(1.f,fire[i]);
         cp.energy-=burn;
+        { float bn=cp.n*FIRE_BURN*std::min(1.f,fire[i]); cp.n-=bn; g_bud.n_fire-=bn; }   // 燃えた分の窒素は揮発する
         co2[i]+=burn*CO2_PER_ENERGY;
         o2[i]=std::max(0.f,o2[i]-burn*FIRE_O2_USE);
     }
@@ -2194,8 +2199,12 @@ void update_plants(){
             if((pidx+pphase)%SEED_STRIDE!=0) continue;
             p.seed_wait-=SEED_STRIDE;
             p.energy-=BANK_COST*SEED_STRIDE;
-            if(dist01(rng)<BANK_PREDATION*SEED_STRIDE){ p.alive=false; continue; }
-            if(p.energy<=0.f){ p.alive=false; continue; }
+            // 死んだ種子は朽ちる。体の炭素と窒素は死骸に
+            if(dist01(rng)<BANK_PREDATION*SEED_STRIDE || p.energy<=0.f){
+                p.alive=false;
+                corpses.push_back({p.x,p.y,std::max(0.f,p.energy)+p.height*GROW_COST,0,p.n_store+p.height*N_PER_GROWTH});
+                continue;
+            }
             if(p.seed_wait<=0){
                 // 発芽の時だけ環境を見る
                 int gx0=(int)p.x, gy0=(int)p.y;
@@ -2215,7 +2224,7 @@ void update_plants(){
 
         if(temper[ci]<kill_temp_p(p)){
             p.alive=false;
-            corpses.push_back({p.x,p.y,std::max(0.f,p.energy)+p.height*GROW_COST,0});   // 体の炭素はすべて死骸に
+            corpses.push_back({p.x,p.y,std::max(0.f,p.energy)+p.height*GROW_COST,0,p.n_store+p.height*N_PER_GROWTH});   // 体の炭素と窒素はすべて死骸に
             continue;
         }
         // 炎。厚い樹皮を持つ個体は耐える
@@ -2228,9 +2237,13 @@ void update_plants(){
             p.energy-=dmg*FIRE_DAMAGE;
             p.height=std::max(0.03f,p.height-dmg*FIRE_SHOOT_LOSS);
             burnt+=(h0-p.height)*GROW_COST;
+            g_bud.n_fire-=(h0-p.height)*N_PER_GROWTH;           // 焼けた組織の窒素は揮発する
             if(p.energy<=0.f){
                 p.alive=false;
-                corpses.push_back({p.x,p.y,p.height*0.25f,0});   // 炭として残るぶん
+                // 炭として残るぶんは、体の窒素も同じ割合で残す。残りは揮発する
+                float nb=p.n_store+p.height*N_PER_GROWTH, kc=0.25f/GROW_COST;
+                corpses.push_back({p.x,p.y,p.height*0.25f,0,nb*kc});   // 炭として残るぶん
+                g_bud.n_fire-=nb*(1.f-kc);
                 burnt+=p.height*(GROW_COST-0.25f);              // 残りの体は燃える
             }
             co2[ci]+=burnt*CO2_PER_ENERGY;
@@ -2320,7 +2333,7 @@ void update_plants(){
         dbg_cost+=upkeep;      // 更新を飛ばしたぶんをまとめて払う
         if(p.energy<=0.f){
             p.alive=false;
-            corpses.push_back({p.x,p.y,p.height*GROW_COST,0});   // 体の炭素はすべて死骸に
+            corpses.push_back({p.x,p.y,p.height*GROW_COST,0,p.n_store+p.height*N_PER_GROWTH});   // 体の炭素と窒素はすべて死骸に
             continue;
         }
         if(!p.dormant && p.energy>=PLANT_DIVIDE_TH
@@ -2391,6 +2404,10 @@ void update_plants(){
                 corpses.push_back({c.x,c.y,c.energy+c.height*GROW_COST,0});
                 continue;
             }
+            // 芽生えの体の窒素は親の貯えから渡す。足りなければ芽生えを作れずに朽ちる
+            { float cn=c.height*N_PER_GROWTH;
+              if(p.n_store<cn){ corpses.push_back({c.x,c.y,c.energy+c.height*GROW_COST,0}); continue; }
+              p.n_store-=cn; }
             c.defense=0.f;
             // 土中で待つか、すぐ芽吹くか
             c.seed_wait = (dist01(rng)<p.seed_bank)
@@ -2477,10 +2494,13 @@ void update_animals(){
     // 食べ物の炭素 = 同化 + 糞・落とした葉(質量保存)。マスごとに貯めて、更新の終わりに死骸へ移す
     static std::vector<float> dung(GRID_W*GRID_H,0.f);
     static std::vector<int>   dung_cells;
-    auto egest=[&](int c,float amt){
-        if(amt<=0.f) return;
-        if(dung[c]==0.f) dung_cells.push_back(c);
-        dung[c]+=amt;
+    // 動物は窒素の在庫を持たない。食べた窒素は同じマスの糞(分解物)にすべて出す
+    static std::vector<float> dung_n(GRID_W*GRID_H,0.f);
+    auto egest=[&](int c,float amt,float nn=0.f){
+        if(amt<=0.f&&nn<=0.f) return;
+        if(dung[c]==0.f&&dung_n[c]==0.f) dung_cells.push_back(c);
+        if(amt>0.f) dung[c]+=amt;
+        if(nn>0.f)  dung_n[c]+=nn;
     };
     std::vector<Animal> babies;
     int n0=(int)animals.size();
@@ -2739,10 +2759,10 @@ void update_animals(){
                     float gain=std::min(1.f,eff*plant_dig);   // 同化は食べた量を超えない
                     a.energy+=bite*gain;
                     // 同化しなかった分は糞に、落とした葉の組織(建設に GROW_COST を払った炭素)は落葉に
-                    egest(ci,bite*(1.f-gain)+(h0-p.height)*GROW_COST);
+                    egest(ci,bite*(1.f-gain)+(h0-p.height)*GROW_COST,(h0-p.height)*N_PER_GROWTH);
                     odor[2][ci]+=ODOR_WOUND*bite;   // 傷ついた植物が匂いを放つ
                     a.eaten++; bites++;
-                    if(p.energy<=0.f){ p.alive=false; egest(ci,p.height*GROW_COST); }   // 残った茎も分解物に
+                    if(p.energy<=0.f){ p.alive=false; egest(ci,p.height*GROW_COST,p.n_store+p.height*N_PER_GROWTH); }   // 残った茎も分解物に
                 }
             }
             // 死骸を漁る: 植物由来は分解能力で、動物由来は肉食能力で処理する
@@ -2759,9 +2779,10 @@ void update_animals(){
                         float loss=is_plant?DETRITUS_LOSS:MEAT_LOSS;
                         if(cap<=0.005f) continue;
                         float bite=corpses[pk].energy*SCAV_EFF*cap;
-                        corpses[pk].energy-=bite;
+                        float bn=corpses[pk].n*std::min(1.f,SCAV_EFF*cap);
+                        corpses[pk].energy-=bite; corpses[pk].n-=bn;
                         a.energy+=bite*(1.f-loss); a.eaten++;
-                        egest(ci,bite*loss);   // 同化しなかった分は糞
+                        egest(ci,bite*loss,bn);   // 同化しなかった分は糞。窒素は糞に
                     }
                 }
             }
@@ -2818,7 +2839,9 @@ void update_animals(){
                 a.energy-=te; a.fat-=tf;
                 tp.energy  += taken*0.70f;                 // 直接エネルギーになる
                 a_burn(co2.data(),o2.data(),ci,taken*0.30f);   // 残りは消化の呼吸で CO2
-                tp.n_store  = std::min(N_STORE_MAX,tp.n_store+taken*CARNIVORY_N);
+                { float n0=tp.n_store;
+                  tp.n_store  = std::min(N_STORE_MAX,tp.n_store+taken*CARNIVORY_N);
+                  g_bud.n_carn+=tp.n_store-n0; }
                 a.eaten--;
                 break;
             }
@@ -2997,9 +3020,9 @@ void update_animals(){
         int pk=-1;
         for(int t=cgrid.b(c);t<cgrid.e(c);t++)
             if(corpses[cgrid.items[t]].origin==0){ pk=cgrid.items[t]; break; }
-        if(pk>=0) corpses[pk].energy+=dung[c];
-        else corpses.push_back({(c%GRID_W)+0.5f,(c/GRID_W)+0.5f,dung[c],0});
-        dung[c]=0.f;
+        if(pk>=0){ corpses[pk].energy+=dung[c]; corpses[pk].n+=dung_n[c]; }
+        else corpses.push_back({(c%GRID_W)+0.5f,(c/GRID_W)+0.5f,dung[c],0,dung_n[c]});
+        dung[c]=0.f; dung_n[c]=0.f;
     }
     dung_cells.clear();
     // 分解: 死骸が朽ちると、炭素は大気へ戻る
@@ -3010,16 +3033,21 @@ void update_animals(){
         if(gx>=0&&gx<GRID_W&&gy>=0&&gy<GRID_H){
             int ri=idx(gx,gy);
             a_burn(co2.data(),o2.data(),ri,rot);   // 風化も酸化。O2 を 1:1 で使う
-            // 海では分解された栄養の一部が有光層に残る
-            soil_n[ri]+= rot * N_MINERALIZE * (sea[ri]?0.45f:1.f);
+            // 朽ちた割合だけ、死骸の窒素が無機化する。海では一部だけが有光層に残り、残りは沈む
+            float rn=cp.n*ROT_RATE;
+            cp.n-=rn;
+            soil_n[ri]+= rn*(sea[ri]?0.45f:1.f);
+            if(sea[ri]) g_bud.n_sink-=rn*0.55f;
         }
     }
     // 小さくなった死骸は分解し尽くされたとみなし、残りの炭素を CO2 に出してから消す
     for(const auto& cp:corpses){
-        if(cp.energy>=0.02f||cp.energy<=0.f) continue;
+        if(cp.energy>=0.02f) continue;
         int gx=(int)cp.x, gy=(int)cp.y;
         if(gx>=0&&gx<GRID_W&&gy>=0&&gy<GRID_H){
             int ri=idx(gx,gy);
+            soil_n[ri]+=cp.n;                                         // 残りの窒素も無機化する(炭素の無い糞の窒素も)
+            if(cp.energy<=0.f) continue;
             co2[ri]+=cp.energy*CO2_PER_ENERGY;
             o2[ri]=std::max(0.f,o2[ri]-cp.energy*CO2_PER_ENERGY);   // 好気的な分解は O2 を 1:1 で使う
         }
@@ -3136,7 +3164,8 @@ std::vector<Fld<Microbe>> microbe_schema(){
 }
 std::vector<Fld<Corpse>> corpse_schema(){
     return { F("x",&Corpse::x,0), F("y",&Corpse::y,0),
-             F("energy",&Corpse::energy,0), F("origin",&Corpse::origin,1) };
+             F("energy",&Corpse::energy,0), F("origin",&Corpse::origin,1),
+             F("n",&Corpse::n,0) };
 }
 std::vector<Fld<Lineage>> lineage_schema(){
     std::vector<Fld<Lineage>> s={
@@ -4680,28 +4709,29 @@ int main(int argc,char** argv){
                 if(frame%BUDGET_EVERY==0){
                     // 在庫。生体の炭素はエネルギー×CO2_PER_ENERGY(光合成の換算と同じ)で数える。
                     // 植物の体(高さ)は建設に GROW_COST を払ったぶんの炭素を持つとみなす
-                    double ep=0,ea=0,ec=0,em=0,np=0,ns=0,nl=0,wl=0;
-                    for(const auto& p:plants){ ep+=p.energy+p.height*GROW_COST; np+=p.n_store; }
+                    double ep=0,ea=0,ec=0,em=0,np=0,nc=0,ns=0,nl=0,wl=0;
+                    // 植物の窒素 = 貯え + 体(高さ)を作るのに使った N_PER_GROWTH ぶん
+                    for(const auto& p:plants){ ep+=p.energy+p.height*GROW_COST; np+=p.n_store+p.height*N_PER_GROWTH; }
                     // 動物の体の組織は CORPSE_RETURN ぶんの炭素を持つ
                     for(const auto& a:animals) ea+=a.energy+a.fat+a.body*CORPSE_RETURN;
-                    for(const auto& c:corpses) ec+=c.energy;
+                    for(const auto& c:corpses){ ec+=c.energy; nc+=c.n; }
                     for(const auto& m:microbes) if(m.alive) em+=m.energy;
                     for(int i=0;i<GRID_W*GRID_H;i++){
                         if(sea[i]) ns+=soil_n[i]; else { nl+=soil_n[i]; wl+=soil_water[i]; } }
                     double catm=grid_sum(co2), oatm=grid_sum(o2);
                     double cbio=(ep+ea+ec+em)*CO2_PER_ENERGY;
-                    double ctot=catm+cbio, ntot=np+ns+nl;
+                    double ctot=catm+cbio, ntot=np+nc+ns+nl;
                     static bool have=false; static double pc=0,po=0,pn=0,pw=0;
                     if(have){
                         double cext=g_bud.c_relax+g_bud.c_trans;
-                        double next=g_bud.n_sink+g_bud.n_runoff+g_bud.n_upwell+g_bud.n_clamp+g_bud.n_fix;
+                        double next=g_bud.n_sink+g_bud.n_runoff+g_bud.n_upwell+g_bud.n_clamp+g_bud.n_fix+g_bud.n_fire+g_bud.n_carn;
                         printf("      budget C: atm %.1f bio %.1f (P %.1f A %.1f dead %.1f mic %.1f) | dC %+.2f = ext %+.2f (relax %+.2f trans %+.3f) + internal %+.2f\n",
                                catm,cbio,ep*CO2_PER_ENERGY,ea*CO2_PER_ENERGY,ec*CO2_PER_ENERGY,em*CO2_PER_ENERGY,
                                ctot-pc,cext,g_bud.c_relax,g_bud.c_trans,ctot-pc-cext);
                         printf("      budget O2: atm %.1f | dO2 %+.2f = relax %+.2f trans %+.3f + internal %+.2f\n",
                                oatm,oatm-po,g_bud.o_relax,g_bud.o_trans,oatm-po-g_bud.o_relax-g_bud.o_trans);
-                        printf("      budget N: soil land %.1f sea %.1f plant %.1f | dN %+.2f = sink %+.2f runoff %+.2f upwell %+.2f clamp %+.3f fix %+.2f + internal %+.2f\n",
-                               nl,ns,np,ntot-pn,g_bud.n_sink,g_bud.n_runoff,g_bud.n_upwell,g_bud.n_clamp,g_bud.n_fix,ntot-pn-next);
+                        printf("      budget N: soil land %.1f sea %.1f plant %.1f dead %.1f | dN %+.2f = sink %+.2f runoff %+.2f upwell %+.2f clamp %+.3f fix %+.2f fire %+.3f carn %+.3f + internal %+.2f\n",
+                               nl,ns,np,nc,ntot-pn,g_bud.n_sink,g_bud.n_runoff,g_bud.n_upwell,g_bud.n_clamp,g_bud.n_fix,g_bud.n_fire,g_bud.n_carn,ntot-pn-next);
                         printf("      budget W: soil land %.1f | dW %+.2f = relax %+.2f + internal %+.2f\n",
                                wl,wl-pw,g_bud.w_relax,wl-pw-g_bud.w_relax);
                     }
