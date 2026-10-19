@@ -1855,7 +1855,8 @@ void slide_at(int ci){
         Plant& p=plants[pgrid.items[t]];
         if(!p.alive) continue;
         p.alive=false;
-        corpses.push_back({p.x,p.y,p.height*0.8f,0});
+        // 体の炭素(建設に払った GROW_COST ぶん)と残りのエネルギーは死骸として運ばれる
+        corpses.push_back({p.x,p.y,std::max(0.f,p.energy)+p.height*GROW_COST,0});
     }
     soil_n[ci]*=0.35f;                 // 表土が流される
 }
@@ -2200,20 +2201,27 @@ void update_plants(){
 
         if(temper[ci]<kill_temp_p(p)){
             p.alive=false;
-            corpses.push_back({p.x,p.y,p.energy+p.height*2.0f,0});
+            corpses.push_back({p.x,p.y,std::max(0.f,p.energy)+p.height*GROW_COST,0});   // 体の炭素はすべて死骸に
             continue;
         }
         // 炎。厚い樹皮を持つ個体は耐える
         if(fire[ci]>0.05f){
             // 厚い樹皮でも完全には守れない。炎は幹を焼き、葉を奪う
             float dmg=fire[ci]*(1.f-p.fire_tol*0.65f);
+            // 焼けた組織の炭素は燃焼で CO2 になり、死骸の燃焼と同じ割合で O2 を使う
+            float h0=p.height;
+            float burnt=std::min(dmg*FIRE_DAMAGE,std::max(0.f,p.energy));
             p.energy-=dmg*FIRE_DAMAGE;
             p.height=std::max(0.03f,p.height-dmg*FIRE_SHOOT_LOSS);
+            burnt+=(h0-p.height)*GROW_COST;
             if(p.energy<=0.f){
                 p.alive=false;
-                corpses.push_back({p.x,p.y,p.height*0.25f,0});   // 大半は灰になる
-                continue;
+                corpses.push_back({p.x,p.y,p.height*0.25f,0});   // 炭として残るぶん
+                burnt+=p.height*(GROW_COST-0.25f);              // 残りの体は燃える
             }
+            co2[ci]+=burnt*CO2_PER_ENERGY;
+            o2[ci]=std::max(0.f,o2[ci]-burnt*FIRE_O2_USE);
+            if(!p.alive) continue;
         }
         // 窒素を取り込む。固定できる個体は大気から、できない個体は土壌から
         if(!p.dormant){
@@ -2295,7 +2303,7 @@ void update_plants(){
         dbg_cost+=upkeep;      // 更新を飛ばしたぶんをまとめて払う
         if(p.energy<=0.f){
             p.alive=false;
-            corpses.push_back({p.x,p.y,p.height*2.0f});
+            corpses.push_back({p.x,p.y,p.height*GROW_COST,0});   // 体の炭素はすべて死骸に
             continue;
         }
         if(!p.dormant && p.energy>=PLANT_DIVIDE_TH
@@ -2448,6 +2456,15 @@ void update_animals(){
         if(gx<0||gx>=GRID_W||gy<0||gy>=GRID_H) continue;
         fuel[idx(gx,gy)]+=cp.energy;
     }
+    // 食べたのに同化しなかった分(糞)と、齧るときに落とした葉は、そのマスの死骸(分解物)になる。
+    // 食べ物の炭素 = 同化 + 糞・落とした葉(質量保存)。マスごとに貯めて、更新の終わりに死骸へ移す
+    static std::vector<float> dung(GRID_W*GRID_H,0.f);
+    static std::vector<int>   dung_cells;
+    auto egest=[&](int c,float amt){
+        if(amt<=0.f) return;
+        if(dung[c]==0.f) dung_cells.push_back(c);
+        dung[c]+=amt;
+    };
     std::vector<Animal> babies;
     int n0=(int)animals.size();
     static int aphase=0;
@@ -2699,12 +2716,16 @@ void update_animals(){
                     p.energy-=bite;
                     // 齧られれば葉を失う。光合成能力が落ち、回復に時間がかかる。
                     // これがあって初めて、その場が枯れ、探す必要が生まれる
+                    float h0=p.height;
                     p.height=std::max(0.03f,p.height-bite*GRAZE_DEFOLIATE*bs);
                     float eff=(1.f-A_EAT_LOSS)*(0.6f+0.8f*a.digest)/std::max(0.5f,bs);
-                    a.energy+=bite*eff*plant_dig;
+                    float gain=std::min(1.f,eff*plant_dig);   // 同化は食べた量を超えない
+                    a.energy+=bite*gain;
+                    // 同化しなかった分は糞に、落とした葉の組織(建設に GROW_COST を払った炭素)は落葉に
+                    egest(ci,bite*(1.f-gain)+(h0-p.height)*GROW_COST);
                     odor[2][ci]+=ODOR_WOUND*bite;   // 傷ついた植物が匂いを放つ
                     a.eaten++; bites++;
-                    if(p.energy<=0.f) p.alive=false;
+                    if(p.energy<=0.f){ p.alive=false; egest(ci,p.height*GROW_COST); }   // 残った茎も分解物に
                 }
             }
             // 死骸を漁る: 植物由来は分解能力で、動物由来は肉食能力で処理する
@@ -2723,6 +2744,7 @@ void update_animals(){
                         float bite=corpses[pk].energy*SCAV_EFF*cap;
                         corpses[pk].energy-=bite;
                         a.energy+=bite*(1.f-loss); a.eaten++;
+                        egest(ci,bite*loss);   // 同化しなかった分は糞
                     }
                 }
             }
@@ -2750,7 +2772,9 @@ void update_animals(){
                     v.energy-=bite;
                     // 毒。解毒できなければ、食っても損をする
                     float tox=v.toxin*(1.f-a.tox_resist);
-                    a.energy+=bite*(1.f-MEAT_LOSS)*(1.f-tox);
+                    float gain=bite*(1.f-MEAT_LOSS)*(1.f-tox);
+                    a.energy+=gain;
+                    egest(ci,bite-gain);   // 同化しなかった分(毒で吸収できない分を含む)は糞
                     life_note(a.id,g_frame,"捕食",bite);
                     { float e=v.toxin*TOXIN_HARM*(1.f-a.tox_resist);   // 解毒に使うエネルギー
                       a_burn(co2.data(),o2.data(),ci,std::min(e,a.energy));
@@ -2951,6 +2975,16 @@ void update_animals(){
     for(auto& b:babies) animals.push_back(b);
     animals.erase(std::remove_if(animals.begin(),animals.end(),
         [](const Animal& a){ return !a.alive; }),animals.end());
+    // 糞と落とした葉を、そのマスの植物由来の死骸に足す。無ければマスの中心に新しく置く
+    for(int c:dung_cells){
+        int pk=-1;
+        for(int t=cgrid.b(c);t<cgrid.e(c);t++)
+            if(corpses[cgrid.items[t]].origin==0){ pk=cgrid.items[t]; break; }
+        if(pk>=0) corpses[pk].energy+=dung[c];
+        else corpses.push_back({(c%GRID_W)+0.5f,(c/GRID_W)+0.5f,dung[c],0});
+        dung[c]=0.f;
+    }
+    dung_cells.clear();
     // 分解: 死骸が朽ちると、炭素は大気へ戻る
     for(auto& cp:corpses){
         float rot = cp.energy*ROT_RATE;
@@ -2962,6 +2996,16 @@ void update_animals(){
             // 海では分解された栄養の一部が有光層に残る
             soil_n[ri]+= rot * N_MINERALIZE * (sea[ri]?0.45f:1.f);
             if(soil_n[ri]>3.f) soil_n[ri]=3.f;
+        }
+    }
+    // 小さくなった死骸は分解し尽くされたとみなし、残りの炭素を CO2 に出してから消す
+    for(const auto& cp:corpses){
+        if(cp.energy>=0.02f||cp.energy<=0.f) continue;
+        int gx=(int)cp.x, gy=(int)cp.y;
+        if(gx>=0&&gx<GRID_W&&gy>=0&&gy<GRID_H){
+            int ri=idx(gx,gy);
+            co2[ri]+=cp.energy*CO2_PER_ENERGY;
+            o2[ri]=std::max(0.f,o2[ri]-cp.energy*CO2_PER_ENERGY);   // 好気的な分解は O2 を 1:1 で使う
         }
     }
     corpses.erase(std::remove_if(corpses.begin(),corpses.end(),
