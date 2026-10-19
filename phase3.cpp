@@ -2316,9 +2316,13 @@ void update_plants(){
               for(int k=0;k<N_SG_P;k++) sg_p_rep[k]+=v[k];
               sg_p_nr++; }
             int nb=1+(int)(p.brood*(MAX_BROOD-1)+0.5f);
-            float share=1.f/(1.f+ (nb-1)*BROOD_TAX*nb );
+            // 子に渡せるのは投資したぶんまで。多産ほど種子一つあたりの構造に余分がかかり、
+            // その余分は作るときの呼吸で CO2 になる
+            float share=1.f/(nb*(1.f+(nb-1)*BROOD_TAX));
             float invest=p.energy*(0.20f+0.55f*p.repro_alloc);
             p.energy-=invest;
+            { float c=invest*(1.f-nb*share)*CO2_PER_ENERGY;
+              o2[ci]-=std::min(c,o2[ci]); co2[ci]+=c; }
             for(int bi=0;bi<nb;bi++){
             Plant c=p;
             c.energy=invest*share;
@@ -2346,8 +2350,16 @@ void update_plants(){
             int cgx=(int)c.x, cgy=(int)c.y;
             if(cgx<0||cgx>=GRID_W||cgy<0||cgy>=GRID_H) continue;   // この子は失われる
             // 火後発芽: 焼け跡にしか芽吹かない代わり、競争相手がいない
-            if(p.fire_seed>0.35f && burn_age[idx(cgx,cgy)]>BURN_WINDOW) continue;
+            if(p.fire_seed>0.35f && burn_age[idx(cgx,cgy)]>BURN_WINDOW){
+                corpses.push_back({c.x,c.y,c.energy,0});   // 芽吹かない種子は朽ちる
+                continue;
+            }
             c.height=0.05f; c.age=0; c.lin=p.lin;
+            c.energy-=c.height*GROW_COST;   // 芽生えの体は種子のエネルギーで作る
+            if(c.energy<=0.f){               // 小さすぎる種子は芽生えを作れずに朽ちる
+                corpses.push_back({c.x,c.y,c.energy+c.height*GROW_COST,0});
+                continue;
+            }
             c.defense=0.f;
             // 土中で待つか、すぐ芽吹くか
             c.seed_wait = (dist01(rng)<p.seed_bank)
@@ -2825,9 +2837,14 @@ void update_animals(){
               for(int k=0;k<N_SG_A;k++) sg_a_rep[k]+=v[k];
               sg_a_nr++; }
             int nb=1+(int)(a.brood*(MAX_BROOD-1)+0.5f);
-            float share=1.f/(1.f+ (nb-1)*BROOD_TAX*nb );
+            // 子に渡せるのは投資したぶんまで。多産の余分は作るときの呼吸で CO2 になる
+            float share=1.f/(nb*(1.f+(nb-1)*BROOD_TAX));
             float invest=a.energy*(0.20f+0.55f*a.repro_alloc);
             a.energy-=invest;
+            { int bx=(int)a.x, by=(int)a.y;
+              int bi0=(bx>=0&&bx<GRID_W&&by>=0&&by<GRID_H)?idx(bx,by):0;
+              float c=invest*(1.f-nb*share)*CO2_PER_ENERGY;
+              o2[bi0]-=std::min(c,o2[bi0]); co2[bi0]+=c; }
             for(int bi=0;bi<nb;bi++){
             Animal c=a;
             c.energy=invest*share;
