@@ -205,7 +205,7 @@ const float FIRE_SPREAD     = FRAC(PMF(0.20f));  // 隣へ移る強さ [率 0.00
 const float FIRE_BURN       = FRAC(PMF(0.45f));  // 一tickで燃える燃料の割合 [率 0.00581 /分]
 const float FIRE_DECAY      = FRAC(PMF(0.38f));  // 火勢の減衰。燃え尽きたら消える [率 0.00465 /分]
 const float FIRE_MOIST      = 0.55f;   // これ以上湿っていると燃えにくい
-const float FIRE_O2_USE     = 0.025f;  // 燃焼が消費する酸素
+const float FIRE_O2_USE     = CO2_PER_ENERGY;  // 燃焼が消費する酸素。CH2O + O2 → CO2 + H2O で CO2 と 1:1
 const float FIRE_TOL_COST   = LIN(PM(0.075f));  // 厚い樹皮は高くつく [1分あたり 0.000729]
 const float FIRE_DAMAGE     = LIN(PM(9.0f,PLANT_STRIDE),PLANT_STRIDE);  // 炎そのものの破壊力 [1分あたり 0.0292]
 const float FIRE_FUEL_MIN   = 1.5f;
@@ -2159,6 +2159,7 @@ void update_plants(){
             float drain=plants[host].energy*PARASITE_DRAIN*pierce*PARA_INTERVAL;
             plants[host].energy-=drain;
             q.energy+=drain*0.85f;
+            a_burn(co2.data(),o2.data(),ci,drain*0.15f);   // 同化しなかった 15% は寄生者の呼吸で CO2 に(O2 を 1:1)
             // 窒素も宿主の師管液から奪う。宿主の持つ分と、自分の空きまで
             float nd=std::min({plants[host].n_store,drain*0.02f,std::max(0.f,N_STORE_MAX-q.n_store)});
             plants[host].n_store-=nd; q.n_store+=nd;
