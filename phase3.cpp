@@ -470,6 +470,7 @@ struct Budget {
     double w_relax=0;                // 陸の土壌水: 降水・河川・流出による目標への緩和(上下限込み)
     double w_transp=0;               // 蒸散: 陸の土の水と植物の貯水から大気へ出る水(大気の水蒸気は帳簿の外)
     double w_sea=0;                  // 海のマスの植物と海との水のやりとり(海の水は帳簿の外)
+    double c_immig=0, n_immig=0;     // 土地の外から入ってくる生き物(動物の放流・微生物の胞子・浮遊植物)が持ち込む炭素と窒素
 } g_bud;
 // 光合成ループは並列なので、蒸散の帳簿はマスごとに積み、帳簿を出すときに順に足す(足す順を固定して決定性を保つ)
 std::vector<double> w_transp_cell(GRID_W*GRID_H, 0.0);
@@ -1920,8 +1921,8 @@ void rebuild_cgrid(){
 void update_microbes(){
     static int mphase=0;
     mphase=(mphase+1)%MICROBE_STRIDE;
-    // cgrid は update_animals が同じtickで作っている。
-    // そこから死骸が増えるのは植物の枯死ぶんだけなので、添字の上限だけ守ればよい
+    // update_animals の最後で小さな死骸を消しているので、そこで作った cgrid の添字はずれている。使う直前に作り直す
+    rebuild_cgrid();
     std::vector<Microbe> babies;
     // 添字で飛ばす。全件を舐めるのをやめ、該当するものだけに触れる
     int n_mic=(int)microbes.size();
@@ -1941,8 +1942,9 @@ void update_microbes(){
 
         // 死骸を分解する。速いほど多く取れるが、酵素の維持費も上がる
         int cb=cgrid.b(ci), ce=cgrid.e(ci);
-        if(cb<ce){
-            int pk=cgrid.items[cb+(int)(frand(0.f,(float)(ce-cb)-0.001f))];
+        // 分解の速さは基質の量に比例する(一次反応)。マスにある死骸のすべてに同じ割合で取りつく
+        for(int t=cb;t<ce;t++){
+            int pk=cgrid.items[t];
             float dec=corpses[pk].energy*m.rate*MICROBE_DECOMP*act*MICROBE_STRIDE*MICROBE_BOOST;
             // 分解した割合だけ、死骸の窒素も無機化して土へ出る
             float dn=corpses[pk].n*std::min(1.f,dec/std::max(1e-9f,corpses[pk].energy));
@@ -1984,6 +1986,7 @@ void update_microbes(){
             m.rate=frand(0.1f,0.8f); m.cold_tol=frand(0.f,0.6f);
             m.id=next_microbe_id++;
             microbes.push_back(m);
+            g_bud.c_immig+=m.energy*CO2_PER_ENERGY;   // 外から飛んできた胞子が持ち込む炭素
         }
     }
 }
@@ -3556,6 +3559,7 @@ void release_animals(int per_species,int frame){
             for(int k=0;k<N_NODE;k++) a.ngain[k]=g.ngain[k];
             for(int k=0;k<N_SENSOR;k++) a.sen[k]=g.sen[k];
             animals.push_back(a); total++;
+            g_bud.c_immig+=(a.energy+a.fat+a.body*CORPSE_RETURN)*CO2_PER_ENERGY;   // 外から放した動物が持ち込む炭素
         }
     }
     printf("=== released %d animals from %d species at t=%d ===\n",
@@ -4328,6 +4332,8 @@ int main(int argc,char** argv){
                             for(int k2=0;k2<N_IMMUNE;k2++) p.im[k2]=frand(0.f,1.f);
                             p.id=next_plant_id++; p.genet=p.id; p.lin=-1;
                             plants.push_back(p); n++;
+                            g_bud.c_immig+=(p.energy+p.height*GROW_COST)*CO2_PER_ENERGY;   // 外から入れた浮遊植物の炭素と窒素
+                            g_bud.n_immig+=p.n_store+p.height*N_PER_GROWTH;
                         }
                         printf("=== released %d plankton at t=%d ===\n",n,frame);
                     }
@@ -4637,6 +4643,7 @@ int main(int argc,char** argv){
                                   (dist01(rng)<0.55f)?frand(2.f,9.f):0.f,
                                   frand(0.f,1.f)};
                     animals.push_back(a); put++;
+                    g_bud.c_immig+=(a.energy+a.fat+a.body*CORPSE_RETURN)*CO2_PER_ENERGY;   // 外から放した動物が持ち込む炭素
                 }
                 released=true;
                 printf("=== animals released at t=%d ===\n",frame);
@@ -4769,18 +4776,19 @@ int main(int argc,char** argv){
                     double wtot=wl+wp;
                     static bool have=false; static double pc=0,po=0,pn=0,pw=0,pcb=0;
                     if(have){
-                        double cext=g_bud.c_relax+g_bud.c_trans;
-                        double next=g_bud.n_sink+g_bud.n_runoff+g_bud.n_upwell+g_bud.n_clamp+g_bud.n_fix+g_bud.n_fire+g_bud.n_carn;
-                        printf("      budget C: atm %.1f bio %.1f (P %.1f A %.1f dead %.1f mic %.1f) | dC %+.2f = ext %+.2f (relax %+.2f trans %+.3f) + internal %+.2f\n",
+                        double cext=g_bud.c_relax+g_bud.c_trans+g_bud.c_immig;
+                        double next=g_bud.n_sink+g_bud.n_runoff+g_bud.n_upwell+g_bud.n_clamp+g_bud.n_fix+g_bud.n_fire+g_bud.n_carn+g_bud.n_immig;
+                        printf("      budget C: atm %.1f bio %.1f (P %.1f A %.1f dead %.1f mic %.1f) | dC %+.2f = ext %+.2f (relax %+.2f trans %+.3f immig %+.2f) + internal %+.2f\n",
                                catm,cbio,ep*CO2_PER_ENERGY,ea*CO2_PER_ENERGY,ec*CO2_PER_ENERGY,em*CO2_PER_ENERGY,
-                               ctot-pc,cext,g_bud.c_relax,g_bud.c_trans,ctot-pc-cext);
+                               ctot-pc,cext,g_bud.c_relax,g_bud.c_trans,g_bud.c_immig,ctot-pc-cext);
                         // O2 は単独では保存しない。光合成で有機物の炭素 1 につき O2 を 1 出し、呼吸・分解・燃焼で 1:1 で使う。
-                        // 内部の O2 の増減は生体の炭素の増減と等しいはずで、その差(redox)が破れ
+                        // 内部の O2 の増減は生体の炭素の増減と等しいはずで、その差(redox)が破れ。
+                        // 外から入った生き物の炭素は、この土地の光合成で作ったものではないので除く
                         double oint=oatm-po-g_bud.o_relax-g_bud.o_trans;
                         printf("      budget O2: atm %.1f | dO2 %+.2f = relax %+.2f trans %+.3f + internal %+.2f (dCbio %+.2f, redox %+.2f)\n",
-                               oatm,oatm-po,g_bud.o_relax,g_bud.o_trans,oint,cbio-pcb,oint-(cbio-pcb));
-                        printf("      budget N: soil land %.1f sea %.1f plant %.1f dead %.1f | dN %+.2f = sink %+.2f runoff %+.2f upwell %+.2f clamp %+.3f fix %+.2f fire %+.3f carn %+.3f + internal %+.2f\n",
-                               nl,ns,np,nc,ntot-pn,g_bud.n_sink,g_bud.n_runoff,g_bud.n_upwell,g_bud.n_clamp,g_bud.n_fix,g_bud.n_fire,g_bud.n_carn,ntot-pn-next);
+                               oatm,oatm-po,g_bud.o_relax,g_bud.o_trans,oint,cbio-pcb-g_bud.c_immig,oint-(cbio-pcb-g_bud.c_immig));
+                        printf("      budget N: soil land %.1f sea %.1f plant %.1f dead %.1f | dN %+.2f = sink %+.2f runoff %+.2f upwell %+.2f clamp %+.3f fix %+.2f fire %+.3f carn %+.3f immig %+.3f + internal %+.2f\n",
+                               nl,ns,np,nc,ntot-pn,g_bud.n_sink,g_bud.n_runoff,g_bud.n_upwell,g_bud.n_clamp,g_bud.n_fix,g_bud.n_fire,g_bud.n_carn,g_bud.n_immig,ntot-pn-next);
                         double wext=g_bud.w_relax+g_bud.w_transp+g_bud.w_sea;
                         printf("      budget W: soil land %.1f plant %.1f | dW %+.2f = relax %+.2f transp %+.2f sea %+.3f + internal %+.2f\n",
                                wl,wp,wtot-pw,g_bud.w_relax,g_bud.w_transp,g_bud.w_sea,wtot-pw-wext);
