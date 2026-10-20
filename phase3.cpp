@@ -2911,12 +2911,16 @@ void update_animals(){
         // 呼吸: 酸素の分圧で効率が決まる。水中と高所は薄い
         float o2_need = metab*O2_PER_METAB*(1.f-RESP_EFFICIENCY*a.resp);
         float avail   = std::min(o2_need,o2[ci]);
-        o2_add(ci,-avail);
         float eff=(o2_need>1e-9f)?avail/o2_need:1.f;
         if(eff<0.15f) eff=0.15f;
-        // 使ったエネルギーは糖の酸化(または発酵)でまかなう。その炭素は全量 CO2 として出る
+        // 使ったエネルギーは糖の酸化(または発酵)でまかなう。体にある分だけが燃料になる。
+        // 好気呼吸は CH2O + O2 → CO2 + H2O(呼吸商 1)なので、CO2 に出る炭素と同じ量の O2 を使う。
+        // マスの O2 で足りない分は発酵で、炭素は乳酸などの有機物のまま体の外(糞)に出る
         { float spent=metab/eff + a.resp*RESP_COST;
-          co2_add(ci,std::min(spent,std::max(0.f,a.energy))*CO2_PER_ENERGY);
+          float fc=std::min(spent,std::max(0.f,a.energy))*CO2_PER_ENERGY;
+          float ox=std::min(fc,std::max(0.f,o2[ci]));
+          o2_add(ci,-ox); co2_add(ci,ox);
+          egest(ci,(fc-ox)/CO2_PER_ENERGY);
           a.energy -= spent; }
         // 余剰を脂肪に回す。飢えれば取り崩す
         if(a.energy>A_DIVIDE_TH*0.6f && a.fat<a.store_fat*FAT_MAX){
@@ -2926,8 +2930,8 @@ void update_animals(){
             a_burn(co2.data(),o2.data(),ci,put*0.15f);   // 脂肪の合成の呼吸
         } else if(a.energy<A_DIVIDE_TH*0.25f && a.fat>0.f){
             float take=std::min(a.fat,FAT_DRAW);
-            // 代謝の借りを脂肪で返す。代謝の O2 は o2_need として使い済みなので、CO2 だけを出す
-            co2_add(ci,a_repay(a.energy,take)*CO2_PER_ENERGY);
+            // 代謝の借りを脂肪で返す。借りの分は O2 をまだ使っていないので、O2 を 1:1 で使って CO2 に出す
+            a_burn(co2.data(),o2.data(),ci,a_repay(a.energy,take));
             a.fat-=take; a.energy+=take;
         }
         if(a.energy<=0.f){
@@ -4763,22 +4767,25 @@ int main(int argc,char** argv){
                     double ctot=catm+cbio, ntot=np+nc+ns+nl;
                     for(int i=0;i<GRID_W*GRID_H;i++){ g_bud.w_transp+=w_transp_cell[i]; w_transp_cell[i]=0.0; }
                     double wtot=wl+wp;
-                    static bool have=false; static double pc=0,po=0,pn=0,pw=0;
+                    static bool have=false; static double pc=0,po=0,pn=0,pw=0,pcb=0;
                     if(have){
                         double cext=g_bud.c_relax+g_bud.c_trans;
                         double next=g_bud.n_sink+g_bud.n_runoff+g_bud.n_upwell+g_bud.n_clamp+g_bud.n_fix+g_bud.n_fire+g_bud.n_carn;
                         printf("      budget C: atm %.1f bio %.1f (P %.1f A %.1f dead %.1f mic %.1f) | dC %+.2f = ext %+.2f (relax %+.2f trans %+.3f) + internal %+.2f\n",
                                catm,cbio,ep*CO2_PER_ENERGY,ea*CO2_PER_ENERGY,ec*CO2_PER_ENERGY,em*CO2_PER_ENERGY,
                                ctot-pc,cext,g_bud.c_relax,g_bud.c_trans,ctot-pc-cext);
-                        printf("      budget O2: atm %.1f | dO2 %+.2f = relax %+.2f trans %+.3f + internal %+.2f\n",
-                               oatm,oatm-po,g_bud.o_relax,g_bud.o_trans,oatm-po-g_bud.o_relax-g_bud.o_trans);
+                        // O2 は単独では保存しない。光合成で有機物の炭素 1 につき O2 を 1 出し、呼吸・分解・燃焼で 1:1 で使う。
+                        // 内部の O2 の増減は生体の炭素の増減と等しいはずで、その差(redox)が破れ
+                        double oint=oatm-po-g_bud.o_relax-g_bud.o_trans;
+                        printf("      budget O2: atm %.1f | dO2 %+.2f = relax %+.2f trans %+.3f + internal %+.2f (dCbio %+.2f, redox %+.2f)\n",
+                               oatm,oatm-po,g_bud.o_relax,g_bud.o_trans,oint,cbio-pcb,oint-(cbio-pcb));
                         printf("      budget N: soil land %.1f sea %.1f plant %.1f dead %.1f | dN %+.2f = sink %+.2f runoff %+.2f upwell %+.2f clamp %+.3f fix %+.2f fire %+.3f carn %+.3f + internal %+.2f\n",
                                nl,ns,np,nc,ntot-pn,g_bud.n_sink,g_bud.n_runoff,g_bud.n_upwell,g_bud.n_clamp,g_bud.n_fix,g_bud.n_fire,g_bud.n_carn,ntot-pn-next);
                         double wext=g_bud.w_relax+g_bud.w_transp+g_bud.w_sea;
                         printf("      budget W: soil land %.1f plant %.1f | dW %+.2f = relax %+.2f transp %+.2f sea %+.3f + internal %+.2f\n",
                                wl,wp,wtot-pw,g_bud.w_relax,g_bud.w_transp,g_bud.w_sea,wtot-pw-wext);
                     }
-                    have=true; pc=ctot; po=oatm; pn=ntot; pw=wtot;
+                    have=true; pc=ctot; po=oatm; pn=ntot; pw=wtot; pcb=cbio;
                     g_bud=Budget();
                 }
                 { double sfi=0,scl2=0,sx=0;
