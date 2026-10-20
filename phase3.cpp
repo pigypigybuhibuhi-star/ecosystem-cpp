@@ -285,7 +285,6 @@ const float DETRITUS_COST   = LIN(PM(0.008f,ANIMAL_STRIDE),ANIMAL_STRIDE);  // �
 // 分解者。動かず、死骸だけを食い、炭素と窒素を土に返す
 const float MICROBE_COST    = LIN(PM(0.0004f));  // 微生物の代謝は極小。休眠に近い状態で待てる [1分あたり 3.89e-06]
 const float MICROBE_EFF     = 0.60f;
-const float MICROBE_BOOST   = 2.0f;    // 間引いたぶん、一回の分解量を増やす
 const float MICROBE_DIV     = 1.40f;   // 分裂の閾値を上げ、個体数を抑える
 const float MICROBE_RETURN  = 0.55f;   // 分解して大気と土に返す割合
 const float MICROBE_DISP    = 2.0f;    // 胞子が飛ぶ距離
@@ -403,7 +402,9 @@ const int   LINEAGE_INTERVAL  = 300;
 const int   LINEAGE_SAMPLE    = 5000;
 const int   LINEAGE_GRACE     = 3;      // 連続でこの回数見失って初めて絶滅とする
 // --- コードの中に直に書かれていた速さ(段階 3 で名前を付けた。値は同じ) ---
-const float MICROBE_DECOMP  = FRAC(PMF(0.10f));   // 微生物が 1 tick に死骸を分解する割合の基準(rate·act·間隔·BOOST を掛ける)
+const float MICROBE_DECOMP_K = (float)PMF(0.10f);  // 微生物が死骸を分解する 1 分あたりの率の基準(rate·act を掛ける)[率 1.02e-03 /分]
+// 間引いて MICROBE_STRIDE tick に 1 回しか処理しないぶんは、その間に分解される割合 1−exp(−k·STRIDE·DT) で取り戻す。
+// 以前はこれに加えて BOOST=2(「間引いたぶん」)を掛けていたが、間引きの換算は STRIDE で済んでいるので二重だった
 const float MICROBE_COLD_COST = LIN(PM(0.0015f));  // 低温に耐える酵素の維持費
 const float STORE_DRAW      = FRAC(PMF(0.02f));   // 土の水が足りないとき、不足分のうち体の貯水から補う割合
 const float STORE_SURPLUS   = FRAC(PMF(0.5f,PLANT_STRIDE),PLANT_STRIDE);   // 余った土の水のうち、1 回の更新で貯水に回せる割合
@@ -1943,9 +1944,11 @@ void update_microbes(){
         // 死骸を分解する。速いほど多く取れるが、酵素の維持費も上がる
         int cb=cgrid.b(ci), ce=cgrid.e(ci);
         // 分解の速さは基質の量に比例する(一次反応)。マスにある死骸のすべてに同じ割合で取りつく
+        // 1 回の更新(STRIDE tick)で分解される割合は、指数の形で換算する
+        float dfrac=(cb<ce)? -std::expm1(-MICROBE_DECOMP_K*m.rate*act*(float)(MICROBE_STRIDE*DT)) : 0.f;
         for(int t=cb;t<ce;t++){
             int pk=cgrid.items[t];
-            float dec=corpses[pk].energy*m.rate*MICROBE_DECOMP*act*MICROBE_STRIDE*MICROBE_BOOST;
+            float dec=corpses[pk].energy*dfrac;
             // 分解した割合だけ、死骸の窒素も無機化して土へ出る
             float dn=corpses[pk].n*std::min(1.f,dec/std::max(1e-9f,corpses[pk].energy));
             corpses[pk].n-=dn;
