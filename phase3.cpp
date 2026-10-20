@@ -295,9 +295,11 @@ const float BODY_GROW_COST  = 4.00f;
 const float CORPSE_RETURN   = 2.50f;   // 体 1 あたりの組織が持つエネルギー(炭素)。死骸に残るのもこの量
 // 動物がエネルギーを使えば、その炭素は酸化されて CO2 になる(O2 は 1:1)。
 // 体にある分(正のエネルギー)までしか出せない
+inline void co2_add(int c,float d);
+inline void o2_add (int c,float d);
 inline void a_burn(float* co2g,float* o2g,int cell,float e){
     if(e<=0.f) return;
-    float c=e*CO2_PER_ENERGY; o2g[cell]-=std::min(c,o2g[cell]); co2g[cell]+=c;
+    float c=e*CO2_PER_ENERGY; o2_add(cell,-std::min(c,o2g[cell])); co2_add(cell,c);
 }
 // 負のエネルギーは、体に無い燃料で払った借り(その炭素はまだ CO2 に出ていない)。
 // 後から体に入った燃料(食べ物・脂肪)は、借りの分だけ酸化されて CO2 になる。返す量を返す
@@ -439,6 +441,16 @@ std::vector<float> solar(GRID_W*GRID_H, 0.f);
 std::vector<float> temper(GRID_W*GRID_H, 0.f);
 std::vector<float> co2(GRID_W*GRID_H, CO2_BASE);
 std::vector<float> o2 (GRID_W*GRID_H, O2_BASE);
+// 気体の場は float で、1 マスに約 8 ある。その刻み(約 1e-6)より小さい出入り(死骸1つの1分ぶんの分解など)を
+// そのまま足すと丸めで消え、質量が保存されない。足しきれなかった端数をマスごとに持ち越し、次に足す
+std::vector<float> co2_res(GRID_W*GRID_H, 0.f);
+std::vector<float> o2_res (GRID_W*GRID_H, 0.f);
+inline void gas_add(std::vector<float>& g,std::vector<float>& r,int c,float d){
+    float w=r[c]+d, old=g[c], nv=old+w;
+    r[c]=w-(nv-old); g[c]=nv;
+}
+inline void co2_add(int c,float d){ gas_add(co2,co2_res,c,d); }
+inline void o2_add (int c,float d){ gas_add(o2, o2_res, c,d); }
 std::vector<float> gbuf(GRID_W*GRID_H, 0.f);
 std::vector<float> wind(GRID_H, 0.f);
 std::vector<float> slope(GRID_W*GRID_H, 0.f);
@@ -2040,8 +2052,8 @@ void update_fire(int frame){
         float burn=cp.energy*FIRE_BURN*std::min(1.f,fire[i]);
         cp.energy-=burn;
         { float bn=cp.n*FIRE_BURN*std::min(1.f,fire[i]); cp.n-=bn; g_bud.n_fire-=bn; }   // 燃えた分の窒素は揮発する
-        co2[i]+=burn*CO2_PER_ENERGY;
-        o2[i]=std::max(0.f,o2[i]-burn*FIRE_O2_USE);
+        co2_add(i,burn*CO2_PER_ENERGY);
+        o2_add(i,-std::min(burn*FIRE_O2_USE,o2[i]));
     }
     for(int i=0;i<GRID_W*GRID_H;i++) if(fire[i]>=0.05f) area+=1;
     for(int i=0;i<GRID_W*GRID_H;i++){
@@ -2133,7 +2145,7 @@ void update_plants(){
             float need=gain*CO2_PER_ENERGY;
             float avail=std::min(need,co2[ci]);
             if(need>1e-9f) gain*=avail/need;
-            co2[ci]-=avail; o2[ci]+=avail*O2_PER_CO2;
+            co2_add(ci,-avail); o2_add(ci,avail*O2_PER_CO2);   // マスごとに一つのスレッドだけが触るので、端数の持ち越しも決定的
             p.energy+=gain;
             t_gain+=gain; t_n++;
             t_light+=got; t_tf+=tf; t_wf+=wf;
@@ -2207,6 +2219,10 @@ void update_plants(){
             // 待機中の種子は数が多い。8tickに一度だけ、まとめて処理する
             if((pidx+pphase)%SEED_STRIDE!=0) continue;
             p.seed_wait-=SEED_STRIDE;
+            // 種子の呼吸。使った炭素は CO2 になり、O2 を 1:1 で使う(体に無いぶんは出せない)
+            { int sx=(int)p.x, sy=(int)p.y;
+              if(sx>=0&&sx<GRID_W&&sy>=0&&sy<GRID_H)
+                  a_burn(co2.data(),o2.data(),idx(sx,sy),std::min(BANK_COST*SEED_STRIDE,std::max(0.f,p.energy))); }
             p.energy-=BANK_COST*SEED_STRIDE;
             // 死んだ種子は朽ちる。体の炭素と窒素は死骸に
             if(dist01(rng)<BANK_PREDATION*SEED_STRIDE || p.energy<=0.f){
@@ -2255,8 +2271,8 @@ void update_plants(){
                 g_bud.n_fire-=nb*(1.f-kc);
                 burnt+=p.height*(GROW_COST-0.25f);              // 残りの体は燃える
             }
-            co2[ci]+=burnt*CO2_PER_ENERGY;
-            o2[ci]=std::max(0.f,o2[ci]-burnt*FIRE_O2_USE);
+            co2_add(ci,burnt*CO2_PER_ENERGY);
+            o2_add(ci,-std::min(burnt*FIRE_O2_USE,o2[ci]));
             if(!p.alive) continue;
         }
         // 窒素を取り込む。固定できる個体は大気から、できない個体は土壌から
@@ -2281,7 +2297,7 @@ void update_plants(){
             float r=std::min(g*GROW_COST*GROW_RESP,std::max(0.f,p.energy));
             p.energy-=r;
             float need=r*CO2_PER_ENERGY;
-            o2[ci]-=std::min(need,o2[ci]); co2[ci]+=need;
+            o2_add(ci,-std::min(need,o2[ci])); co2_add(ci,need);
         }
         float hm=habitat_p(p,ci);
         float upkeep = RESP_COEF*saturation(p)+HEIGHT_COST*p.height
@@ -2338,7 +2354,7 @@ void update_plants(){
         }
         // 払った維持費の炭素は呼吸で CO2 になる(体に無いぶんは出せない)
         { float c=std::min(upkeep*PLANT_STRIDE,std::max(0.f,p.energy))*PLANT_RESP_CO2*CO2_PER_ENERGY;
-          o2[ci]-=std::min(c,o2[ci]); co2[ci]+=c; }
+          o2_add(ci,-std::min(c,o2[ci])); co2_add(ci,c); }
         p.energy-=upkeep*PLANT_STRIDE;
         dbg_cost+=upkeep;      // 更新を飛ばしたぶんをまとめて払う
         if(p.energy<=0.f){
@@ -2376,7 +2392,7 @@ void update_plants(){
             float invest=p.energy*(0.20f+0.55f*p.repro_alloc);
             p.energy-=invest;
             { float c=invest*(1.f-nb*share)*CO2_PER_ENERGY;
-              o2[ci]-=std::min(c,o2[ci]); co2[ci]+=c; }
+              o2_add(ci,-std::min(c,o2[ci])); co2_add(ci,c); }
             for(int bi=0;bi<nb;bi++){
             Plant c=p;
             c.energy=invest*share;
@@ -2895,12 +2911,12 @@ void update_animals(){
         // 呼吸: 酸素の分圧で効率が決まる。水中と高所は薄い
         float o2_need = metab*O2_PER_METAB*(1.f-RESP_EFFICIENCY*a.resp);
         float avail   = std::min(o2_need,o2[ci]);
-        o2[ci]-=avail;
+        o2_add(ci,-avail);
         float eff=(o2_need>1e-9f)?avail/o2_need:1.f;
         if(eff<0.15f) eff=0.15f;
         // 使ったエネルギーは糖の酸化(または発酵)でまかなう。その炭素は全量 CO2 として出る
         { float spent=metab/eff + a.resp*RESP_COST;
-          co2[ci]+=std::min(spent,std::max(0.f,a.energy))*CO2_PER_ENERGY;
+          co2_add(ci,std::min(spent,std::max(0.f,a.energy))*CO2_PER_ENERGY);
           a.energy -= spent; }
         // 余剰を脂肪に回す。飢えれば取り崩す
         if(a.energy>A_DIVIDE_TH*0.6f && a.fat<a.store_fat*FAT_MAX){
@@ -2911,7 +2927,7 @@ void update_animals(){
         } else if(a.energy<A_DIVIDE_TH*0.25f && a.fat>0.f){
             float take=std::min(a.fat,FAT_DRAW);
             // 代謝の借りを脂肪で返す。代謝の O2 は o2_need として使い済みなので、CO2 だけを出す
-            co2[ci]+=a_repay(a.energy,take)*CO2_PER_ENERGY;
+            co2_add(ci,a_repay(a.energy,take)*CO2_PER_ENERGY);
             a.fat-=take; a.energy+=take;
         }
         if(a.energy<=0.f){
@@ -2954,7 +2970,7 @@ void update_animals(){
             { int bx=(int)a.x, by=(int)a.y;
               int bi0=(bx>=0&&bx<GRID_W&&by>=0&&by<GRID_H)?idx(bx,by):0;
               float c=invest*(1.f-nb*share)*CO2_PER_ENERGY;
-              o2[bi0]-=std::min(c,o2[bi0]); co2[bi0]+=c; }
+              o2_add(bi0,-std::min(c,o2[bi0])); co2_add(bi0,c); }
             for(int bi=0;bi<nb;bi++){
             // 子の体 0.10 を作る費用は子の取り分から払う。足りない卵は育たずに死骸になる
             float cE=invest*share, body0=0.10f*BODY_GROW_COST;
@@ -3071,8 +3087,8 @@ void update_animals(){
             int ri=idx(gx,gy);
             soil_n[ri]+=cp.n;                                         // 残りの窒素も無機化する(炭素の無い糞の窒素も)
             if(cp.energy<=0.f) continue;
-            co2[ri]+=cp.energy*CO2_PER_ENERGY;
-            o2[ri]=std::max(0.f,o2[ri]-cp.energy*CO2_PER_ENERGY);   // 好気的な分解は O2 を 1:1 で使う
+            co2_add(ri,cp.energy*CO2_PER_ENERGY);
+            o2_add(ri,-std::min(cp.energy*CO2_PER_ENERGY,o2[ri]));   // 好気的な分解は O2 を 1:1 で使う
         }
     }
     corpses.erase(std::remove_if(corpses.begin(),corpses.end(),
@@ -3215,6 +3231,7 @@ std::vector<Fld<int>> cell_schema(){
         s.push_back({n,[&v](const int& i){return (double)v[i];},
                        [&v](int& i,double x){v[i]=(int)x;},d}); };
     fv("elev",elev,0.4); fv("co2",co2,CO2_BASE); fv("o2",o2,O2_BASE);
+    fv("co2_res",co2_res,0); fv("o2_res",o2_res,0);
     fv("soil_n",soil_n,SOIL_N_BASE); fv("soil_water",soil_water,0.4);
     fv("pload",pload,0); fv("aload",aload,0);
     iv("burn_age",burn_age,999999);
@@ -4741,7 +4758,7 @@ int main(int argc,char** argv){
                     for(const auto& m:microbes) if(m.alive) em+=m.energy;
                     for(int i=0;i<GRID_W*GRID_H;i++){
                         if(sea[i]) ns+=soil_n[i]; else { nl+=soil_n[i]; wl+=soil_water[i]; } }
-                    double catm=grid_sum(co2), oatm=grid_sum(o2);
+                    double catm=grid_sum(co2)+grid_sum(co2_res), oatm=grid_sum(o2)+grid_sum(o2_res);   // 持ち越しの端数も大気の在庫
                     double cbio=(ep+ea+ec+em)*CO2_PER_ENERGY;
                     double ctot=catm+cbio, ntot=np+nc+ns+nl;
                     for(int i=0;i<GRID_W*GRID_H;i++){ g_bud.w_transp+=w_transp_cell[i]; w_transp_cell[i]=0.0; }
