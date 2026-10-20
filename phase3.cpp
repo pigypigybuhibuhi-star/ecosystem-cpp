@@ -284,7 +284,9 @@ const float DETRITUS_LOSS   = 0.80f;   // 分解物は栄養価が中間
 const float DETRITUS_COST   = LIN(PM(0.008f,ANIMAL_STRIDE),ANIMAL_STRIDE);  // 分解酵素の維持費 [1分あたり 3.89e-05]
 // 分解者。動かず、死骸だけを食い、炭素と窒素を土に返す
 const float MICROBE_COST    = LIN(PM(0.0004f));  // 微生物の代謝は極小。休眠に近い状態で待てる [1分あたり 3.89e-06]
-const float MICROBE_EFF     = 0.60f;
+// 炭素利用効率(分解した炭素のうち体になる割合。残りは呼吸で CO2)。0.6 は熱力学の上限に近い。
+// 土や落葉の微生物の実測は 0.3〜0.55(Manzoni et al. 2012、Sinsabaugh et al. 2013)。その中ほど
+const float MICROBE_EFF     = 0.40f;
 const float MICROBE_DIV     = 1.40f;   // 分裂の閾値を上げ、個体数を抑える
 const float MICROBE_RETURN  = 0.55f;   // 分解して大気と土に返す割合
 const float MICROBE_DISP    = 2.0f;    // 胞子が飛ぶ距離
