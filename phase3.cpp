@@ -306,7 +306,9 @@ inline float a_repay(float energy,float gain){ return std::min(gain,std::max(0.f
 const float MATURE_FRAC     = 0.80f;
 const int   MAX_BROOD       = 12;      // 一度に産める上限
 const float BROOD_TAX       = 0.22f;   // 多産による取り分の目減り
-const float ROT_RATE        = FRAC(PMF(0.004f));  // 分解者が主役。これは物理的な風化だけ [率 3.9e-05 /分]
+// 生き物によらない死骸の減り(光分解・風化)。分解の主役は微生物と動物なので、これは日に当たる落葉の光分解の速さにとる。
+// 乾燥地で生物の分解を除いた光分解だけの減りは k ≈ 0.1〜0.5 /年(Austin & Vivanco 2006 など)。その中ほどの 0.3 /年
+const float ROT_RATE        = FRAC(0.3/YEAR_MIN);  // [率 5.7e-07 /分]
 const int   N_SENSOR        = 5;       // 感覚器の枠。使うかどうかは進化が決める
 const int   RAY_STEPS       = 3;       // レイの段数。多いほど重い
 const float SENSOR_MAX      = 14.0f;   // 射程の上限
