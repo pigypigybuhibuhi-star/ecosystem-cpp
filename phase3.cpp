@@ -299,6 +299,9 @@ inline void a_burn(float* co2g,float* o2g,int cell,float e){
     if(e<=0.f) return;
     float c=e*CO2_PER_ENERGY; o2g[cell]-=std::min(c,o2g[cell]); co2g[cell]+=c;
 }
+// 負のエネルギーは、体に無い燃料で払った借り(その炭素はまだ CO2 に出ていない)。
+// 後から体に入った燃料(食べ物・脂肪)は、借りの分だけ酸化されて CO2 になる。返す量を返す
+inline float a_repay(float energy,float gain){ return std::min(gain,std::max(0.f,-energy)); }
 const float MATURE_FRAC     = 0.80f;
 const int   MAX_BROOD       = 12;      // 一度に産める上限
 const float BROOD_TAX       = 0.22f;   // 多産による取り分の目減り
@@ -2772,6 +2775,7 @@ void update_animals(){
                     p.height=std::max(0.03f,p.height-bite*GRAZE_DEFOLIATE*bs);
                     float eff=(1.f-A_EAT_LOSS)*(0.6f+0.8f*a.digest)/std::max(0.5f,bs);
                     float gain=std::min(1.f,eff*plant_dig);   // 同化は食べた量を超えない
+                    a_burn(co2.data(),o2.data(),ci,a_repay(a.energy,bite*gain));   // 登り降りの借りを返す(O2 を 1:1)
                     a.energy+=bite*gain;
                     // 同化しなかった分は糞に、落とした葉の組織(建設に GROW_COST を払った炭素)は落葉に
                     egest(ci,bite*(1.f-gain)+(h0-p.height)*GROW_COST,(h0-p.height)*N_PER_GROWTH);
@@ -2796,6 +2800,7 @@ void update_animals(){
                         float bite=corpses[pk].energy*SCAV_EFF*cap;
                         float bn=corpses[pk].n*std::min(1.f,SCAV_EFF*cap);
                         corpses[pk].energy-=bite; corpses[pk].n-=bn;
+                        a_burn(co2.data(),o2.data(),ci,a_repay(a.energy,bite*(1.f-loss)));
                         a.energy+=bite*(1.f-loss); a.eaten++;
                         egest(ci,bite*loss,bn);   // 同化しなかった分は糞。窒素は糞に
                     }
@@ -2826,6 +2831,7 @@ void update_animals(){
                     // 毒。解毒できなければ、食っても損をする
                     float tox=v.toxin*(1.f-a.tox_resist);
                     float gain=bite*(1.f-MEAT_LOSS)*(1.f-tox);
+                    a_burn(co2.data(),o2.data(),ci,a_repay(a.energy,gain));
                     a.energy+=gain;
                     egest(ci,bite-gain);   // 同化しなかった分(毒で吸収できない分を含む)は糞
                     life_note(a.id,g_frame,"捕食",bite);
@@ -2904,6 +2910,8 @@ void update_animals(){
             a_burn(co2.data(),o2.data(),ci,put*0.15f);   // 脂肪の合成の呼吸
         } else if(a.energy<A_DIVIDE_TH*0.25f && a.fat>0.f){
             float take=std::min(a.fat,FAT_DRAW);
+            // 代謝の借りを脂肪で返す。代謝の O2 は o2_need として使い済みなので、CO2 だけを出す
+            co2[ci]+=a_repay(a.energy,take)*CO2_PER_ENERGY;
             a.fat-=take; a.energy+=take;
         }
         if(a.energy<=0.f){
