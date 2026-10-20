@@ -277,6 +277,10 @@ const float A_SIZE_COST     = LIN(PM(0.020f,ANIMAL_STRIDE),ANIMAL_STRIDE);  // [
 const float JAW_COST        = LIN(PM(0.012f,ANIMAL_STRIDE),ANIMAL_STRIDE);  // [1分あたり 5.83e-05]
 const float COLD_COST_A     = LIN(PM(0.050f,ANIMAL_STRIDE),ANIMAL_STRIDE);  // [1分あたり 0.000243]
 const float A_BITE          = 0.45f;   // 一口で植物から取る割合。時間は齧る回数の側が持つ(段階 3.5)
+// 摂食の速さの上限は餌ではなく食べる側の体が決める(消化管の容量)。
+// 植食性昆虫の相対摂食速度は乾燥重量で 0.2〜2+ g/g/日(Scriber & Slansky 1981、Waldbauer 1968)。中ほどの 1 /日を炭素の比で使う。
+// 体の炭素は死骸に残る量と同じ数え方(組織 + 蓄え + 脂肪)
+const float A_RCR           = (float)(1.0/DAY_MIN);  // 1 分あたり、体の炭素 1 あたりに摂れる餌の炭素 [6.94e-04 /分]
 const float GRAZE_DEFOLIATE = 0.18f;   // 採食が葉を奪う量。局所的な枯渇を生む
 const float A_DIVIDE_TH     = 6.0f;
 const float A_EAT_LOSS      = 0.50f;   // 同化効率50%。若い葉や種子は消化しやすい
@@ -2782,11 +2786,15 @@ void update_animals(){
             float plant_dig = 1.f - cap_sum*cap_sum;
             float detr_dig  = a.detritus;
             float meat_dig  = a.diet;
+            // 1 回の行為で摂れる量の上限 = 摂食速度 × 体の炭素 × その行為が受け持つ時間
+            // (1 回の更新 ANIMAL_STRIDE·DT 分を、更新あたりの期待回数で割った時間)
+            float gut_rate=A_RCR*(a.body*CORPSE_RETURN+std::max(0.f,a.energy)+a.fat);
             if(plant_dig>0.01f && want_eat>ACT_THRESH){
                 // 摂食量は体格に比例する。大きい体は多く処理できる
                 int max_bites0=1+(int)(a.body*2.0f);   // 段階 3 より前の 1 回の更新あたり
                 if(max_bites0>6) max_bites0=6;
                 int max_bites=count_by_rate(max_bites0);
+                float gut_bite=gut_rate*(float)(ANIMAL_STRIDE*DT/(max_bites0*STEP_RATIO));
                 int bites=0;
                 for(int t=pgrid.b(ci);t<pgrid.e(ci)&&bites<max_bites;t++){
                     int pi=pgrid.items[t];
@@ -2795,7 +2803,7 @@ void update_animals(){
                     float chew=a.jaw/(a.jaw+p.defense*2.0f);
                     // 一口が大きいほど速いが、噛み砕きが雑になって効率が落ちる
                     float bs=0.4f+1.2f*a.bite_size;
-                    float bite=p.energy*A_BITE*bs*chew*act;
+                    float bite=std::min(p.energy*A_BITE*bs*chew*act,gut_bite);
                     p.energy-=bite;
                     // 齧られれば葉を失う。光合成能力が落ち、回復に時間がかかる。
                     // これがあって初めて、その場が枯れ、探す必要が生まれる
@@ -2818,15 +2826,17 @@ void update_animals(){
                 int cb=cgrid.b(ci), ce=cgrid.e(ci);
                 if(cb<ce && a.perch<0.5f && want_eat>ACT_THRESH){
                     int nd=ce-cb;
-                    int tries=count_by_rate(1+(int)(3.f*detr_dig));   // 能力が高いほど多く処理する
+                    int tries0=1+(int)(3.f*detr_dig);
+                    int tries=count_by_rate(tries0);   // 能力が高いほど多く処理する
+                    float gut_try=gut_rate*(float)(ANIMAL_STRIDE*DT/(tries0*STEP_RATIO));
                     for(int t=0;t<tries;t++){
                         int pk=cgrid.items[cb+(int)(frand(0.f,(float)nd-0.001f))];
                         bool is_plant=(corpses[pk].origin==0);
                         float cap =is_plant?detr_dig:meat_dig;
                         float loss=is_plant?DETRITUS_LOSS:MEAT_LOSS;
                         if(cap<=0.005f) continue;
-                        float bite=corpses[pk].energy*SCAV_EFF*cap;
-                        float bn=corpses[pk].n*std::min(1.f,SCAV_EFF*cap);
+                        float bite=std::min(corpses[pk].energy*SCAV_EFF*cap,gut_try);
+                        float bn=corpses[pk].n*std::min(1.f,bite/std::max(1e-9f,corpses[pk].energy));   // 摂った割合だけ窒素も
                         corpses[pk].energy-=bite; corpses[pk].n-=bn;
                         a_burn(co2.data(),o2.data(),ci,a_repay(a.energy,bite*(1.f-loss)));
                         a.energy+=bite*(1.f-loss); a.eaten++;
@@ -2854,7 +2864,7 @@ void update_animals(){
                 if(pk>=0){
                     Animal& v=animals[pk];
                     // わずかな肉食性でも噛めるようにする。線形だと谷を渡れない
-                    float bite=v.energy*PRED_EFF*std::sqrt(meat_dig)*act;
+                    float bite=std::min(v.energy*PRED_EFF*std::sqrt(meat_dig)*act,gut_rate*(float)(ANIMAL_STRIDE*DT));   // 襲うのは毎回の更新
                     v.energy-=bite;
                     // 毒。解毒できなければ、食っても損をする
                     float tox=v.toxin*(1.f-a.tox_resist);
