@@ -265,9 +265,15 @@ const float FALL_DAMAGE     = 0.9f;    // 落下で失うエネルギー(高さ�
 const float TEMP_WIDTH_P    = 18.0f;
 
 // --- 動物 ---
-const float A_MAX_SPEED     = LIN(PM(0.20f,ANIMAL_STRIDE),ANIMAL_STRIDE);  // [1分あたり 0.000972]
+// 歩く速さ。地面を歩く昆虫の走る速さは秒速 0.5〜10 cm(アリ 1〜5 cm/s、オサムシ 5〜10 cm/s。Full & Tu 1991 など)。
+// 遺伝子 speed = 1 で上限の 10 cm/s = 6 m/分 = 0.6 マス/分。以前は 0.000972 マス/分(0.016 cm/s)で、実際より 600 倍遅かった
+constexpr double A_VMAX_OLD = PM(0.20f,ANIMAL_STRIDE);         // 以前の上限 [マス/分]。移動の費用の換算にだけ使う
+constexpr double A_VMAX     = 0.10*60.0/10.0;                  // 10 cm/s → 0.6 マス/分(1マス = 10 m)
+const float A_MAX_SPEED     = LIN(A_VMAX,ANIMAL_STRIDE);  // [1分あたり 0.6 マス]
 const float A_METAB         = LIN(PM(0.040f,ANIMAL_STRIDE),ANIMAL_STRIDE);  // [1分あたり 0.000194]
-const float A_MOVE_COST     = 0.060f;
+// 移動の費用は距離あたり。速さだけを実際の値に直し、同じ遺伝子の速さで歩くときの仕事率(1分あたりの費用)は変えない。
+// そのため距離あたりの費用を速さの比で割る(仕事率の値そのものの見直しは別の段にする)
+const float A_MOVE_COST     = (float)(0.060*A_VMAX_OLD/A_VMAX);
 const float A_REACH_COST    = LIN(PM(0.018f,ANIMAL_STRIDE),ANIMAL_STRIDE);  // [1分あたり 8.75e-05]
 const float A_SIZE_COST     = LIN(PM(0.020f,ANIMAL_STRIDE),ANIMAL_STRIDE);  // [1分あたり 9.72e-05]
 const float JAW_COST        = LIN(PM(0.012f,ANIMAL_STRIDE),ANIMAL_STRIDE);  // [1分あたり 5.83e-05]
