@@ -266,7 +266,11 @@ const float TEMP_WIDTH_P    = 18.0f;
 
 // --- 動物 ---
 const float A_MAX_SPEED     = LIN(PM(0.20f,ANIMAL_STRIDE),ANIMAL_STRIDE);  // [1分あたり 0.000972]
-const float A_METAB         = LIN(PM(0.040f,ANIMAL_STRIDE),ANIMAL_STRIDE);  // [1分あたり 0.000194]
+// 基礎代謝(安静時の呼吸)。組織の炭素 1 あたり、1 分あたりの量。
+// 地面を歩く小さな昆虫の安静時の O2 消費は 20〜25℃ で約 0.3 ml O2 /g(生重)/時(Chown & Nicolson 2004、Addo-Bediako et al. 2002)。
+// 呼吸商 1 で 0.3 ml CO2 = 1.34e-5 mol C = 1.6e-4 g C /g/時。生重 1 g の炭素は約 0.15 g(乾燥 30%、その半分が炭素)なので、
+// 組織の炭素あたり 1.07e-3 /時 = 1.8e-5 /分(約 2.6% /日)。代謝は体の量に比例して増える
+const float A_SMR           = LIN(1.8e-5,ANIMAL_STRIDE);
 const float A_MOVE_COST     = 0.060f;
 const float A_REACH_COST    = LIN(PM(0.018f,ANIMAL_STRIDE),ANIMAL_STRIDE);  // [1分あたり 8.75e-05]
 const float A_SIZE_COST     = LIN(PM(0.020f,ANIMAL_STRIDE),ANIMAL_STRIDE);  // [1分あたり 9.72e-05]
@@ -2896,7 +2900,7 @@ void update_animals(){
                 continue;
             }
         }
-        float metab=A_METAB+sp*A_MOVE_COST+a.reach*A_REACH_COST
+        float metab=A_SMR*a.body*CORPSE_RETURN+sp*A_MOVE_COST+a.reach*A_REACH_COST
                    +a.body*A_SIZE_COST+a.jaw*JAW_COST+COLD_COST_A*a.cold_tol
                    +HABITAT_COST_A*hma*hma
                    +a.detritus*DETRITUS_COST+sensor_span*SENSOR_COST
