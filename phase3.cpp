@@ -420,6 +420,10 @@ const float MICROBE_COLD_COST = LIN(PM(0.0015f));  // 低温に耐える酵素�
 // 入れ替わるのは活動している細胞だけ。基質の無い所で休眠している細胞や胞子は、食われにくく溶けにくく、
 // 何か月〜何年も生き残る(Blagodatskaya & Kuzyakov 2013、Lennon & Jones 2011)。基質のあるマスにいるときだけ死ぬ
 const float MICROBE_TURNOVER = FRAC(0.05/DAY_MIN,MICROBE_STRIDE);  // 1 回の更新(STRIDE tick)で死ぬ確率 1−exp(−r·STRIDE·DT) [率 3.47e-05 /分]
+// 1 個体が 1 分に取り込める炭素の上限(体の炭素あたり)。取り込みは細胞の輸送と酵素の量で飽和する(Monod の Vmax)。
+// 土の微生物の最大比増殖速度は、基質を加えた呼吸の解析で 0.1〜0.4 /時(Blagodatsky et al. 2000、Panikov 1995)。
+// 下端の 0.1 /時を炭素利用効率 MICROBE_EFF で割り、取り込みの上限とする。以前は上限が無く、マスの死骸が多いほど際限なく取れた
+const float MICROBE_VMAX = (float)(0.1/60.0/0.40);  // 1 分あたり、体の炭素あたりの取り込みの上限 [4.17e-03 /分]
 const float STORE_DRAW      = FRAC(PMF(0.02f));   // 土の水が足りないとき、不足分のうち体の貯水から補う割合
 const float STORE_SURPLUS   = FRAC(PMF(0.5f,PLANT_STRIDE),PLANT_STRIDE);   // 余った土の水のうち、1 回の更新で貯水に回せる割合
 const float FIRE_SHOOT_LOSS = LIN(PM(0.60f,PLANT_STRIDE),PLANT_STRIDE);  // 炎が幹と葉を焼く速さ(高さ/火勢)
@@ -640,6 +644,7 @@ struct Microbe {
 std::vector<Microbe> microbes;
 int next_microbe_id=0;
 long d_micro=0;
+long g_mic_upd=0, g_mic_cap=0;   // 基質のあるマスでの微生物の更新の数と、そのうち取り込みが上限で決まった数
 int  g_frame=0;   // 現在の tick。関数の引数に足さずに参照できるようにする
 
 // 選択した個体の一生を記録する。進化の観察とデバッグの両方に効く
@@ -1961,6 +1966,13 @@ void update_microbes(){
         // 分解の速さは基質の量に比例する(一次反応)。マスにある死骸のすべてに同じ割合で取りつく
         // 1 回の更新(STRIDE tick)で分解される割合は、指数の形で換算する
         float dfrac=(cb<ce)? -std::expm1(-MICROBE_DECOMP_K*m.rate*act*(float)(MICROBE_STRIDE*DT)) : 0.f;
+        // 取り込みの上限。マスの死骸から取れる量が上限を超えるときは、すべての死骸から取る割合を同じ比で下げる
+        if(cb<ce){
+            float avail=0.f; for(int t=cb;t<ce;t++) avail+=corpses[cgrid.items[t]].energy;
+            float vcap=MICROBE_VMAX*act*std::max(0.f,m.energy)*(float)(MICROBE_STRIDE*DT);
+            g_mic_upd++;
+            if(avail*dfrac>vcap){ dfrac=vcap/avail; g_mic_cap++; }
+        }
         for(int t=cb;t<ce;t++){
             int pk=cgrid.items[t];
             float dec=corpses[pk].energy*dfrac;
@@ -5030,8 +5042,9 @@ int main(int argc,char** argv){
                          np2?100.0*sex_p/np2:0.0, na2?100.0*sex_a/na2:0.0); }
                 { double mr2=0,mc2=0; int nm=(int)microbes.size();
                   for(const auto& m:microbes){ mr2+=m.rate; mc2+=m.cold_tol; }
-                  printf("      microbe: %d  rate %.3f  cold %.3f  deaths %ld\n",
-                         nm, nm?mr2/nm:0.0, nm?mc2/nm:0.0, d_micro); }
+                  printf("      microbe: %d  rate %.3f  cold %.3f  deaths %ld  capped %.1f%%\n",
+                         nm, nm?mr2/nm:0.0, nm?mc2/nm:0.0, d_micro, g_mic_upd?100.0*g_mic_cap/g_mic_upd:0.0);
+                  g_mic_upd=g_mic_cap=0; }
                 compute_averages();   // レーダー図に重ねる集団平均
                 printf("      deaths: starve %ld  cold %ld  preyed %ld\n",
                        d_starve,d_cold,d_preyed);
