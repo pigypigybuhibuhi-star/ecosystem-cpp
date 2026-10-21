@@ -287,7 +287,10 @@ const float MEAT_LOSS       = 0.30f;
 const float DETRITUS_LOSS   = 0.80f;   // 分解物は栄養価が中間
 const float DETRITUS_COST   = LIN(PM(0.008f,ANIMAL_STRIDE),ANIMAL_STRIDE);  // 分解酵素の維持費 [1分あたり 3.89e-05]
 // 分解者。動かず、死骸だけを食い、炭素と窒素を土に返す
-const float MICROBE_COST    = LIN(PM(0.0004f));  // 微生物の代謝は極小。休眠に近い状態で待てる [1分あたり 3.89e-06]
+// 微生物の維持の呼吸。体の炭素に比例する(維持係数。Pirt 1965)。土壌の微生物の基礎呼吸の実測(qCO2)は
+// 体の炭素あたり約 0.6〜2e-3 /時(Anderson & Domsch 1985、1993)。その低い側 1e-3 /時 = 1.7e-5 /分を、酵素の係数 (0.5+rate) が 1 のときの値とする。
+// 以前は 1 個体あたりの定数 3.89e-06 /分(体の炭素 1.0 で実測の約 1/4)で、体の量によらなかった
+const float MICROBE_COST    = LIN(1.7e-5);  // 1 分あたり、体の炭素あたり [1.7e-05 /分]
 // 炭素利用効率(分解した炭素のうち体になる割合。残りは呼吸で CO2)。0.6 は熱力学の上限に近い。
 // 土や落葉の微生物の実測は 0.3〜0.55(Manzoni et al. 2012、Sinsabaugh et al. 2013)。その中ほど
 const float MICROBE_EFF     = 0.40f;
@@ -1986,7 +1989,7 @@ void update_microbes(){
             a_burn(co2.data(),o2.data(),ci,dec*(1.f-MICROBE_EFF));
             soil_n[ci]+= dn;
         }
-        { float spend=(MICROBE_COST*(0.5f+m.rate)+m.cold_tol*MICROBE_COLD_COST)*MICROBE_STRIDE;
+        { float spend=(MICROBE_COST*(0.5f+m.rate)*std::max(0.f,m.energy)+m.cold_tol*MICROBE_COLD_COST)*MICROBE_STRIDE;
           a_burn(co2.data(),o2.data(),ci,std::min(spend,std::max(0.f,m.energy)));   // 維持の呼吸(O2 を 1:1)
           m.energy-=spend; }
         if(m.energy<=0.f){ m.alive=false; d_micro++; continue; }
