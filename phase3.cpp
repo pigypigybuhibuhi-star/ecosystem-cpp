@@ -271,6 +271,10 @@ const float A_MAX_SPEED     = LIN(PM(0.20f,ANIMAL_STRIDE),ANIMAL_STRIDE);  // [1
 // 呼吸商 1 で 0.3 ml CO2 = 1.34e-5 mol C = 1.6e-4 g C /g/時。生重 1 g の炭素は約 0.15 g(乾燥 30%、その半分が炭素)なので、
 // 組織の炭素あたり 1.07e-3 /時 = 1.8e-5 /分(約 2.6% /日)。代謝は体の量に比例して増える
 const float A_SMR           = LIN(1.8e-5,ANIMAL_STRIDE);
+// 形質の維持費(顎・射程・耐寒・感覚器・脳など)は、維持する組織の代謝の上乗せ分。組織の量に比例する。
+// 以前は 1 個体あたりの定数で、旧い基礎代謝 A_METAB(1 個体あたり 1.94e-4 /分)と並べて置かれていた。
+// 形質どうしの費用の比はそのまま残し、旧い基礎代謝に対する比を、今の基礎代謝(組織の炭素あたり)への上乗せの比として使う
+const float A_TRAIT_REF     = LIN(PM(0.040f,ANIMAL_STRIDE),ANIMAL_STRIDE);  // 形質の費用を測る基準(旧い A_METAB) [1分あたり 0.000194]
 const float A_MOVE_COST     = 0.060f;
 const float A_REACH_COST    = LIN(PM(0.018f,ANIMAL_STRIDE),ANIMAL_STRIDE);  // [1分あたり 8.75e-05]
 const float A_SIZE_COST     = LIN(PM(0.020f,ANIMAL_STRIDE),ANIMAL_STRIDE);  // [1分あたり 9.72e-05]
@@ -2924,7 +2928,7 @@ void update_animals(){
                 continue;
             }
         }
-        float metab=A_SMR*a.body*CORPSE_RETURN+sp*A_MOVE_COST+a.reach*A_REACH_COST
+        float upkeep=a.reach*A_REACH_COST
                    +a.body*A_SIZE_COST+a.jaw*JAW_COST+COLD_COST_A*a.cold_tol
                    +HABITAT_COST_A*hma*hma
                    +a.detritus*DETRITUS_COST+sensor_span*SENSOR_COST
@@ -2935,6 +2939,8 @@ void update_animals(){
                    +a.toxin*TOXIN_COST+a.tox_resist*TOXRES_COST
                    +a.burrow*BURROW_COST+a.nocturnal*NOCTURNAL_COST
                    +a.fat*FAT_COST;
+        // 基礎代謝と形質の維持費は組織の炭素に比例する。歩く費用は別に足す
+        float metab=A_SMR*a.body*CORPSE_RETURN*(1.f+upkeep/A_TRAIT_REF)+sp*A_MOVE_COST;
         float sen=senesce(a.age,a.lifespan);
         metab *= (1.f+sen);
         metab += LIFESPAN_COST*a.lifespan;
