@@ -414,6 +414,12 @@ const float MICROBE_DECOMP_K = (float)PMF(0.10f);  // 微生物が死骸を分�
 // 間引いて MICROBE_STRIDE tick に 1 回しか処理しないぶんは、その間に分解される割合 1−exp(−k·STRIDE·DT) で取り戻す。
 // 以前はこれに加えて BOOST=2(「間引いたぶん」)を掛けていたが、間引きの換算は STRIDE で済んでいるので二重だった
 const float MICROBE_COLD_COST = LIN(PM(0.0015f));  // 低温に耐える酵素の維持費
+// 微生物の入れ替わり。土の細菌や菌は原生生物・線虫に食われ、ウイルスに溶かされて、1 日あたり数 % ずつ死ぬ
+// (土の微生物バイオマスの回転時間は数日〜数十日。Rousk & Bååth 2011、Kuzyakov & Blagodatskaya 2015)。その中ほどの 0.05 /日
+// 食った側の呼吸と、溶けた細胞を他の微生物が分解するぶんは、低温で死んだ細胞と同じく全量を CO2 として大気へ戻す
+// 入れ替わるのは活動している細胞だけ。基質の無い所で休眠している細胞や胞子は、食われにくく溶けにくく、
+// 何か月〜何年も生き残る(Blagodatskaya & Kuzyakov 2013、Lennon & Jones 2011)。基質のあるマスにいるときだけ死ぬ
+const float MICROBE_TURNOVER = FRAC(0.05/DAY_MIN,MICROBE_STRIDE);  // 1 回の更新(STRIDE tick)で死ぬ確率 1−exp(−r·STRIDE·DT) [率 3.47e-05 /分]
 const float STORE_DRAW      = FRAC(PMF(0.02f));   // 土の水が足りないとき、不足分のうち体の貯水から補う割合
 const float STORE_SURPLUS   = FRAC(PMF(0.5f,PLANT_STRIDE),PLANT_STRIDE);   // 余った土の水のうち、1 回の更新で貯水に回せる割合
 const float FIRE_SHOOT_LOSS = LIN(PM(0.60f,PLANT_STRIDE),PLANT_STRIDE);  // 炎が幹と葉を焼く速さ(高さ/火勢)
@@ -1951,6 +1957,7 @@ void update_microbes(){
 
         // 死骸を分解する。速いほど多く取れるが、酵素の維持費も上がる
         int cb=cgrid.b(ci), ce=cgrid.e(ci);
+        if(cb<ce && frand(0.f,1.f)<MICROBE_TURNOVER){ a_burn(co2.data(),o2.data(),ci,std::max(0.f,m.energy)); m.alive=false; d_micro++; continue; }
         // 分解の速さは基質の量に比例する(一次反応)。マスにある死骸のすべてに同じ割合で取りつく
         // 1 回の更新(STRIDE tick)で分解される割合は、指数の形で換算する
         float dfrac=(cb<ce)? -std::expm1(-MICROBE_DECOMP_K*m.rate*act*(float)(MICROBE_STRIDE*DT)) : 0.f;
