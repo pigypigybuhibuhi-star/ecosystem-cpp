@@ -2945,9 +2945,12 @@ void update_animals(){
                    +a.fat*FAT_COST;
         // 基礎代謝と形質の維持費は組織の炭素に比例する。歩く費用は別に足す
         float metab=A_SMR*a.body*CORPSE_RETURN*(1.f+upkeep/A_TRAIT_REF)+sp*A_MOVE_COST;
+        // 呼吸器と長命な体の維持費も、維持する組織の量に比例する(形質の維持費と同じ考え)。
+        // 以前は 1 個体あたりの定数で、組織の炭素 0.25 の幼い個体では支出の約 7 割を占めていた
+        const float tis_k=A_SMR*a.body*CORPSE_RETURN/A_TRAIT_REF;
         float sen=senesce(a.age,a.lifespan);
         metab *= (1.f+sen);
-        metab += LIFESPAN_COST*a.lifespan;
+        metab += LIFESPAN_COST*a.lifespan*tis_k;
         // 発病
         if(aload[ci]>0.02f){
             float inf=aload[ci]*immune_match(a.im,ci,astrain);
@@ -2962,7 +2965,7 @@ void update_animals(){
         // 使ったエネルギーは糖の酸化(または発酵)でまかなう。体にある分だけが燃料になる。
         // 好気呼吸は CH2O + O2 → CO2 + H2O(呼吸商 1)なので、CO2 に出る炭素と同じ量の O2 を使う。
         // マスの O2 で足りない分は発酵で、炭素は乳酸などの有機物のまま体の外(糞)に出る
-        { float spent=metab/eff + a.resp*RESP_COST;
+        { float spent=metab/eff + a.resp*RESP_COST*tis_k;
           float fc=std::min(spent,std::max(0.f,a.energy))*CO2_PER_ENERGY;
           float ox=std::min(fc,std::max(0.f,o2[ci]));
           o2_add(ci,-ox); co2_add(ci,ox);
