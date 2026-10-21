@@ -228,6 +228,10 @@ const float GROW_RESP       = 0.50f;   // 建設の呼吸。体にする炭素�
 // 以前は高さ 1 あたり 5.83e-4 /分(体の炭素あたり約 28% /日)で、実測の数十倍だった
 const float HEIGHT_COST     = LIN(GROW_COST*0.01/DAY_MIN);  // 1 分あたり、高さあたり [2.08e-05 /分]
 const float RESP_COEF       = LIN(PM(0.120f));  // 真の昼夜で取り込みが半減したぶんを補正 [1分あたり 0.00117]
+// 形質の維持費は、維持する組織の呼吸の上乗せ分で、組織の量に比例する(動物の A_TRAIT_REF と同じ考え)。
+// 以前は 1 個体あたりの定数で、1 株あたりの基礎の呼吸 RESP_COEF と並べて置かれていた。
+// 形質どうしの費用の比はそのまま残し、RESP_COEF に対する比を、体の維持の呼吸 HEIGHT_COST への上乗せの比として使う
+const float P_TRAIT_REF     = RESP_COEF;
 const float TOUGH_COST      = LIN(PM(0.070f));  // 防御を「今」張るための費用 [1分あたり 0.000681]
 const float INDUCE_RATE     = FRAC(PMF(0.22f,PLANT_STRIDE),PLANT_STRIDE);  // 食害の匂いに応じて立ち上がる速さ [率 0.000805 /分]
 const float INDUCE_DECAY    = FRAC(PMF(0.020f,PLANT_STRIDE),PLANT_STRIDE);  // 攻撃がなければ緩む [率 6.55e-05 /分]
@@ -2344,9 +2348,11 @@ void update_plants(){
             o2_add(ci,-std::min(need,o2[ci])); co2_add(ci,need);
         }
         float hm=habitat_p(p,ci);
-        float upkeep = RESP_COEF*saturation(p)+HEIGHT_COST*p.height
-                 +TOUGH_COST*p.defense+CLONAL_COST*p.clonal+COLD_COST_P*p.cold_tol
-                     +HABITAT_COST_P*hm*hm+DROUGHT_COST*p.drought_tol;
+        // 形質の組織(防御・地下茎・耐寒・耐乾・浮き・貯水・樹皮・つる・吸器・捕虫器・休眠種子)の維持費は、
+        // 維持する組織の呼吸の上乗せ分で、体の炭素に比例する。ここで集め、体の維持の呼吸に掛ける
+        float trait = TOUGH_COST*p.defense+CLONAL_COST*p.clonal+COLD_COST_P*p.cold_tol
+                     +DROUGHT_COST*p.drought_tol;
+        float upkeep = RESP_COEF*saturation(p)+HABITAT_COST_P*hm*hm;
         // 植物も呼吸する: 維持のために酸素を使い、二酸化炭素を出す。
         // 気体のやりとりは、実際に払った維持費に合わせて下でまとめて行う。ここでは酸欠かどうかだけを見る
         {
@@ -2374,11 +2380,13 @@ void update_plants(){
             if(p.x<0.f) p.x+=GRID_W; if(p.x>=GRID_W) p.x-=GRID_W;
             if(p.y<0.f) p.y=0.f;     if(p.y>=GRID_H) p.y=GRID_H-1.f;
         }
-        upkeep += BUOY_COST*p.buoyancy
+        trait += BUOY_COST*p.buoyancy
                 + STORE_COST*p.store_cap + FIRE_TOL_COST*p.fire_tol
-                + CLIMB_COST*p.climb + N_FIX_COST*p.n_fix
+                + CLIMB_COST*p.climb
                 + PARASITE_COST*p.parasite + CARNIVORY_COST*p.carnivory
                 + FIRE_SEED_COST*p.fire_seed;
+        // 体の維持の呼吸と形質の上乗せ。窒素の固定は組織の維持ではなく、固定に払う炭素なので別に足す
+        upkeep += HEIGHT_COST*p.height*(1.f+trait/P_TRAIT_REF) + N_FIX_COST*p.n_fix;
         // 暗所では維持費が落ちる。葉の光化学系を回す必要がないため
         upkeep *= (NIGHT_RESP+(1.f-NIGHT_RESP)*daylit[ci]);
         float sen=senesce(p.age,p.lifespan);
