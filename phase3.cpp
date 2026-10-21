@@ -286,7 +286,15 @@ const float JAW_COST        = LIN(PM(0.012f,ANIMAL_STRIDE),ANIMAL_STRIDE);  // [
 const float COLD_COST_A     = LIN(PM(0.050f,ANIMAL_STRIDE),ANIMAL_STRIDE);  // [1分あたり 0.000243]
 const float A_BITE          = 0.45f;   // 一口で植物から取る割合。時間は齧る回数の側が持つ(段階 3.5)
 const float GRAZE_DEFOLIATE = 0.18f;   // 採食が葉を奪う量。局所的な枯渇を生む
-const float A_DIVIDE_TH     = 6.0f;
+// 繁殖の閾値は組織の炭素に比例する。以前は 1 個体あたりの定数 6.0 で、体の大きさ 0.4(組織の炭素 1.0)の個体が
+// 組織の 6 倍の炭素を貯めてから産んでいた。昆虫が一回に産む卵の量は雌の体の重さの 1〜5 割(Honěk 1993、Berrigan 1991)。
+// その中ほど 0.3 を一回の産卵の量とする。repro_alloc 0.5 の個体は閾値 ×1.1 のときに貯えの 0.475 を産卵に回すので、
+// 閾値(組織の炭素あたり)は 0.3/(1.1×0.475)
+const float A_DIVIDE_TH     = (float)(0.30/(1.1*0.475));   // 組織の炭素あたりの繁殖の閾値 [0.574]
+// 消化管の容量。1 分あたりに飲み込める餌の炭素は組織の炭素に比例する。
+// 葉を食う昆虫の相対摂食速度は 0.5〜3 g/g/日(乾燥重量。Slansky & Scriber 1985)。その中ほど 1 /日。
+// 葉も昆虫の体も乾燥重量の約半分が炭素なので、炭素の比でも同じ
+const double A_GUT_RCR      = 1.0/DAY_MIN;   // 組織の炭素あたり、1 分あたり [6.94e-4 /分]
 const float A_EAT_LOSS      = 0.50f;   // 同化効率50%。若い葉や種子は消化しやすい
 const float PRED_RATIO      = 1.15f;
 const float PRED_EFF        = FRAC(PMF(0.85f,ANIMAL_STRIDE),ANIMAL_STRIDE);  // [率 0.00922 /分]
@@ -642,6 +650,8 @@ struct Animal {
     int   gen;              // 世代数
     int   id,age,eaten,lin;
 };
+// 組織の炭素あたりの閾値に、その個体の組織の炭素を掛けたもの
+inline float a_divide_th(const Animal& a){ return A_DIVIDE_TH*a.body*CORPSE_RETURN; }
 std::vector<Animal> animals;
 // 分解者。植物でも動物でもない第三の界。
 // 動かず、死骸だけを食い、炭素を大気へ、窒素を土へ返す
@@ -1850,7 +1860,7 @@ void update_odor(){
         odor[0][i]+=ODOR_ANIMAL*(a.body+a.toxin*1.2f)*hide;
         // 発情。繁殖できる状態の個体が出す
         if(a.sexual>0.15f && a.body>=a.size*MATURE_FRAC
-           && a.energy>A_DIVIDE_TH*0.7f)
+           && a.energy>a_divide_th(a)*0.7f)
             odor[0][i]+=ODOR_ESTRUS*a.sexual;
         if(aload[i]>0.3f) odor[0][i]+=ODOR_SICK;
     }
@@ -2642,7 +2652,7 @@ void update_animals(){
         }
         int sci=idx(std::max(0,std::min(GRID_W-1,(int)a.x)),
                     std::max(0,std::min(GRID_H-1,(int)a.y)));
-        in[N_SENSOR+0]=std::min(1.f,a.energy/A_DIVIDE_TH);
+        in[N_SENSOR+0]=std::min(1.f,a.energy/a_divide_th(a));
         in[N_SENSOR+1]=clamp01((temper[sci]+30.f)/70.f);
         in[N_SENSOR+2]=soil_water[sci];
         in[N_SENSOR+3]=std::min(1.f,a.body/3.f);   // 自分の体格。戦うか逃げるかを分ける
@@ -2819,6 +2829,9 @@ void update_animals(){
                 int max_bites0=1+(int)(a.body*2.0f);   // 段階 3 より前の 1 回の更新あたり
                 if(max_bites0>6) max_bites0=6;
                 int max_bites=count_by_rate(max_bites0);
+                // 一口は、段階 3 より前の 1 回の更新(ANIMAL_STRIDE·DT0 分)の 1/max_bites0 の時間ぶんの摂食。
+                // 飲み込める量はその時間に消化管が通せる量まで
+                const float gut_bite=(float)(A_GUT_RCR*ANIMAL_STRIDE*DT0/max_bites0)*a.body*CORPSE_RETURN;
                 int bites=0;
                 for(int t=pgrid.b(ci);t<pgrid.e(ci)&&bites<max_bites;t++){
                     int pi=pgrid.items[t];
@@ -2827,7 +2840,7 @@ void update_animals(){
                     float chew=a.jaw/(a.jaw+p.defense*2.0f);
                     // 一口が大きいほど速いが、噛み砕きが雑になって効率が落ちる
                     float bs=0.4f+1.2f*a.bite_size;
-                    float bite=p.energy*A_BITE*bs*chew*act;
+                    float bite=std::min(p.energy*A_BITE*bs*chew*act,gut_bite);
                     p.energy-=bite;
                     // 齧られれば葉を失う。光合成能力が落ち、回復に時間がかかる。
                     // これがあって初めて、その場が枯れ、探す必要が生まれる
@@ -2850,15 +2863,18 @@ void update_animals(){
                 int cb=cgrid.b(ci), ce=cgrid.e(ci);
                 if(cb<ce && a.perch<0.5f && want_eat>ACT_THRESH){
                     int nd=ce-cb;
-                    int tries=count_by_rate(1+(int)(3.f*detr_dig));   // 能力が高いほど多く処理する
+                    int tries0=1+(int)(3.f*detr_dig);
+                    int tries=count_by_rate(tries0);   // 能力が高いほど多く処理する
+                    const float gut_try=(float)(A_GUT_RCR*ANIMAL_STRIDE*DT0/tries0)*a.body*CORPSE_RETURN;   // 植物の一口と同じ考え
                     for(int t=0;t<tries;t++){
                         int pk=cgrid.items[cb+(int)(frand(0.f,(float)nd-0.001f))];
                         bool is_plant=(corpses[pk].origin==0);
                         float cap =is_plant?detr_dig:meat_dig;
                         float loss=is_plant?DETRITUS_LOSS:MEAT_LOSS;
                         if(cap<=0.005f) continue;
-                        float bite=corpses[pk].energy*SCAV_EFF*cap;
-                        float bn=corpses[pk].n*std::min(1.f,SCAV_EFF*cap);
+                        float want=corpses[pk].energy*SCAV_EFF*cap;
+                        float bite=std::min(want,gut_try);
+                        float bn=corpses[pk].n*std::min(1.f,SCAV_EFF*cap)*(want>0.f?bite/want:0.f);
                         corpses[pk].energy-=bite; corpses[pk].n-=bn;
                         a_burn(co2.data(),o2.data(),ci,a_repay(a.energy,bite*(1.f-loss)));
                         a.energy+=bite*(1.f-loss); a.eaten++;
@@ -2886,7 +2902,9 @@ void update_animals(){
                 if(pk>=0){
                     Animal& v=animals[pk];
                     // わずかな肉食性でも噛めるようにする。線形だと谷を渡れない
-                    float bite=v.energy*PRED_EFF*std::sqrt(meat_dig)*act;
+                    // 飲み込める量は、この更新の時間(ANIMAL_STRIDE·DT 分)に消化管が通せる量まで
+                    float bite=std::min(v.energy*PRED_EFF*std::sqrt(meat_dig)*act,
+                                        (float)(A_GUT_RCR*ANIMAL_STRIDE*DT)*a.body*CORPSE_RETURN);
                     v.energy-=bite;
                     // 毒。解毒できなければ、食っても損をする
                     float tox=v.toxin*(1.f-a.tox_resist);
@@ -2969,12 +2987,13 @@ void update_animals(){
           egest(ci,(fc-ox)/CO2_PER_ENERGY);
           a.energy -= spent; }
         // 余剰を脂肪に回す。飢えれば取り崩す
-        if(a.energy>A_DIVIDE_TH*0.6f && a.fat<a.store_fat*FAT_MAX){
-            float put=std::min((a.energy-A_DIVIDE_TH*0.6f)*FAT_RATE,
+        const float dth=a_divide_th(a);
+        if(a.energy>dth*0.6f && a.fat<a.store_fat*FAT_MAX){
+            float put=std::min((a.energy-dth*0.6f)*FAT_RATE,
                                a.store_fat*FAT_MAX-a.fat);
             a.energy-=put; a.fat+=put*0.85f;
             a_burn(co2.data(),o2.data(),ci,put*0.15f);   // 脂肪の合成の呼吸
-        } else if(a.energy<A_DIVIDE_TH*0.25f && a.fat>0.f){
+        } else if(a.energy<dth*0.25f && a.fat>0.f){
             float take=std::min(a.fat,FAT_DRAW);
             // 代謝の借りを脂肪で返す。借りの分は O2 をまだ使っていないので、O2 を 1:1 で使って CO2 に出す
             a_burn(co2.data(),o2.data(),ci,a_repay(a.energy,take));
@@ -2987,7 +3006,7 @@ void update_animals(){
             continue;
         }
         if((int)animals.size()+(int)babies.size() < ANIMAL_MAX
-           && a.energy>=A_DIVIDE_TH*(1.4f-0.6f*a.repro_alloc)
+           && a.energy>=dth*(1.4f-0.6f*a.repro_alloc)
            && a.body>=a.size*MATURE_FRAC
            && count_by_rate(1.0)>0){      // 繁殖の判定は段階 3 より前の 1 回の更新に 1 回
             const Animal* mate=nullptr;
@@ -3587,7 +3606,7 @@ void release_animals(int per_species,int frame){
             Animal a;
             a.x=bx+frand(0.f,1.f); a.y=by+frand(0.f,1.f);
             a.dir=frand(0.f,6.2832f);
-            a.energy=A_DIVIDE_TH*0.7f; a.alive=true; a.age=0; a.eaten=0;
+            a.alive=true; a.age=0; a.eaten=0;
             a.speed=g.speed; a.turn=g.turn; a.reach=g.reach; a.size=g.size;
             a.diet=g.diet;   a.jaw=g.jaw;   a.cold_tol=g.cold_tol;
             a.aquatic=g.aquatic; a.resp=g.resp; a.detritus=g.detritus;
@@ -3597,6 +3616,7 @@ void release_animals(int per_species,int frame){
             a.brood=g.brood;     a.lifespan=g.lifespan;
             for(int k=0;k<N_IMMUNE;k++) a.im[k]=g.im[k];
             a.body=g.size*MATURE_FRAC;      // 成熟した状態で放つ
+            a.energy=a_divide_th(a)*0.7f;
             a.id=next_animal_id++; a.lin=g.lin;
             for(int k=0;k<N_W;k++) a.w[k]=g.w[k];
             for(int k=0;k<N_NODE;k++) a.ngain[k]=g.ngain[k];
@@ -4638,11 +4658,12 @@ int main(int argc,char** argv){
                     if(!sea[idx(gx,gy)]) continue;
         if(depthn(idx(gx,gy))>0.12f) continue;
         if(shelf[idx(gx,gy)]<0.5f) continue;   // 岸のそばに置く
-                    a.dir=frand(0.f,6.2832f); a.energy=3.0f; a.alive=true;
+                    a.dir=frand(0.f,6.2832f); a.alive=true;
                     a.age=0; a.eaten=0;
                     a.speed=0.5f; a.turn=0.2f; a.reach=0.7f;
                     a.size=0.5f; a.diet=0.0f; a.jaw=1.0f; a.cold_tol=0.3f;
                     a.body=0.10f; a.aquatic=1.0f; a.resp=0.3f; a.detritus=0.0f;
+                    a.energy=a_divide_th(a)*0.7f;
                     a.sexual=0.2f; a.arboreal=0.0f; a.perch=0.0f; a.aerobic=1.0f;
                     a.mut_rate=0.3f; a.bite_size=0.5f; a.digest=0.5f;                    a.mother=-1; a.father=-1; a.gen=0;
                     for(int k=0;k<N_REC;k++) a.rec[k]=0.f;
@@ -5377,8 +5398,8 @@ int main(int argc,char** argv){
                     else      snprintf(b,120,"動物 #%d",sa->id);
                     sf::Text ttl(font,jp(b),14); ttl.setPosition({PX+10.f,by});
                     ttl.setFillColor(sf::Color(255,200,120)); window.draw(ttl); by+=lh+2;
-                    lab(by,"体力"); snprintf(b,120,"%.2f / %.1f",sa->energy,A_DIVIDE_TH);
-                    bar(by,sa->energy/A_DIVIDE_TH,sf::Color(0,200,80),b); by+=lh+6;
+                    lab(by,"体力"); snprintf(b,120,"%.2f / %.2f",sa->energy,a_divide_th(*sa));
+                    bar(by,sa->energy/a_divide_th(*sa),sf::Color(0,200,80),b); by+=lh+6;
                     {
                         static const char* AN[13]={"肉食","体格","届く高さ","速度",
                                                    "顎","耐寒","水生","分解",
