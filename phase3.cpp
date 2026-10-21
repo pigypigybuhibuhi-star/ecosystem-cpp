@@ -222,7 +222,11 @@ const float MUT_RATE_COST   = LIN(PM(0.004f,ANIMAL_STRIDE),ANIMAL_STRIDE);  // �
 const float GROW_RATE       = LIN(PM(0.02f));  // [1分あたり 0.000194]
 const float GROW_COST       = 3.00f;
 const float GROW_RESP       = 0.50f;   // 建設の呼吸。体にする炭素とは別に、その半分を糖の酸化で払う(建設に要るブドウ糖は体の約 1.5 倍、Penning de Vries 1974)
-const float HEIGHT_COST     = LIN(PM(0.060f));  // [1分あたり 0.000583]
+// 体(茎と根)の維持の呼吸。高さ 1 の体は建設に GROW_COST の炭素を持つので、体の炭素に比例する。
+// 植物の組織の維持呼吸の実測は 20℃ で体の炭素あたり約 0.5〜3% /日(McCree 1974、Ryan 1991、Amthor 2000)。
+// 葉の暗呼吸は RESP_COEF の側が持つので、ここは茎と根の側の低め 1% /日 = 6.94e-6 /分をとる。
+// 以前は高さ 1 あたり 5.83e-4 /分(体の炭素あたり約 28% /日)で、実測の数十倍だった
+const float HEIGHT_COST     = LIN(GROW_COST*0.01/DAY_MIN);  // 1 分あたり、高さあたり [2.08e-05 /分]
 const float RESP_COEF       = LIN(PM(0.120f));  // 真の昼夜で取り込みが半減したぶんを補正 [1分あたり 0.00117]
 const float TOUGH_COST      = LIN(PM(0.070f));  // 防御を「今」張るための費用 [1分あたり 0.000681]
 const float INDUCE_RATE     = FRAC(PMF(0.22f,PLANT_STRIDE),PLANT_STRIDE);  // 食害の匂いに応じて立ち上がる速さ [率 0.000805 /分]
