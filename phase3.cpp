@@ -304,7 +304,15 @@ const float MICROBE_COST    = LIN(1.7e-5);  // 1 分あたり、体の炭素あ�
 const float MICROBE_EFF     = 0.40f;
 const float MICROBE_DIV     = 1.40f;   // 分裂の閾値を上げ、個体数を抑える
 const float MICROBE_RETURN  = 0.55f;   // 分解して大気と土に返す割合
-const float MICROBE_DISP    = 2.0f;    // 胞子が飛ぶ距離
+// 胞子が飛ぶ距離の平均(マス)。地表から放たれた胞子は、落ちる速さで沈みながら風に運ばれる(Gregory 1973)。
+// 落葉の上の子実体が胞子を放つ高さ 5 cm、そこでの風 0.8 m/s(対数分布、u* 0.2 m/s・粗度 1 cm)、
+// 直径 5〜10 µm の胞子の終端速度 1 mm/s(ストークス)から、平均の距離 = 高さ × 風 / 終端速度 = 40 m。
+// 乱流で遠くへ行くものもあるので、平均をこの値とする指数分布にとる。
+// 以前は 0〜2 マス(0〜20 m)の一様で、微生物の広がりが分裂ごとに 20 m に縛られていた
+const float SPORE_H         = 0.05f;   // 放つ高さ [m]
+const float SPORE_WIND      = 0.80f;   // 放つ高さの風 [m/s]
+const float SPORE_VSET      = 1.0e-3f; // 終端速度 [m/s]
+const float MICROBE_DISP    = SPORE_H*SPORE_WIND/SPORE_VSET/CELL_M;   // [4 マス = 40 m]
 const int   MICROBE_INIT    = 3000;
 const float BODY_GROW_RATE  = LIN(PM(0.010f,ANIMAL_STRIDE),ANIMAL_STRIDE);  // [1分あたり 4.86e-05]
 const float BODY_GROW_COST  = 4.00f;
@@ -2005,7 +2013,7 @@ void update_microbes(){
             m.energy*=0.5f;
             Microbe c=m;
             c.energy=m.energy;
-            float a=frand(0.f,6.2832f), d=frand(0.f,MICROBE_DISP);
+            float a=frand(0.f,6.2832f), d=-MICROBE_DISP*std::log(1.f-frand(0.f,1.f));   // 指数分布。1-u は (0,1]
             c.x=m.x+std::cos(a)*d; c.y=m.y+std::sin(a)*d;
             if(c.x<0.f) c.x+=GRID_W; if(c.x>=GRID_W) c.x-=GRID_W;
             if(c.y<0.f) c.y=0.f;     if(c.y>=GRID_H) c.y=GRID_H-1.f;
