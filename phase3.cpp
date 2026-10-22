@@ -303,6 +303,7 @@ const float MICROBE_COST    = LIN(1.7e-5);  // 1 分あたり、体の炭素あ�
 // 土や落葉の微生物の実測は 0.3〜0.55(Manzoni et al. 2012、Sinsabaugh et al. 2013)。その中ほど
 const float MICROBE_EFF     = 0.40f;
 const float MICROBE_DIV     = 1.40f;   // 分裂の閾値を上げ、個体数を抑える
+const float MICROBE_REF     = 0.75f*MICROBE_DIV;   // 分裂の周期の平均の体の炭素。低温の維持費の換算にだけ使う
 const float MICROBE_RETURN  = 0.55f;   // 分解して大気と土に返す割合
 // 胞子が飛ぶ距離の平均(マス)。地表から放たれた胞子は、落ちる速さで沈みながら風に運ばれる(Gregory 1973)。
 // 落葉の上の子実体が胞子を放つ高さ 5 cm、そこでの風 0.8 m/s(対数分布、u* 0.2 m/s・粗度 1 cm)、
@@ -432,7 +433,10 @@ const int   LINEAGE_GRACE     = 3;      // 連続でこの回数見失って初�
 const float MICROBE_DECOMP_K = (float)PMF(0.10f);  // 微生物が死骸を分解する 1 分あたりの率の基準(rate·act を掛ける)[率 1.02e-03 /分]
 // 間引いて MICROBE_STRIDE tick に 1 回しか処理しないぶんは、その間に分解される割合 1−exp(−k·STRIDE·DT) で取り戻す。
 // 以前はこれに加えて BOOST=2(「間引いたぶん」)を掛けていたが、間引きの換算は STRIDE で済んでいるので二重だった
-const float MICROBE_COLD_COST = LIN(PM(0.0015f));  // 低温に耐える酵素の維持費
+// 低温に耐える酵素(不凍タンパク質・低温で働く酵素)の維持費。維持の呼吸は維持する細胞の量に比例する(Pirt 1965)。
+// 以前は 1 個体あたりの定数 1.46e-05 /分で、体の炭素が小さい細胞ほど割高だった(体の炭素 0.1 で基礎の維持費の約 9 倍)。
+// 分裂の周期の平均の体の炭素(分裂直後 0.7 から閾値 1.4 まで、平均 0.75·MICROBE_DIV = 1.05)で以前と同じ値になる比をとる
+const float MICROBE_COLD_COST = LIN(PM(0.0015f));  // 体の炭素 MICROBE_REF の細胞の値 [1分あたり 1.46e-05]
 // 微生物の入れ替わり。土の細菌や菌は原生生物・線虫に食われ、ウイルスに溶かされて、1 日あたり数 % ずつ死ぬ
 // (土の微生物バイオマスの回転時間は数日〜数十日。Rousk & Bååth 2011、Kuzyakov & Blagodatskaya 2015)。その中ほどの 0.05 /日
 // 食った側の呼吸と、溶けた細胞を他の微生物が分解するぶんは、低温で死んだ細胞と同じく全量を CO2 として大気へ戻す
@@ -2005,7 +2009,7 @@ void update_microbes(){
             a_burn(co2.data(),o2.data(),ci,dec*(1.f-MICROBE_EFF));
             soil_n[ci]+= dn;
         }
-        { float spend=(MICROBE_COST*(0.5f+m.rate)*std::max(0.f,m.energy)+m.cold_tol*MICROBE_COLD_COST)*MICROBE_STRIDE;
+        { float spend=(MICROBE_COST*(0.5f+m.rate)*std::max(0.f,m.energy)+m.cold_tol*MICROBE_COLD_COST*std::max(0.f,m.energy)/MICROBE_REF)*MICROBE_STRIDE;
           a_burn(co2.data(),o2.data(),ci,std::min(spend,std::max(0.f,m.energy)));   // 維持の呼吸(O2 を 1:1)
           m.energy-=spend; }
         if(m.energy<=0.f){ m.alive=false; d_micro++; continue; }
