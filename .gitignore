@@ -12,3 +12,6 @@ runs/
 old3
 phase4
 .claude/worktrees/
+assay_*.csv
+track.csv
+trigger.csv
