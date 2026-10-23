@@ -218,6 +218,12 @@ const float FIRE_FUEL_MIN   = 1.5f;
 // --- 撹乱 ---
 const float SLIDE_SLOPE     = 0.58f;   // これ以上の勾配(30°)で崩れうる。表層崩壊の多くは 30° を超える斜面で起きる
 const float SLIDE_RATE      = FRAC(PMF(1.2e-5f));  // 崩落率/マス/tick [率 1.17e-07 /分]
+// 崩れる厚さ。表層崩壊は土層と基盤の境で滑り、厚さは 0.5〜2 m(小さな崩壊の中央値はおよそ 1 m、Larsen et al. 2010)
+const float SLIDE_DEPTH_M   = 1.0f;
+// 崩土の到達。見通し角 H/L は体積で決まる: log10(H/L) = −0.085 log10(V) + 0.047(Corominas 1996、全種類の当てはめ)。
+// 1 マスの崩壊 V = 厚さ × 10 m × 10 m で H/L ≈ 0.75
+const float SLIDE_HL        = std::pow(10.f,-0.085f*std::log10(SLIDE_DEPTH_M*CELL_M*CELL_M)+0.047f);
+const int   SLIDE_RUN_MAX   = 200;     // 到達を追う歩数の安全の上限(計算のためだけ)
 
 // --- 変異 ---
 const float MUT_STRENGTH    = 0.02f;
@@ -846,7 +852,7 @@ inline void prof_end(int k){
     double ms=std::chrono::duration<double,std::milli>(t1-prof_t0).count();
     prof[k]=prof[k]*0.92+ms*0.08;     // 移動平均で安定させる
 }
-long d_starve=0, d_cold=0, d_preyed=0;
+long d_starve=0, d_cold=0, d_preyed=0, d_slide=0;
 // 植物の収支を測る。推測ではなく実測で判断するため
 double dbg_gain=0, dbg_cost=0; long dbg_n=0;
 double dbg_light=0, dbg_tf=0, dbg_wf=0, dbg_co2=0;
@@ -1437,6 +1443,23 @@ void compute_currents(){
 // 4. すべて m・年の単位で計算するので、出てきた高さをそのまま使う(写し直さない)
 // 5. 安息角より急な斜面を崩し、物質を下へ移す(質量は保つ)
 // 東西は開いた境界。区画の外とはつながらない(外の空気の出入りは風の計算で条件として与える)
+// 勾配(m/m)。中心差分。崖崩れで標高が変わったら、そのまわりだけ計算し直す
+inline void slope_at(int x,int y){
+    int xr=std::min(GRID_W-1,x+1), xl=std::max(0,x-1);
+    int yu=std::max(0,y-1), yd=std::min(GRID_H-1,y+1);
+    float gx=(elev[idx(xr,y)]-elev[idx(xl,y)])/(float)(xr-xl);
+    float gy=(elev[idx(x,yd)]-elev[idx(x,yu)])/(float)(yd-yu);
+    slope[idx(x,y)]=std::sqrt(gx*gx+gy*gy)*ELEV_M/CELL_M;
+}
+void slope_around(int ci){
+    int x=ci%GRID_W, y=ci/GRID_W;
+    for(int dy=-1;dy<=1;dy++) for(int dx=-1;dx<=1;dx++){
+        int nx=x+dx, ny=y+dy;
+        if(nx<0||nx>=GRID_W||ny<0||ny>=GRID_H) continue;
+        slope_at(nx,ny);
+    }
+}
+
 void init_terrain(){
     const int N=GRID_W*GRID_H;
     // 起伏。オクターブごとに 0〜1 へ揃え、最後に標準偏差で正規化する
@@ -1482,13 +1505,7 @@ void init_terrain(){
 
     for(int i=0;i<N;i++) sea[i]=(elev[i]<SEA_LEVEL)?1:0;
     // 勾配は m/m で持つ(崖崩れと歩く速さが物理の勾配で判断できるように)
-    for(int y=0;y<GRID_H;y++) for(int x=0;x<GRID_W;x++){
-        int xr=std::min(GRID_W-1,x+1), xl=std::max(0,x-1);
-        int yu=std::max(0,y-1), yd=std::min(GRID_H-1,y+1);
-        float gx=(elev[idx(xr,y)]-elev[idx(xl,y)])/(float)(xr-xl);
-        float gy=(elev[idx(x,yd)]-elev[idx(x,yu)])/(float)(yd-yu);
-        slope[idx(x,y)]=std::sqrt(gx*gx+gy*gy)*ELEV_M/CELL_M;
-    }
+    for(int y=0;y<GRID_H;y++) for(int x=0;x<GRID_W;x++) slope_at(x,y);
     elev_smooth=elev;
     box_blur(elev_smooth,4,2);
     // 卓越風は条件。区画の緯度で、惑星の風の帯の式を一度だけ評価し、区画全体で一様にする
@@ -1576,6 +1593,8 @@ void compute_rivers(){
 // 水蒸気を風で運ぶ。海で蒸発し、斜面を上るか空気が冷えると降る。
 // 降水量は緯度ではなく、海からの距離と地形で決まる。
 void compute_precip(){
+    // 崖崩れで標高が変わるので、使う直前に作り直す
+    elev_smooth=elev; box_blur(elev_smooth,4,2);
     for(int y=0;y<GRID_H;y++){
         float u=wind[y];
         int d=(u>0)?1:-1;
@@ -1943,27 +1962,55 @@ void update_odor(){
     }
 }
 
-// 崖崩れ。急斜面が滑り、その場の生物を押し流す
+// 崖崩れ。急斜面の表土が滑り、その場の生物を巻き込んで斜面の下へ運ぶ
+// 崩土は最も急な下りを伝って流れ、出発点からの見通し角が H/L を下回るところで止まる(少なくとも一つ下のマスまでは動く)
 void slide_at(int ci){
     slide_events++;
     ev_record(EV_SLIDE,ci%GRID_W,ci/GRID_W,slope[ci]);
+    // 到達点を決める
+    float z0=elev[ci];
+    int cur=ci; float run=0.f;
+    for(int st=0;st<SLIDE_RUN_MAX;st++){
+        int x=cur%GRID_W, y=cur/GRID_W, lo=-1; float le=elev[cur], ld=0.f;
+        for(int dy=-1;dy<=1;dy++) for(int dx=-1;dx<=1;dx++){
+            if(!dx&&!dy) continue;
+            int nx=x+dx, ny=y+dy;
+            if(nx<0||nx>=GRID_W) continue;
+            if(ny<0||ny>=GRID_H) continue;
+            int j=idx(nx,ny); if(elev[j]<le){ le=elev[j]; lo=j; ld=(dx&&dy)?1.41421356f:1.f; } }
+        if(lo<0) break;                               // 窪地。ここに溜まる
+        float r2=run+ld*CELL_M;
+        if(st>0 && (z0-le)*ELEV_M<SLIDE_HL*r2) break; // 見通し角が H/L を下回る
+        cur=lo; run=r2;
+        if(sea[cur]) break;                           // 海に入ったらそこで沈む
+    }
+    float dep_x=(cur%GRID_W)+0.5f, dep_y=(cur/GRID_W)+0.5f;
     for(int t=pgrid.b(ci);t<pgrid.e(ci);t++){
         Plant& p=plants[pgrid.items[t]];
         if(!p.alive) continue;
         p.alive=false;
-        // 体の炭素(建設に払った GROW_COST ぶん)と残りのエネルギーは死骸として運ばれる
-        corpses.push_back({p.x,p.y,std::max(0.f,p.energy)+p.height*GROW_COST,0,p.n_store+p.height*N_PER_GROWTH});
+        // 体の炭素(建設に払った GROW_COST ぶん)と残りのエネルギーは死骸として崩土と一緒に運ばれる
+        corpses.push_back({dep_x,dep_y,std::max(0.f,p.energy)+p.height*GROW_COST,0,p.n_store+p.height*N_PER_GROWTH});
     }
-    // 表土が流される。窒素は消さず、いちばん低い隣のマスへ運ぶ(低い隣が無ければその場に残る)
-    { int x=ci%GRID_W, y=ci/GRID_W, lo=ci; float le=elev[ci];
-      for(int dy=-1;dy<=1;dy++) for(int dx=-1;dx<=1;dx++){
-          if(!dx&&!dy) continue;
-          int nx=x+dx, ny=y+dy;
-          if(nx<0||nx>=GRID_W) continue;
-          if(ny<0||ny>=GRID_H) continue;
-          int j=idx(nx,ny); if(elev[j]<le){ le=elev[j]; lo=j; } }
-      float moved=soil_n[ci]*0.65f;
-      soil_n[ci]-=moved; soil_n[lo]+=moved; }
+    // 巻き込まれた動物は埋まって死ぬ(潜っていても、木の上にいても、立っている表土ごと流される)
+    for(auto& a:animals){
+        if(!a.alive) continue;
+        int gx=(int)a.x, gy=(int)a.y;
+        if(gx<0||gx>=GRID_W||gy<0||gy>=GRID_H||idx(gx,gy)!=ci) continue;
+        a.alive=false; d_slide++;
+        life_note(a.id,g_frame,"崖崩れ",(float)a.age);
+        corpses.push_back({dep_x,dep_y,a.body*CORPSE_RETURN+std::max(0.f,a.energy)+a.fat,1});
+    }
+    if(cur==ci) return;                               // 動けない(下りが無い)なら地形も表土も変わらない
+    // 表土の窒素と土砂を到達点へ運ぶ。崩れた跡は SLIDE_DEPTH_M だけ低くなり、傾斜が緩む
+    float moved=soil_n[ci]*0.65f;
+    soil_n[ci]-=moved; soil_n[cur]+=moved;
+    float dz=SLIDE_DEPTH_M/ELEV_M;
+    elev[ci]-=dz;
+    if(sea[cur]) elev[cur]=std::min(elev[cur]+dz,SEA_LEVEL-1e-6f);  // 海底に沈む。海面より上に出る分は沖へ散る(土砂は帳簿の量ではない)
+    else         elev[cur]+=dz;
+    if(!sea[ci] && elev[ci]<SEA_LEVEL) elev[ci]=SEA_LEVEL;           // 陸のまま(海の判定は起動時の地形で決まる)
+    slope_around(ci); slope_around(cur);
 }
 void update_slides(){
     // 崖崩れ。急斜面が滑り、その場の生物を押し流す
@@ -3667,6 +3714,7 @@ bool load_state(const std::string& fn,int& frame){
 
         // 地形から導かれるものを作り直す
         elev_smooth=elev; box_blur(elev_smooth,4,2);
+        for(int y=0;y<GRID_H;y++) for(int x=0;x<GRID_W;x++) slope_at(x,y);
         // 沿岸の近さを作り直す
         std::fill(coast_w.begin(),coast_w.end(),0.f);
         for(int y=0;y<GRID_H;y++) for(int x=0;x<GRID_W;x++){
@@ -4632,8 +4680,8 @@ static void census_write(int t){
             t,np,t,ns,t,na,t,nm,t,(int)corpses.size());
     fprintf(f,"%d,pop,lineage_plant,n,%d\n%d,pop,lineage_animal,n,%d\n",t,lp,t,la);
     fprintf(f,"%d,pop,repro_plant,n,%ld\n%d,pop,repro_animal,n,%ld\n",t,cs_p_nr,t,cs_a_nr);
-    fprintf(f,"%d,pop,death_starve,cum,%ld\n%d,pop,death_cold,cum,%ld\n%d,pop,death_preyed,cum,%ld\n%d,pop,death_microbe,cum,%ld\n",
-            t,d_starve,t,d_cold,t,d_preyed,t,d_micro);
+    fprintf(f,"%d,pop,death_starve,cum,%ld\n%d,pop,death_cold,cum,%ld\n%d,pop,death_preyed,cum,%ld\n%d,pop,death_microbe,cum,%ld\n%d,pop,death_slide,cum,%ld\n",
+            t,d_starve,t,d_cold,t,d_preyed,t,d_micro,t,d_slide);
     // 遺伝子の分布と選択勾配(繁殖した親の平均 − 集団の平均。sd で割った値も出す)
     std::vector<double> col;
     double v[std::max(N_SG_A,N_SG_P)];
@@ -5722,8 +5770,8 @@ int main(int argc,char** argv){
                          nm, nm?mr2/nm:0.0, nm?mc2/nm:0.0, d_micro, g_mic_upd?100.0*g_mic_cap/g_mic_upd:0.0);
                   g_mic_upd=g_mic_cap=0; }
                 compute_averages();   // レーダー図に重ねる集団平均
-                printf("      deaths: starve %ld  cold %ld  preyed %ld\n",
-                       d_starve,d_cold,d_preyed);
+                printf("      deaths: starve %ld  cold %ld  preyed %ld  slide %ld\n",
+                       d_starve,d_cold,d_preyed,d_slide);
             }
         }
 
