@@ -215,7 +215,20 @@ const float LAND_RH_MEAN    = 0.70f;   // 条件: 陸の地表の日平均の相
 const float FIRE_O2_USE     = CO2_PER_ENERGY;  // 燃焼が消費する酸素。CH2O + O2 → CO2 + H2O で CO2 と 1:1
 const float FIRE_TOL_COST   = LIN(PM(0.075f));  // 厚い樹皮は高くつく [1分あたり 0.000729]
 const float FIRE_DAMAGE     = LIN(PM(9.0f,PLANT_STRIDE),PLANT_STRIDE);  // 炎そのものの破壊力 [1分あたり 0.0292]
-const float FIRE_FUEL_MIN   = 1.5f;
+// 燃料の量。植物の炭素の単位を kg に結びつけ、燃料を面積あたりの乾燥質量 kg/m² で数える。
+// 単位の対応: 植物のあるマスの純一次生産(総光合成 − 維持と建設の呼吸)は、main ffb9158 の t=40000〜50000 の平均で
+// 1 マスあたり 1.0e-3 単位/分(作業用のコピーで測った値を定数として置く。走っている間の測定を規則の入力にはしない)。
+// これが温帯の草地の純一次生産 0.6 kg 乾燥質量/m²/年(Whittaker & Likens 1975)を生育期 180 日に配った値
+// 2.31e-6 kg/m²/分に等しいとする。単位は炭素の量だが、比べる値が乾燥質量なので、1 単位が表す植物の乾燥質量として置く
+const double NPP_TEMPERATE  = 0.6/(180.0*DAY_MIN);   // [kg 乾燥質量/m²/分]
+const double NPP_MODEL_CELL = 1.0e-3;  // [単位/マス/分]
+const float  C_UNIT_KG      = (float)(NPP_TEMPERATE*CELL_M*CELL_M/NPP_MODEL_CELL);   // 炭素 1 単位 = 乾燥質量 [kg]
+const float  FUEL_KG_M2     = C_UNIT_KG/(CELL_M*CELL_M);   // マスの炭素 1 単位あたりの燃料 [kg/m²]
+// 燃料に数えるのは枯れた植物だけ。生きた草葉は含水率が 30〜300% と高く(Rothermel 1972 の生きた燃料)、
+// 燃料の湿りの平衡含水率(枯れた燃料の吸湿)では表せないため。以前は生きた株の高さ × 1.2 を足していた
+// 燃え広がりの下限。Anderson (1982) の 13 の標準燃料モデルで最も軽い燃料床(短い草、モデル 1)の
+// 1 時間燃料 0.74 t/acre = 0.166 kg/m²。これより軽い燃料床は標準のどのモデルにも無い
+const float FIRE_FUEL_MIN   = 0.166f;  // [kg/m²]
 
 // --- 撹乱 ---
 const float SLIDE_SLOPE     = 0.58f;   // これ以上の勾配(30°)で崩れうる。表層崩壊の多くは 30° を超える斜面で起きる
@@ -2245,7 +2258,6 @@ void update_plants(){
         int gx=(int)plants[i].x, gy=(int)plants[i].y;
         if(gx<0||gx>=GRID_W||gy<0||gy>=GRID_H) continue;
         pgrid.put(idx(gx,gy),i);
-        fuel[idx(gx,gy)]+=plants[i].height*1.2f;
     }
     std::fill(canopy_h.begin(),canopy_h.end(),0.f);
     auto t_a=std::chrono::steady_clock::now();
@@ -2842,7 +2854,7 @@ void update_animals(){
         if(cp.origin!=0) continue;            // 燃えるのは枯れた植物
         int gx=(int)cp.x, gy=(int)cp.y;
         if(gx<0||gx>=GRID_W||gy<0||gy>=GRID_H) continue;
-        fuel[idx(gx,gy)]+=cp.energy;
+        fuel[idx(gx,gy)]+=cp.energy*FUEL_KG_M2;   // 枯れた細い燃料の乾燥質量 [kg/m²]
     }
     // 食べたのに同化しなかった分(糞)と、齧るときに落とした葉は、そのマスの死骸(分解物)になる。
     // 食べ物の炭素 = 同化 + 糞・落とした葉(質量保存)。マスごとに貯めて、更新の終わりに死骸へ移す
@@ -5588,11 +5600,11 @@ int main(int argc,char** argv){
                   for(const auto& p:plants){ sfi+=p.fire_tol; scl2+=p.climb; sx+=p.sexual; }
                   double asx=0; for(const auto& a:animals) asx+=a.sexual;
                   // 燃料の湿りの陸の平均と、燃えうる(消炎含水率 FIRE_MX を下回り、燃料が下限を超える)陸の割合
-                  double fm=0; long nl=0, nburnable=0;
+                  double fm=0, fl=0, fmax=0; long nl=0, nburnable=0;
                   for(int i=0;i<GRID_W*GRID_H;i++){ if(sea[i]||fuel_moist[i]<0.f) continue;
-                      fm+=fuel_moist[i]; nl++; if(fuel_moist[i]<FIRE_MX && fuel[i]>=FIRE_FUEL_MIN) nburnable++; }
-                  printf("      fire:%.0f cells (%ld ignitions) | fuelM %.3f burnable %.1f%% | fireTol:%.3f climb:%.3f | sexual P:%.3f A:%.3f\n",
-                         fire_area,fire_events,nl?fm/nl:0.0,nl?100.0*nburnable/nl:0.0,n?sfi/n:0.0,n?scl2/n:0.0,
+                      fm+=fuel_moist[i]; nl++; fl+=fuel[i]; fmax=std::max(fmax,(double)fuel[i]); if(fuel_moist[i]<FIRE_MX && fuel[i]>=FIRE_FUEL_MIN) nburnable++; }
+                  printf("      fire:%.0f cells (%ld ignitions) | fuelM %.3f load %.2e (max %.3f) kg/m2 burnable %.1f%% | fireTol:%.3f climb:%.3f | sexual P:%.3f A:%.3f\n",
+                         fire_area,fire_events,nl?fm/nl:0.0,nl?fl/nl:0.0,fmax,nl?100.0*nburnable/nl:0.0,n?sfi/n:0.0,n?scl2/n:0.0,
                          n?sx/n:0.0,(int)animals.size()?asx/animals.size():0.0); }
                 { double sab=0,spe=0; int nup=0;
                   for(const auto& a:animals){ sab+=a.arboreal; spe+=a.perch;
