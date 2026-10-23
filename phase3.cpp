@@ -275,7 +275,10 @@ const float FALL_DAMAGE     = 0.9f;    // 落下で失うエネルギー(高さ�
 const float TEMP_WIDTH_P    = 18.0f;
 
 // --- 動物 ---
-const float A_MAX_SPEED     = LIN(PM(0.20f,ANIMAL_STRIDE),ANIMAL_STRIDE);  // [1分あたり 0.000972]
+// 歩く速さ。地面を歩く昆虫の走る速さは秒速 0.5〜10 cm(アリ 1〜5 cm/s、オサムシ 5〜10 cm/s。Full & Tu 1991 など)。
+// 遺伝子 speed = 1 で上限の 10 cm/s = 6 m/分 = 0.6 マス/分。以前は 0.000972 マス/分(0.016 cm/s)で、実際より 600 倍遅かった
+const double A_VMAX         = 0.10*60.0/CELL_M;               // 10 cm/s → 0.6 マス/分(1マス = 10 m)
+const float A_MAX_SPEED     = LIN(A_VMAX,ANIMAL_STRIDE);  // [1分あたり 0.6 マス]
 // 基礎代謝(安静時の呼吸)。組織の炭素 1 あたり、1 分あたりの量。
 // 地面を歩く小さな昆虫の安静時の O2 消費は 20〜25℃ で約 0.3 ml O2 /g(生重)/時(Chown & Nicolson 2004、Addo-Bediako et al. 2002)。
 // 呼吸商 1 で 0.3 ml CO2 = 1.34e-5 mol C = 1.6e-4 g C /g/時。生重 1 g の炭素は約 0.15 g(乾燥 30%、その半分が炭素)なので、
@@ -285,7 +288,14 @@ const float A_SMR           = LIN(1.8e-5,ANIMAL_STRIDE);
 // 以前は 1 個体あたりの定数で、旧い基礎代謝 A_METAB(1 個体あたり 1.94e-4 /分)と並べて置かれていた。
 // 形質どうしの費用の比はそのまま残し、旧い基礎代謝に対する比を、今の基礎代謝(組織の炭素あたり)への上乗せの比として使う
 const float A_TRAIT_REF     = LIN(PM(0.040f,ANIMAL_STRIDE),ANIMAL_STRIDE);  // 形質の費用を測る基準(旧い A_METAB) [1分あたり 0.000194]
-const float A_MOVE_COST     = 0.060f;   // 体 1(生重 100 mg)の個体の歩く費用。距離あたり
+// 歩く費用(距離あたり)。脚で歩く動物の最小の移動の費用は 10.7 M^-0.316 J/kg/m(Taylor et al. 1982)で、
+// 昆虫も同じ線に乗る(Full & Tu 1991)。体 1 = 生重 100 mg では 197 J/kg/m、一匹で 0.0197 J/m = 0.197 J/マス。
+// エネルギーの単位は炭素(体 1 の組織の炭素 15 mg = CORPSE_RETURN 2.5、1 単位 = 6 mg C)。呼吸商 1 で
+// 1 mg C の酸化は O2 1.87 ml、20.1 J/ml O2 なので 37.5 J/mg C、1 単位 = 225 J。
+// 以前は 0.060 /マス で実際の約 70 倍だったが、速さが約 600 倍遅かったので、1 日の歩く費用は打ち消し合っていた
+const double A_COT_JM       = 10.7*std::pow(1.0e-4,-0.316)*1.0e-4;   // 体 1 の一匹の距離あたりの費用 [J/m]
+const double A_E_UNIT_J     = 6.0*(22.4/12.0)*20.1;                   // エネルギー 1 単位 [J]
+const float A_MOVE_COST     = (float)(A_COT_JM*CELL_M/A_E_UNIT_J);   // 体 1 の個体の歩く費用。距離あたり [8.8e-4 /マス]
 // 歩く費用は体の重さの 0.68 乗に比例する。昆虫の歩行の正味の移動の費用(体重あたり、距離あたり)は M^-0.32
 // (Full & Tu 1991、Lighton et al. 1987)なので、一匹が距離あたりに使う量は M^0.68。以前は体の大きさによらない定数
 const float A_MOVE_EXP      = 0.68f;
