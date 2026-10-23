@@ -287,6 +287,10 @@ const float TEMP_WIDTH_P    = 18.0f;
 // 遺伝子 speed = 1 で上限の 10 cm/s = 6 m/分 = 0.6 マス/分。以前は 0.000972 マス/分(0.016 cm/s)で、実際より 600 倍遅かった
 const double A_VMAX         = 0.10*60.0/CELL_M;               // 10 cm/s → 0.6 マス/分(1マス = 10 m)
 const float A_MAX_SPEED     = LIN(A_VMAX,ANIMAL_STRIDE);  // [1分あたり 0.6 マス]
+// 走れる速さの上限は脚の長さ、つまり体の大きさで決まる。小さな動物の最高速度は M^0.26 に比例する
+// (Hirt et al. 2017、陸の動物 474 種。昆虫を含む小さい側の傾き)。上の 10 cm/s は体 1(生重 100 mg)の値。
+// 以前は体の大きさによらず、生重 3 mg の幼い個体も体 1 と同じ 10 cm/s まで走れた
+const float A_VMAX_EXP      = 0.26f;
 // 基礎代謝(安静時の呼吸)。組織の炭素 1 あたり、1 分あたりの量。
 // 地面を歩く小さな昆虫の安静時の O2 消費は 20〜25℃ で約 0.3 ml O2 /g(生重)/時(Chown & Nicolson 2004、Addo-Bediako et al. 2002)。
 // 呼吸商 1 で 0.3 ml CO2 = 1.34e-5 mol C = 1.6e-4 g C /g/時。生重 1 g の炭素は約 0.15 g(乾燥 30%、その半分が炭素)なので、
@@ -3032,7 +3036,7 @@ void update_animals(){
         a.aerobic = o2fit;
 
         a.dir+=frand(-a.turn*turn_mult,a.turn*turn_mult)*TURN_SCALE;   // 1 回の更新ぶんの向きのゆらぎ
-        float sp=a.speed*A_MAX_SPEED*thrust_mult*terr*o2fit;
+        float sp=a.speed*A_MAX_SPEED*std::pow(std::max(a.body,1e-6f),A_VMAX_EXP)*thrust_mult*terr*o2fit;
         float nx=a.x+std::cos(a.dir)*sp, ny=a.y+std::sin(a.dir)*sp;
         if(nx<0.f){ nx=0.f; a.dir=3.14159265f-a.dir; }       // 東西の端も南北と同じく区画の縁
         if(nx>=GRID_W){ nx=GRID_W-1.f; a.dir=3.14159265f-a.dir; }
