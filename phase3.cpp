@@ -4200,6 +4200,8 @@ std::string save_summary(const std::string& fn){
 // だからシミュレーションの結果とログは、書き出しの有無で変わらない
 int g_dump_every=0;     // --dump-brains 間隔(tick)。0 なら書き出さない
 int g_dump_max=1000;    // --dump-max 一回に書き出す動物の上限(生きている順に等間隔で選ぶ)
+std::string g_series_path;   // --assay-series ファイル。書き出すたびに、同じ動物を試験器にかけて 1 行ずつ足す
+static void assay_series(int t,const std::vector<int>& pick);
 
 void dump_brains(int t){
     std::vector<int> alive_idx;
@@ -4214,8 +4216,10 @@ void dump_brains(int t){
             t,n,N_SENSOR,N_TUNE,N_IN,N_OUT,N_REC,MAX_LAYER,MAX_NODE,N_W);
     fprintf(f,"# id gen lin body size | sensor(angle range tune) x%d | ngain x%d | w x%d  (16進の浮動小数で正確に保存)\n",
             N_SENSOR,N_NODE,N_W);
+    std::vector<int> pick;
     for(size_t q=0;q<alive_idx.size();q+=stride){
         const Animal& a=animals[alive_idx[q]];
+        pick.push_back(alive_idx[q]);
         fprintf(f,"%d %d %d %a %a",a.id,a.gen,a.lin,a.body,a.size);
         for(int k=0;k<N_SENSOR;k++) fprintf(f," %a %a %a",a.sen[k].angle,a.sen[k].range,a.sen[k].tune);
         for(int k=0;k<N_NODE;k++)   fprintf(f," %a",a.ngain[k]);
@@ -4223,6 +4227,7 @@ void dump_brains(int t){
         fprintf(f,"\n");
     }
     fclose(f);
+    if(!g_series_path.empty()) assay_series(t,pick);
 }
 
 // 試験器(--assay ファイル)。書き出した神経網に標準の刺激を与え、
@@ -4535,6 +4540,34 @@ static int run_assay(const std::string& path,const std::string& save_path,int ma
     return 0;
 }
 
+// 測定の道具 6: 進化の時間変化(--assay-series ファイル、--dump-brains と一緒に使う)。
+// 書き出した動物を、そのまま・再帰を切ったものの両方で試験器にかけ、四つの性質が検出された
+// 割合を 1 回 1 行ずつ足す。試験器は乱数を使わず、世界の状態を読むだけで、標準出力にも書かない。
+// だからシミュレーションの結果とログは変わらない(試験器の計算の時間だけ、その tick が遅くなる)
+static void assay_series(int t,const std::vector<int>& pick){
+    static FILE* fs=nullptr;
+    if(!fs){
+        fs=fopen(g_series_path.c_str(),"w");
+        if(!fs) return;
+        fprintf(fs,"t,mode,n,settled,v,p,s,g,all,v_pct,p_pct,s_pct,g_pct,all_pct,persist_mean\n");
+    }
+    for(int m=0;m<2;m++){
+        int cnt[5]={0}, nset=0; double pers=0;
+        for(int i:pick){
+            AssayResult X=assay_brain(animals[i],m==1);
+            if(!X.settled) continue;
+            nset++;
+            cnt[0]+=X.v; cnt[1]+=X.p; cnt[2]+=X.s; cnt[3]+=X.g; cnt[4]+=(X.v&&X.p&&X.s&&X.g);
+            pers+=X.persist;
+        }
+        fprintf(fs,"%d,%s,%d,%d",t,m?"lesion":"intact",(int)pick.size(),nset);
+        for(int q=0;q<5;q++) fprintf(fs,",%d",cnt[q]);
+        for(int q=0;q<5;q++) fprintf(fs,",%.2f",nset?100.0*cnt[q]/nset:0.0);
+        fprintf(fs,",%.3f\n",nset?pers/nset:0.0);
+    }
+    fflush(fs);
+}
+
 // ===== 研究の測定の道具 5: 全体の記録 =====
 // --census N: N tick ごとに census.csv へ、個体数・遺伝子の分布・選択勾配・環境の出来事を書く。
 // 条件どうしを比べるため、どの実行でも同じ列・同じ間隔で書く(1 行 1 値: t,group,name,stat,value)。
@@ -4650,6 +4683,7 @@ int main(int argc,char** argv){
         if(a=="--trigger-max" && i+1<argc) g_trig_max=std::max(0,std::stoi(argv[++i]));
         if(a=="--positive-control" && i+1<argc) g_pc_n=std::max(0,std::stoi(argv[++i]));
         if(a=="--no-recurrent"     && i+1<argc) g_lesion_n=std::max(0,std::stoi(argv[++i]));
+        if(a=="--assay-series" && i+1<argc) g_series_path=argv[++i];
         if(a=="--census"      && i+1<argc) g_census_every=std::max(0,std::stoi(argv[++i]));
     }
     field_open();
