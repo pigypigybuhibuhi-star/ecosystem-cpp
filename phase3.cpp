@@ -204,12 +204,14 @@ const float O2_PER_CO2      = 1.00f;
 // 酸素が17%未満では燃え広がらず、35%を超えると消火が困難になる(火の窓)
 // 地球の21%を1.0とした比。17%未満では広がらず、35%超で消火困難
 const float FIRE_O2_MIN     = 0.81f;   // 17% / 21%
-const float FIRE_O2_WET     = 1.67f;   // 35% / 21%
 const float FIRE_IGNITE     = FRAC(PMF(8.0e-8f));  // 落雷による着火率/マス/tick [率 7.78e-10 /分]
 const float FIRE_SPREAD     = FRAC(PMF(0.20f));  // 隣へ移る強さ [率 0.00217 /分]
 const float FIRE_BURN       = FRAC(PMF(0.45f));  // 一tickで燃える燃料の割合 [率 0.00581 /分]
 const float FIRE_DECAY      = FRAC(PMF(0.38f));  // 火勢の減衰。燃え尽きたら消える [率 0.00465 /分]
-const float FIRE_MOIST      = 0.55f;   // これ以上湿っていると燃えにくい
+// 燃料の湿り(乾燥質量あたりの水の比)。土の水分ではなく、大気の相対湿度と気温から決まる平衡含水率へ時定数で追従する
+const float FIRE_MX         = 0.25f;   // 消炎含水率。Anderson (1982) の 13 の標準燃料モデルの中央値(12〜40%)
+const float FUEL_M_LAG      = FRAC(1.0/60.0);  // 1 時間燃料(細い枯れ草・小枝)の時定数 60 分(Fosberg & Deeming 1971)
+const float LAND_RH_MEAN    = 0.70f;   // 条件: 陸の地表の日平均の相対湿度(Dai 2006)。水蒸気圧は一日の中で変わらないとし、日変化は気温から出す
 const float FIRE_O2_USE     = CO2_PER_ENERGY;  // 燃焼が消費する酸素。CH2O + O2 → CO2 + H2O で CO2 と 1:1
 const float FIRE_TOL_COST   = LIN(PM(0.075f));  // 厚い樹皮は高くつく [1分あたり 0.000729]
 const float FIRE_DAMAGE     = LIN(PM(9.0f,PLANT_STRIDE),PLANT_STRIDE);  // 炎そのものの破壊力 [1分あたり 0.0292]
@@ -715,6 +717,7 @@ std::vector<Corpse> corpses;
 std::vector<std::vector<int>> corpse_grid(GRID_W*GRID_H);
 std::vector<float> corpse_density(GRID_W*GRID_H,0.f);
 std::vector<float> fuel(GRID_W*GRID_H,0.f);
+std::vector<float> fuel_moist(GRID_W*GRID_H,-1.f);  // 燃料の含水率。負は未設定(最初の更新で平衡の値を置く)
 std::vector<float> fire(GRID_W*GRID_H,0.f);
 std::vector<float> fire_buf(GRID_W*GRID_H,0.f);
 std::vector<float> canopy_h(GRID_W*GRID_H,0.f);   // そのマスで最も高い植物の高さ
@@ -2124,7 +2127,35 @@ void update_microbes(){
 
 // 山火事。落雷で着火し、乾いた燃料の上を風下へ広がる。
 // 埋もれた炭素を大気に戻し、焼け跡という新しい場所を開く。
+
+// 枯れた細い燃料の平衡含水率(乾燥質量あたりの比)。Simard (1968) の式。湿度は %、気温は °F で書かれている
+inline float emc_simard(float rh,float tc){
+    float H=100.f*rh, T=tc*1.8f+32.f, m;
+    if(H<10.f)      m=0.03229f+0.281073f*H-0.000578f*H*T;
+    else if(H<50.f) m=2.22749f+0.160107f*H-0.01478f*T;
+    else            m=21.0606f+0.005565f*H*H-0.00035f*H*T-0.483199f*H;
+    return std::max(0.f,m)*0.01f;
+}
+// 燃料の湿りを大気に追従させる。水蒸気圧は日平均の気温と条件の相対湿度で決まり、一日の中では変わらない。
+// 昼に気温が上がれば相対湿度が下がり(飽和水蒸気圧はマグヌスの式)、燃料は時定数で乾く
+void update_fuel_moisture(){
+    parallel_for(0,GRID_H,[&](int ya,int yb){
+        for(int y=ya;y<yb;y++) for(int x=0;x<GRID_W;x++){
+            int i=idx(x,y);
+            if(sea[i]) continue;
+            float tn=temper[i];
+            float tm=tn-DIURNAL_LAND*(daylit[i]-0.5f);       // 日平均の気温
+            float rh=LAND_RH_MEAN*std::exp(17.62f*tm/(243.12f+tm)-17.62f*tn/(243.12f+tn));
+            if(rh>1.f) rh=1.f;
+            float emc=emc_simard(rh,tn);
+            if(fuel_moist[i]<0.f) fuel_moist[i]=emc;          // 起動時と、古いセーブの読み込みの後は平衡の値から
+            else fuel_moist[i]+=(emc-fuel_moist[i])*FUEL_M_LAG;
+        }
+    });
+}
+
 void update_fire(int frame){
+    update_fuel_moisture();
     // 酸素の分圧で判定する。窒素のない世界なので、他のガスとの比で見る
     float o2m=0.f, tot=0.f;
     for(int i=0;i<GRID_W*GRID_H;i++){ o2m+=o2[i]; tot+=o2[i]+co2[i]+N2_BASE; }
@@ -2135,8 +2166,8 @@ void update_fire(int frame){
         std::fill(fire.begin(),fire.end(),0.f);
         return;
     }
-    // 酸素が多いほど、湿った燃料まで燃えるようになる
-    float wet_ok=FIRE_MOIST*std::min(2.0f,o2r/FIRE_O2_WET);
+    // 酸素が多いほど、湿った燃料まで燃えるようになる。今の大気(21%)で消炎含水率が実測の値になる
+    float wet_ok=FIRE_MX*std::min(2.0f,o2r);
 
     if(g_replay){
         // 再生中: 落雷と燃え広がりを止め、記録の各件だけを置く。
@@ -2156,7 +2187,7 @@ void update_fire(int frame){
         for(int x=0;x<GRID_W;x++){
             int i=idx(x,y);
             if(sea[i]||fuel[i]<FIRE_FUEL_MIN){ fire_buf[i]=0.f; continue; }
-            if(soil_water[i]>wet_ok){ fire_buf[i]=fire[i]*(1.f-FIRE_DECAY*2.f); continue; }
+            if(fuel_moist[i]>=wet_ok){ fire_buf[i]=fire[i]*(1.f-FIRE_DECAY*2.f); continue; }
             float f=fire[i];
             // 風下へ移る。隣の火勢を集める
             int up=(wind[y]>0)?x-1:x+1;
@@ -2165,7 +2196,9 @@ void update_fire(int frame){
             if(y<GRID_H-1)   nb+=fire[idx(x,y+1)];
             if(x<GRID_W-1)   nb+=fire[idx(x+1,y)];
             if(x>0)          nb+=fire[idx(x-1,y)];
-            float dryness=1.f-clamp01(soil_water[i]/std::max(0.05f,wet_ok));
+            // 湿りによる燃焼の弱まり(Rothermel 1972 の η_M)。消炎含水率で 0
+            float r=fuel_moist[i]/wet_ok;
+            float dryness=std::max(0.f,1.f-2.59f*r+5.11f*r*r-3.52f*r*r*r);
             f+=nb*FIRE_SPREAD*dryness;
             if(dist01(rng)<FIRE_IGNITE*dryness*o2r) { f+=1.f; fire_events++; }
             f*=(1.f-FIRE_DECAY);
@@ -3494,6 +3527,7 @@ std::vector<Fld<int>> cell_schema(){
     fv("soil_n",soil_n,SOIL_N_BASE); fv("soil_water",soil_water,0.4);
     fv("pload",pload,0); fv("aload",aload,0);
     iv("burn_age",burn_age,999999);
+    fv("fuel_moist",fuel_moist,-1);
     for(int k=0;k<N_ODOR;k++) fv("odor"+std::to_string(k),odor[k],0);
     for(int k=0;k<N_IMMUNE;k++){
         fv("pstrain"+std::to_string(k),pstrain[k],0.5);
@@ -5553,8 +5587,12 @@ int main(int argc,char** argv){
                 { double sfi=0,scl2=0,sx=0;
                   for(const auto& p:plants){ sfi+=p.fire_tol; scl2+=p.climb; sx+=p.sexual; }
                   double asx=0; for(const auto& a:animals) asx+=a.sexual;
-                  printf("      fire:%.0f cells (%ld ignitions) | fireTol:%.3f climb:%.3f | sexual P:%.3f A:%.3f\n",
-                         fire_area,fire_events,n?sfi/n:0.0,n?scl2/n:0.0,
+                  // 燃料の湿りの陸の平均と、燃えうる(消炎含水率 FIRE_MX を下回り、燃料が下限を超える)陸の割合
+                  double fm=0; long nl=0, nburnable=0;
+                  for(int i=0;i<GRID_W*GRID_H;i++){ if(sea[i]||fuel_moist[i]<0.f) continue;
+                      fm+=fuel_moist[i]; nl++; if(fuel_moist[i]<FIRE_MX && fuel[i]>=FIRE_FUEL_MIN) nburnable++; }
+                  printf("      fire:%.0f cells (%ld ignitions) | fuelM %.3f burnable %.1f%% | fireTol:%.3f climb:%.3f | sexual P:%.3f A:%.3f\n",
+                         fire_area,fire_events,nl?fm/nl:0.0,nl?100.0*nburnable/nl:0.0,n?sfi/n:0.0,n?scl2/n:0.0,
                          n?sx/n:0.0,(int)animals.size()?asx/animals.size():0.0); }
                 { double sab=0,spe=0; int nup=0;
                   for(const auto& a:animals){ sab+=a.arboreal; spe+=a.perch;
