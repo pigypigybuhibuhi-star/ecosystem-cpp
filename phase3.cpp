@@ -149,6 +149,7 @@ const float COAST_CHILL     = 0.55f;   // 沿岸の海が陸の気温に引か�
 const float EVAP_COEF       = 0.050f;  // 海面温度あたりの蒸発量
 const float MOIST_CAP       = 8.00f;   // 大気が運べる水蒸気の上限
 const float LAND_RECYCLE    = 0.040f;  // 陸からの蒸発散(水分の再循環)
+const float AIR_IN_RH       = 0.75f;   // 風上の端から入る空気の相対湿度(条件。地表の年平均は海 0.8・陸 0.7 ほど、Dai 2006)
 const float RAIN_BASE       = 0.024f;  // 対流による降水率
 const float OROGRAPHIC      = 10.0f;   // 地形性降雨(斜面を上る空気は雨を落とす)
 const int   ORO_SPAN        = 6;       // 斜面を測る幅。広いほど雨陰がなだらかになる
@@ -510,6 +511,7 @@ const int BUDGET_EVERY = 600;
 struct Budget {
     double c_relax=0, c_trans=0;     // 大気CO2: 基準値への緩和(海・岩石との交換とみなす) / 輸送の数値誤差と下限での切り捨て
     double o_relax=0, o_trans=0;     // 大気O2: 同上
+    double c_edge=0, o_edge=0;       // 東西の端での区画の外の空気との交換(風が運ぶ出入り)
     double n_sink=0, n_runoff=0, n_upwell=0, n_clamp=0;   // 海の窒素: 沈降・河川流入・湧昇・上下限の切り捨て
     double n_fix=0;                  // 大気の N2 からの窒素固定(大気の N2 は帳簿の外)
     double n_fire=0;                 // 燃えた組織の窒素は揮発して大気へ出る(N2・NOx。大気は帳簿の外)
@@ -1256,16 +1258,16 @@ void box_blur(std::vector<float>& f,int R,int passes){
     tmp.assign(GRID_W*GRID_H,0.f);
     float inv=1.f/(2*R+1);
     for(int p=0;p<passes;p++){
-        for(int y=0;y<GRID_H;y++){                    // 東西はループ
+        for(int y=0;y<GRID_H;y++){                    // 東西も端で止める(開いた境界)
             float sum=0.f;
             for(int dx=-R;dx<=R;dx++){
-                int nx=((dx%GRID_W)+GRID_W)%GRID_W;
+                int nx=std::max(0,std::min(GRID_W-1,dx));
                 sum+=f[idx(nx,y)];
             }
             for(int x=0;x<GRID_W;x++){
                 tmp[idx(x,y)]=sum*inv;
-                int o=((x-R)%GRID_W+GRID_W)%GRID_W;
-                int i=((x+R+1)%GRID_W+GRID_W)%GRID_W;
+                int o=std::max(0,std::min(GRID_W-1,x-R));
+                int i=std::max(0,std::min(GRID_W-1,x+R+1));
                 sum+=f[idx(i,y)]-f[idx(o,y)];
             }
         }
@@ -1294,7 +1296,7 @@ void fill_depressions(std::vector<float>& z, float sea_lv){
     for(int i=0;i<GRID_W*GRID_H;i++)
         if(z[i]<sea_lv){ done[i]=1; pq.push({z[i],i}); }
     // 南の端(海)だけを出口にする。北の端は傾動する地塊の頂(分水嶺)で、
-    // 区画の外から川は入らず、外へも流れ出ない(条件)。北の端を出口にすると、
+    // 区画の外から川は入らず、外へも流れ出ない(条件)。東西の端も同じく、川の出入りは無いとする。北の端を出口にすると、
     // そこは削られずに隆起だけを受ける基準面になり、高さが限りなく伸びる
     for(int x=0;x<GRID_W;x++){
         int i=idx(x,GRID_H-1);
@@ -1306,7 +1308,7 @@ void fill_depressions(std::vector<float>& z, float sea_lv){
         for(int d=0;d<4;d++){
             const int DX[4]={1,-1,0,0}, DY[4]={0,0,1,-1};
             int nx=x+DX[d], ny=y+DY[d];
-            if(nx<0) nx+=GRID_W; if(nx>=GRID_W) nx-=GRID_W;
+            if(nx<0||nx>=GRID_W) continue;
             if(ny<0||ny>=GRID_H) continue;
             int j=idx(nx,ny);
             if(done[j]) continue;
@@ -1333,7 +1335,7 @@ void route_flow(const std::vector<float>& zf, const std::vector<float>& rain,
         int best=-1; float bs=0.f;
         for(int d=0;d<8;d++){
             int nx=x+DX[d], ny=y+DY[d];
-            if(nx<0) nx+=GRID_W; if(nx>=GRID_W) nx-=GRID_W;
+            if(nx<0||nx>=GRID_W) continue;
             if(ny<0||ny>=GRID_H) continue;
             int j=idx(nx,ny);
             float len=(d<4)?1.f:1.41421f;
@@ -1359,7 +1361,7 @@ void relax_repose(std::vector<float>& zm,int max_pass){
             if(zm[i]<0.f) continue;
             for(int d=0;d<4;d++){
                 int nx=x+DX[d], ny=y+DY[d];
-                if(nx<0) nx+=GRID_W; if(nx>=GRID_W) nx-=GRID_W;
+                if(nx<0||nx>=GRID_W) continue;
                 if(ny<0||ny>=GRID_H) continue;
                 int j=idx(nx,ny);
                 if(zm[j]<0.f) continue;
@@ -1392,7 +1394,7 @@ void erode_step(std::vector<float>& z, const std::vector<float>& rain,
         if(z[i]<sea_lv) continue;
         if(acc[i]<CHANNEL_AREA) continue;  // 谷頭より上は川が無い
         int x1=i%GRID_W, y1=i/GRID_W, x2=r%GRID_W, y2=r/GRID_W;
-        int dx=x1-x2; if(dx>GRID_W/2) dx-=GRID_W; if(dx<-GRID_W/2) dx+=GRID_W;
+        int dx=x1-x2;
         int dy=y1-y2;
         float dist=std::sqrt((float)(dx*dx+dy*dy))*CELL_M;               // m
         float area=acc[i]*CELL_M*CELL_M;                                  // m²
@@ -1434,7 +1436,7 @@ void compute_currents(){
 // 3. 隆起と川の侵食(ストリームパワー則)と斜面拡散を繰り返し、谷と尾根を刻ませる
 // 4. すべて m・年の単位で計算するので、出てきた高さをそのまま使う(写し直さない)
 // 5. 安息角より急な斜面を崩し、物質を下へ移す(質量は保つ)
-// 東西は他の場(風・匂い・生き物の移動)と同じくつながっているので、継ぎ目の無い形にする
+// 東西は開いた境界。区画の外とはつながらない(外の空気の出入りは風の計算で条件として与える)
 void init_terrain(){
     const int N=GRID_W*GRID_H;
     // 起伏。オクターブごとに 0〜1 へ揃え、最後に標準偏差で正規化する
@@ -1481,9 +1483,9 @@ void init_terrain(){
     for(int i=0;i<N;i++) sea[i]=(elev[i]<SEA_LEVEL)?1:0;
     // 勾配は m/m で持つ(崖崩れと歩く速さが物理の勾配で判断できるように)
     for(int y=0;y<GRID_H;y++) for(int x=0;x<GRID_W;x++){
-        int xr=(x+1)%GRID_W, xl=(x-1+GRID_W)%GRID_W;
+        int xr=std::min(GRID_W-1,x+1), xl=std::max(0,x-1);
         int yu=std::max(0,y-1), yd=std::min(GRID_H-1,y+1);
-        float gx=(elev[idx(xr,y)]-elev[idx(xl,y)])*0.5f;
+        float gx=(elev[idx(xr,y)]-elev[idx(xl,y)])/(float)(xr-xl);
         float gy=(elev[idx(x,yd)]-elev[idx(x,yu)])/(float)(yd-yu);
         slope[idx(x,y)]=std::sqrt(gx*gx+gy*gy)*ELEV_M/CELL_M;
     }
@@ -1503,7 +1505,7 @@ void init_terrain(){
         for(int dy=-SHELF_RANGE;dy<=SHELF_RANGE;dy++)
         for(int dx=-SHELF_RANGE;dx<=SHELF_RANGE;dx++){
             int nx=x+dx, ny=y+dy;
-            if(nx<0) nx+=GRID_W; if(nx>=GRID_W) nx-=GRID_W;
+            if(nx<0||nx>=GRID_W) continue;
             if(ny<0||ny>=GRID_H) continue;
             if(sea[idx(nx,ny)]) continue;
             float d=std::sqrt((float)(dx*dx+dy*dy));
@@ -1518,7 +1520,8 @@ void init_terrain(){
         for(int x=0;x<GRID_W;x++){
             int i=idx(x,y);
             if(!sea[i]) continue;
-            int back=((x-d)%GRID_W+GRID_W)%GRID_W;   // 風上側
+            int back=x-d;                              // 風上側
+            if(back<0||back>=GRID_W) continue;         // 区画の外は外洋とみなす(陸からの離岸風は無い)
             if(!sea[idx(back,y)] && shelf[i]>0.4f) upwell[i]=1;
         }
     }
@@ -1531,7 +1534,7 @@ void init_terrain(){
         for(int dy=-COAST_RANGE;dy<=COAST_RANGE;dy++)
         for(int dx=-COAST_RANGE;dx<=COAST_RANGE;dx++){
             int nx=x+dx, ny=y+dy;
-            if(nx<0) nx+=GRID_W; if(nx>=GRID_W) nx-=GRID_W;
+            if(nx<0||nx>=GRID_W) continue;
             if(ny<0||ny>=GRID_H) continue;
             if(sea[idx(nx,ny)]) continue;
             float d=std::sqrt((float)(dx*dx+dy*dy));
@@ -1558,7 +1561,7 @@ void compute_rivers(){
         for(int dy=-1;dy<=1;dy++) for(int dx=-1;dx<=1;dx++){
             if(dx==0&&dy==0) continue;
             int nx=x+dx, ny=y+dy;
-            if(nx<0) nx+=GRID_W; if(nx>=GRID_W) nx-=GRID_W;
+            if(nx<0||nx>=GRID_W) continue;
             if(ny<0||ny>=GRID_H) continue;
             int ni=idx(nx,ny);
             if(elev[ni]<lowest){ lowest=elev[ni]; best=ni; }
@@ -1579,11 +1582,11 @@ void compute_precip(){
         int x0=(d>0)?0:GRID_W-1;
         // 大気の大循環による上昇の強さは条件。区画の緯度で評価する
         float lift=0.5f+0.5f*std::cos(LAT_N*3.14159265f*3.f);
-        float m=0.f;
-        // 東西はループしているので、数周させて定常状態に落ち着かせる
-        for(int lap=0;lap<3;lap++){
+        // 風上の端から入る空気の水蒸気は条件。相対湿度 AIR_IN_RH の空気が、端の気温で入る
+        float m=AIR_IN_RH*MOIST_CAP*clamp01((temper[idx(x0,y)]+20.f)/50.f);
+        {
             for(int st=0;st<GRID_W;st++){
-                int x=((x0+d*st)%GRID_W+GRID_W)%GRID_W;
+                int x=x0+d*st;
                 int i=idx(x,y);
                 if(sea[i]){
                     float sst=std::max(0.f,temper[i]);
@@ -1595,9 +1598,10 @@ void compute_precip(){
                 // 空気が保持できる量は気温で決まる。冷えれば溢れて降る
                 float cap=MOIST_CAP*clamp01((temper[i]+20.f)/50.f);
                 // 斜面は広い幅で測る。1セルの凹凸で雨を落とし切らせない
-                int up=((x-d*ORO_SPAN)%GRID_W+GRID_W)%GRID_W;
-                float rise=std::max(0.f,(elev_smooth[i]-elev_smooth[idx(up,y)])
-                                        /(float)ORO_SPAN);
+                int up=std::max(0,std::min(GRID_W-1,x-d*ORO_SPAN));
+                int span=std::abs(x-up);                  // 風上の端の近くでは測れる幅が縮む
+                float rise=(span>0)?std::max(0.f,(elev_smooth[i]-elev_smooth[idx(up,y)])
+                                        /(float)span):0.f;
                 float rate=RAIN_BASE*lift+OROGRAPHIC*rise;
                 float rain=m*rate+std::max(0.f,m-cap)*0.5f;
                 if(rain>m) rain=m;
@@ -1742,14 +1746,21 @@ inline double grid_sum(const std::vector<float>& g){
 }
 void update_gases(){
     double s0[2]={grid_sum(co2),grid_sum(o2)};
+    // 東西は開いた境界。風上の端からは区画の外の空気(基準の濃度。条件)が入り、
+    // 風下の端からは区画の空気が出ていく。その出入りを端の交換として数える
+    double edge[2]={0,0};
     for(int y=0;y<GRID_H;y++){
         float u=wind[y];
         if(std::fabs(u)<1e-4f) continue;
         for(int pass=0;pass<2;pass++){
             std::vector<float>& g=(pass==0)?co2:o2;
+            float base=(pass==0)?CO2_BASE:O2_BASE;
+            int xin=(u>0)?0:GRID_W-1, xout=(u>0)?GRID_W-1:0;
+            edge[pass]+=((double)base-g[idx(xout,y)])*std::fabs(u);
             for(int x=0;x<GRID_W;x++){
-                int up=(u>0)?(x-1+GRID_W)%GRID_W:(x+1)%GRID_W;
-                gbuf[idx(x,y)]=g[idx(x,y)]+(g[idx(up,y)]-g[idx(x,y)])*std::fabs(u);
+                int up=(u>0)?x-1:x+1;
+                float gu=(x==xin)?base:g[idx(up,y)];
+                gbuf[idx(x,y)]=g[idx(x,y)]+(gu-g[idx(x,y)])*std::fabs(u);
             }
             for(int x=0;x<GRID_W;x++) g[idx(x,y)]=gbuf[idx(x,y)];
         }
@@ -1762,7 +1773,7 @@ void update_gases(){
             float s=0.f; int c=0;
             for(int dy=-1;dy<=1;dy++) for(int dx=-1;dx<=1;dx++){
                 int nx=x+dx,ny=y+dy;
-                if(nx<0) nx+=GRID_W; if(nx>=GRID_W) nx-=GRID_W;
+                if(nx<0||nx>=GRID_W) continue;
                 if(ny<0||ny>=GRID_H) continue;
                 s+=g[idx(nx,ny)]; c++;
             }
@@ -1772,10 +1783,10 @@ void update_gases(){
             if(gbuf[i]<0.f) gbuf[i]=0.f;
         }
         g.swap(gbuf);
-        // 移流・拡散は本来は総量を保つ。ずれた分は数値誤差として別に数える
-        double trans=(s1-s0[pass])+(grid_sum(g)-s1-relax);
-        if(pass==0){ g_bud.c_relax+=relax; g_bud.c_trans+=trans; }
-        else       { g_bud.o_relax+=relax; g_bud.o_trans+=trans; }
+        // 移流・拡散は、端の交換を除けば総量を保つ。ずれた分は数値誤差として別に数える
+        double trans=(s1-s0[pass]-edge[pass])+(grid_sum(g)-s1-relax);
+        if(pass==0){ g_bud.c_relax+=relax; g_bud.c_edge+=edge[pass]; g_bud.c_trans+=trans; }
+        else       { g_bud.o_relax+=relax; g_bud.o_edge+=edge[pass]; g_bud.o_trans+=trans; }
     }
 }
 
@@ -1903,8 +1914,10 @@ void update_odor(){
             if(std::fabs(u)<1e-4f) continue;
             float f=std::min(0.85f,std::fabs(u));
             for(int x=0;x<GRID_W;x++){
-                int up=(u>0)?(x-1+GRID_W)%GRID_W:(x+1)%GRID_W;
-                odor_buf[idx(x,y)]=g[idx(x,y)]*(1.f-f)+g[idx(up,y)]*f;
+                int up=(u>0)?x-1:x+1;
+                // 風上の端から入る空気は、区画の生き物の匂いを持たない(条件)
+                float gu=(up<0||up>=GRID_W)?0.f:g[idx(up,y)];
+                odor_buf[idx(x,y)]=g[idx(x,y)]*(1.f-f)+gu*f;
             }
             for(int x=0;x<GRID_W;x++) g[idx(x,y)]=odor_buf[idx(x,y)];
         }
@@ -1914,7 +1927,7 @@ void update_odor(){
             float s=0.f; int c=0;
             for(int dy=-1;dy<=1;dy++) for(int dx=-1;dx<=1;dx++){
                 int nx=x+dx, ny=y+dy;
-                if(nx<0) nx+=GRID_W; if(nx>=GRID_W) nx-=GRID_W;
+                if(nx<0||nx>=GRID_W) continue;
                 if(ny<0||ny>=GRID_H) continue;
                 s+=g[idx(nx,ny)]; c++;
             }
@@ -1946,7 +1959,7 @@ void slide_at(int ci){
       for(int dy=-1;dy<=1;dy++) for(int dx=-1;dx<=1;dx++){
           if(!dx&&!dy) continue;
           int nx=x+dx, ny=y+dy;
-          if(nx<0) nx+=GRID_W; if(nx>=GRID_W) nx-=GRID_W;
+          if(nx<0||nx>=GRID_W) continue;
           if(ny<0||ny>=GRID_H) continue;
           int j=idx(nx,ny); if(elev[j]<le){ le=elev[j]; lo=j; } }
       float moved=soil_n[ci]*0.65f;
@@ -2037,7 +2050,7 @@ void update_microbes(){
             c.energy=m.energy;
             float a=frand(0.f,6.2832f), d=-MICROBE_DISP*std::log(1.f-frand(0.f,1.f));   // 指数分布。1-u は (0,1]
             c.x=m.x+std::cos(a)*d; c.y=m.y+std::sin(a)*d;
-            if(c.x<0.f) c.x+=GRID_W; if(c.x>=GRID_W) c.x-=GRID_W;
+            if(c.x<0.f) c.x=0.f;     if(c.x>=GRID_W) c.x=GRID_W-1.f;
             if(c.y<0.f) c.y=0.f;     if(c.y>=GRID_H) c.y=GRID_H-1.f;
             c.rate    =mutate(m.rate,    0.05f,1.0f);
             c.cold_tol=mutate(m.cold_tol,0.0f,1.0f);
@@ -2099,11 +2112,12 @@ void update_fire(int frame){
             if(soil_water[i]>wet_ok){ fire_buf[i]=fire[i]*(1.f-FIRE_DECAY*2.f); continue; }
             float f=fire[i];
             // 風下へ移る。隣の火勢を集める
-            int up=(wind[y]>0)?(x-1+GRID_W)%GRID_W:(x+1)%GRID_W;
-            float nb=fire[idx(up,y)]*1.6f;
+            int up=(wind[y]>0)?x-1:x+1;
+            float nb=(up>=0&&up<GRID_W)?fire[idx(up,y)]*1.6f:0.f;   // 区画の外から火は入らない
             if(y>0)          nb+=fire[idx(x,y-1)];
             if(y<GRID_H-1)   nb+=fire[idx(x,y+1)];
-            nb+=fire[idx((x+1)%GRID_W,y)]+fire[idx((x-1+GRID_W)%GRID_W,y)];
+            if(x<GRID_W-1)   nb+=fire[idx(x+1,y)];
+            if(x>0)          nb+=fire[idx(x-1,y)];
             float dryness=1.f-clamp01(soil_water[i]/std::max(0.05f,wet_ok));
             f+=nb*FIRE_SPREAD*dryness;
             if(dist01(rng)<FIRE_IGNITE*dryness*o2r) { f+=1.f; fire_events++; }
@@ -2401,7 +2415,7 @@ void update_plants(){
         if(sea[ci] && p.buoyancy>0.4f){
             p.x+=cur_u[ci]*BUOY_DRIFT*p.buoyancy;
             p.y+=cur_v[ci]*BUOY_DRIFT*p.buoyancy;
-            if(p.x<0.f) p.x+=GRID_W; if(p.x>=GRID_W) p.x-=GRID_W;
+            if(p.x<0.f) p.x=0.f;     if(p.x>=GRID_W) p.x=GRID_W-1.f;
             if(p.y<0.f) p.y=0.f;     if(p.y>=GRID_H) p.y=GRID_H-1.f;
         }
         upkeep += BUOY_COST*p.buoyancy
@@ -2445,7 +2459,7 @@ void update_plants(){
                 int r=(int)SEX_SEARCH;
                 for(int dy=-r;dy<=r&&!mate;dy++) for(int dx=-r;dx<=r&&!mate;dx++){
                     int nx=gx+dx, ny=gy+dy;
-                    if(nx<0) nx+=GRID_W; if(nx>=GRID_W) nx-=GRID_W;
+                    if(nx<0||nx>=GRID_W) continue;
                     if(ny<0||ny>=GRID_H) continue;
                     int ni=idx(nx,ny);
                     for(int t=pgrid.b(ni);t<pgrid.e(ni);t++){
@@ -2489,7 +2503,7 @@ void update_plants(){
             float d=stay?1.5f:(1.5f+SEED_FAR*p.disperse);
             float ang=frand(0.f,6.2832f);
             c.x=p.x+std::cos(ang)*d; c.y=p.y+std::sin(ang)*d;
-            if(c.x<0.f) c.x+=GRID_W; if(c.x>=GRID_W) c.x-=GRID_W;
+            if(c.x<0.f) c.x=0.f;     if(c.x>=GRID_W) c.x=GRID_W-1.f;
             if(c.y<0.f) c.y=0.f;     if(c.y>=GRID_H) c.y=GRID_H-1.f;
             int cgx=(int)c.x, cgy=(int)c.y;
             if(cgx<0||cgx>=GRID_W||cgy<0||cgy>=GRID_H) continue;   // この子は失われる
@@ -2784,7 +2798,7 @@ void update_animals(){
             for(int s=1;s<=RAY_STEPS;s++){
                 float d=S.range*s/(float)RAY_STEPS;
                 int rx=(int)(a.x+cs*d), ry=(int)(a.y+sn*d);
-                if(rx<0) rx+=GRID_W; if(rx>=GRID_W) rx-=GRID_W;
+                if(rx<0||rx>=GRID_W) continue;
                 if(ry<0||ry>=GRID_H) continue;
                 int ri=idx(rx,ry);
                 int band=(int)(S.tune*N_TUNE); if(band>N_TUNE-1) band=N_TUNE-1;
@@ -2906,7 +2920,8 @@ void update_animals(){
         a.dir+=frand(-a.turn*turn_mult,a.turn*turn_mult)*TURN_SCALE;   // 1 回の更新ぶんの向きのゆらぎ
         float sp=a.speed*A_MAX_SPEED*thrust_mult*terr*o2fit;
         float nx=a.x+std::cos(a.dir)*sp, ny=a.y+std::sin(a.dir)*sp;
-        if(nx<0.f) nx+=GRID_W; if(nx>=GRID_W) nx-=GRID_W;
+        if(nx<0.f){ nx=0.f; a.dir=3.14159265f-a.dir; }       // 東西の端も南北と同じく区画の縁
+        if(nx>=GRID_W){ nx=GRID_W-1.f; a.dir=3.14159265f-a.dir; }
         if(ny<0.f){ ny=0.f; a.dir=-a.dir; }
         if(ny>=GRID_H){ ny=GRID_H-1.f; a.dir=-a.dir; }
         int ngx=(int)nx, ngy=(int)ny;
@@ -3015,7 +3030,7 @@ void update_animals(){
                 int bx=(int)a.x, by=(int)a.y, pk=-1;
                 for(int dy=-1;dy<=1&&pk<0;dy++) for(int dx=-1;dx<=1&&pk<0;dx++){
                     int nx=bx+dx, ny=by+dy;
-                    if(nx<0) nx+=GRID_W; if(nx>=GRID_W) nx-=GRID_W;
+                    if(nx<0||nx>=GRID_W) continue;
                     if(ny<0||ny>=GRID_H) continue;
                     int ni=idx(nx,ny);
                     for(int t=agrid.b(ni);t<agrid.e(ni);t++){
@@ -3140,7 +3155,7 @@ void update_animals(){
                 int bx=(int)a.x, by=(int)a.y;
                 for(int dy=-r;dy<=r&&!mate;dy++) for(int dx=-r;dx<=r&&!mate;dx++){
                     int nx=bx+dx, ny=by+dy;
-                    if(nx<0) nx+=GRID_W; if(nx>=GRID_W) nx-=GRID_W;
+                    if(nx<0||nx>=GRID_W) continue;
                     if(ny<0||ny>=GRID_H) continue;
                     int ni=idx(nx,ny);
                     for(int t=agrid.b(ni);t<agrid.e(ni);t++){
@@ -3192,7 +3207,7 @@ void update_animals(){
                     c.im[k]=(dist01(rng)<0.5f)? a.im[k] : mate->im[k];
             }
             c.x=a.x+frand(-2.f,2.f); c.y=a.y+frand(-2.f,2.f);
-            if(c.x<0.f) c.x+=GRID_W; if(c.x>=GRID_W) c.x-=GRID_W;
+            if(c.x<0.f) c.x=0.f;     if(c.x>=GRID_W) c.x=GRID_W-1.f;
             if(c.y<0.f) c.y=0.f;     if(c.y>=GRID_H) c.y=GRID_H-1.f;
             c.dir=frand(0.f,6.2832f); c.age=0; c.eaten=0;
             c.body=0.10f; c.lin=a.lin;
@@ -3661,7 +3676,7 @@ bool load_state(const std::string& fn,int& frame){
             for(int dy=-COAST_RANGE;dy<=COAST_RANGE;dy++)
             for(int dx=-COAST_RANGE;dx<=COAST_RANGE;dx++){
                 int nx=x+dx, ny=y+dy;
-                if(nx<0) nx+=GRID_W; if(nx>=GRID_W) nx-=GRID_W;
+                if(nx<0||nx>=GRID_W) continue;
                 if(ny<0||ny>=GRID_H) continue;
                 if(sea[idx(nx,ny)]) continue;
                 float d=std::sqrt((float)(dx*dx+dy*dy));
@@ -4823,24 +4838,17 @@ int main(int argc,char** argv){
     float cam_x=GRID_W/2.f, cam_y=GRID_H/2.f;
     float cam_vx=0.f, cam_vy=0.f;   // カメラの速度。慣性で滑らかに動く
     bool show_help=false;           // 左上の「?」で操作一覧を開く
-    // 東西は無限にループする。一番近い複製の位置を返す
-    auto w2sx=[&](float wx){
-        float dx=wx-cam_x;
-        if(dx> GRID_W*0.5f) dx-=GRID_W;
-        if(dx<-GRID_W*0.5f) dx+=GRID_W;
-        return dx*zoom+SCREEN_W/2.f;
-    };
+    // 東西も南北と同じく区画の縁で終わる
+    auto w2sx=[&](float wx){ return (wx-cam_x)*zoom+SCREEN_W/2.f; };
     auto w2sy=[&](float wy){ return (wy-cam_y)*zoom+SCREEN_H/2.f; };
     auto s2wx=[&](float sx){
-        float wx=(sx-SCREEN_W/2.f)/zoom+cam_x;
-        wx=std::fmod(wx,(float)GRID_W);
-        if(wx<0.f) wx+=GRID_W;
-        return wx;
+        return (sx-SCREEN_W/2.f)/zoom+cam_x;
     };
     auto s2wy=[&](float sy){ return (sy-SCREEN_H/2.f)/zoom+cam_y; };
     auto clamp_cam=[&](){
-        while(cam_x< 0.f)      cam_x+=GRID_W;   // 東西は巻く
-        while(cam_x>=GRID_W)   cam_x-=GRID_W;
+        float hw=SCREEN_W/(2.f*zoom);            // 東西も壁
+        if(hw>=GRID_W*0.5f) cam_x=GRID_W*0.5f;
+        else { if(cam_x<hw) cam_x=hw; if(cam_x>GRID_W-hw) cam_x=GRID_W-hw; }
         float hh=SCREEN_H/(2.f*zoom);            // 南北は壁
         if(hh>=GRID_H*0.5f) cam_y=GRID_H*0.5f;
         else { if(cam_y<hh) cam_y=hh; if(cam_y>GRID_H-hh) cam_y=GRID_H-hh; }
@@ -5474,17 +5482,17 @@ int main(int argc,char** argv){
                     double wtot=wl+wp;
                     static bool have=false; static double pc=0,po=0,pn=0,pw=0,pcb=0;
                     if(have){
-                        double cext=g_bud.c_relax+g_bud.c_trans+g_bud.c_immig;
+                        double cext=g_bud.c_relax+g_bud.c_edge+g_bud.c_trans+g_bud.c_immig;
                         double next=g_bud.n_sink+g_bud.n_runoff+g_bud.n_upwell+g_bud.n_clamp+g_bud.n_fix+g_bud.n_fire+g_bud.n_carn+g_bud.n_immig;
-                        printf("      budget C: atm %.1f bio %.1f (P %.1f A %.1f dead %.1f mic %.1f) | dC %+.2f = ext %+.2f (relax %+.2f trans %+.3f immig %+.2f) + internal %+.2f\n",
+                        printf("      budget C: atm %.1f bio %.1f (P %.1f A %.1f dead %.1f mic %.1f) | dC %+.2f = ext %+.2f (relax %+.2f edge %+.2f trans %+.3f immig %+.2f) + internal %+.2f\n",
                                catm,cbio,ep*CO2_PER_ENERGY,ea*CO2_PER_ENERGY,ec*CO2_PER_ENERGY,em*CO2_PER_ENERGY,
-                               ctot-pc,cext,g_bud.c_relax,g_bud.c_trans,g_bud.c_immig,ctot-pc-cext);
+                               ctot-pc,cext,g_bud.c_relax,g_bud.c_edge,g_bud.c_trans,g_bud.c_immig,ctot-pc-cext);
                         // O2 は単独では保存しない。光合成で有機物の炭素 1 につき O2 を 1 出し、呼吸・分解・燃焼で 1:1 で使う。
                         // 内部の O2 の増減は生体の炭素の増減と等しいはずで、その差(redox)が破れ。
                         // 外から入った生き物の炭素は、この土地の光合成で作ったものではないので除く
-                        double oint=oatm-po-g_bud.o_relax-g_bud.o_trans;
-                        printf("      budget O2: atm %.1f | dO2 %+.2f = relax %+.2f trans %+.3f + internal %+.2f (dCbio %+.2f, redox %+.2f)\n",
-                               oatm,oatm-po,g_bud.o_relax,g_bud.o_trans,oint,cbio-pcb-g_bud.c_immig,oint-(cbio-pcb-g_bud.c_immig));
+                        double oint=oatm-po-g_bud.o_relax-g_bud.o_edge-g_bud.o_trans;
+                        printf("      budget O2: atm %.1f | dO2 %+.2f = relax %+.2f edge %+.2f trans %+.3f + internal %+.2f (dCbio %+.2f, redox %+.2f)\n",
+                               oatm,oatm-po,g_bud.o_relax,g_bud.o_edge,g_bud.o_trans,oint,cbio-pcb-g_bud.c_immig,oint-(cbio-pcb-g_bud.c_immig));
                         printf("      budget N: soil land %.1f sea %.1f plant %.1f dead %.1f | dN %+.2f = sink %+.2f runoff %+.2f upwell %+.2f clamp %+.3f fix %+.2f fire %+.3f carn %+.3f immig %+.3f + internal %+.2f\n",
                                nl,ns,np,nc,ntot-pn,g_bud.n_sink,g_bud.n_runoff,g_bud.n_upwell,g_bud.n_clamp,g_bud.n_fix,g_bud.n_fire,g_bud.n_carn,g_bud.n_immig,ntot-pn-next);
                         double wext=g_bud.w_relax+g_bud.w_transp+g_bud.w_sea;
@@ -5866,7 +5874,7 @@ int main(int argc,char** argv){
         prof_begin();
 
         wrapW = GRID_W*zoom;
-        nrep  = (int)std::ceil(SCREEN_W/std::max(1.f,wrapW))+1;
+        nrep  = 0;                               // 区画は一つだけ描く(東西は開いた境界で、複製は無い)
         sprite.setScale({zoom,zoom});
         window.clear();
         {
@@ -5893,19 +5901,15 @@ int main(int argc,char** argv){
         // 画面に入る複製の範囲を直接求める。空振りするループを回さない
         auto draw_wrapped=[&](float sx0,float sy,float r,sf::Color col){
             if(sy<-20.f||sy>SCREEN_H+20.f) return;
-            int klo=(int)std::ceil((-20.f-sx0)/wrapW);
-            int khi=(int)std::floor((SCREEN_W+20.f-sx0)/wrapW);
-            for(int k=klo;k<=khi;k++) quad(sx0+k*wrapW,sy,r,col);
+            if(sx0<-20.f||sx0>SCREEN_W+20.f) return;
+            quad(sx0,sy,r,col);
         };
         // 引きの画面では点で描く。頂点数が6分の1になる
         auto point_wrapped=[&](float sx0,float sy,sf::Color col){
             if(sy<-20.f||sy>SCREEN_H+20.f) return;
-            int klo=(int)std::ceil((-20.f-sx0)/wrapW);
-            int khi=(int)std::floor((SCREEN_W+20.f-sx0)/wrapW);
-            for(int k=klo;k<=khi;k++){
-                sf::Vertex v; v.position={sx0+k*wrapW,sy}; v.color=col;
-                vbuf.push_back(v);
-            }
+            if(sx0<-20.f||sx0>SCREEN_W+20.f) return;
+            sf::Vertex v; v.position={sx0,sy}; v.color=col;
+            vbuf.push_back(v);
         };
         auto flush_points=[&](){
             if(!vbuf.empty())
