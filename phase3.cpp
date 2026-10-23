@@ -285,7 +285,10 @@ const float A_SMR           = LIN(1.8e-5,ANIMAL_STRIDE);
 // 以前は 1 個体あたりの定数で、旧い基礎代謝 A_METAB(1 個体あたり 1.94e-4 /分)と並べて置かれていた。
 // 形質どうしの費用の比はそのまま残し、旧い基礎代謝に対する比を、今の基礎代謝(組織の炭素あたり)への上乗せの比として使う
 const float A_TRAIT_REF     = LIN(PM(0.040f,ANIMAL_STRIDE),ANIMAL_STRIDE);  // 形質の費用を測る基準(旧い A_METAB) [1分あたり 0.000194]
-const float A_MOVE_COST     = 0.060f;
+const float A_MOVE_COST     = 0.060f;   // 体 1(生重 100 mg)の個体の歩く費用。距離あたり
+// 歩く費用は体の重さの 0.68 乗に比例する。昆虫の歩行の正味の移動の費用(体重あたり、距離あたり)は M^-0.32
+// (Full & Tu 1991、Lighton et al. 1987)なので、一匹が距離あたりに使う量は M^0.68。以前は体の大きさによらない定数
+const float A_MOVE_EXP      = 0.68f;
 const float A_REACH_COST    = LIN(PM(0.018f,ANIMAL_STRIDE),ANIMAL_STRIDE);  // [1分あたり 8.75e-05]
 const float A_SIZE_COST     = LIN(PM(0.020f,ANIMAL_STRIDE),ANIMAL_STRIDE);  // [1分あたり 9.72e-05]
 const float JAW_COST        = LIN(PM(0.012f,ANIMAL_STRIDE),ANIMAL_STRIDE);  // [1分あたり 5.83e-05]
@@ -3136,10 +3139,14 @@ void update_animals(){
                    +a.burrow*BURROW_COST+a.nocturnal*NOCTURNAL_COST
                    +a.fat*FAT_COST;
         // 基礎代謝と形質の維持費は組織の炭素に比例する。歩く費用は別に足す
-        float metab=A_SMR*a.body*CORPSE_RETURN*(1.f+upkeep/A_TRAIT_REF)+sp*A_MOVE_COST;
+        float metab=A_SMR*a.body*CORPSE_RETURN*(1.f+upkeep/A_TRAIT_REF)
+                   +sp*A_MOVE_COST*std::pow(std::max(a.body,1e-6f),A_MOVE_EXP);
+        // 呼吸器と長命な体の維持費も、維持する組織の量に比例する(形質の維持費と同じ考え)。
+        // 以前は 1 個体あたりの定数で、組織の炭素 0.25 の幼い個体では支出の約 7 割を占めていた
+        const float tis_k=A_SMR*a.body*CORPSE_RETURN/A_TRAIT_REF;
         float sen=senesce(a.age,a.lifespan);
         metab *= (1.f+sen);
-        metab += LIFESPAN_COST*a.lifespan;
+        metab += LIFESPAN_COST*a.lifespan*tis_k;
         // 発病
         if(aload[ci]>0.02f){
             float inf=aload[ci]*immune_match(a.im,ci,astrain);
@@ -3154,7 +3161,7 @@ void update_animals(){
         // 使ったエネルギーは糖の酸化(または発酵)でまかなう。体にある分だけが燃料になる。
         // 好気呼吸は CH2O + O2 → CO2 + H2O(呼吸商 1)なので、CO2 に出る炭素と同じ量の O2 を使う。
         // マスの O2 で足りない分は発酵で、炭素は乳酸などの有機物のまま体の外(糞)に出る
-        { float spent=metab/eff + a.resp*RESP_COST;
+        { float spent=metab/eff + a.resp*RESP_COST*tis_k;
           float fc=std::min(spent,std::max(0.f,a.energy))*CO2_PER_ENERGY;
           float ox=std::min(fc,std::max(0.f,o2[ci]));
           o2_add(ci,-ox); co2_add(ci,ox);
