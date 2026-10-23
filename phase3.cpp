@@ -99,26 +99,31 @@ const int   GENET_INTERVAL  = 10;      // 地下茎の融通を何tickごとに�
 // 区画の外の地殻変動(隆起の量と向き)は条件として与え、区画の中の形は
 // 隆起・川の侵食(ストリームパワー則)・斜面の崩れ(安息角)から出す
 const float SEA_LEVEL       = 0.42f;   // 標高の尺度(0〜1)での海面
-const float LAND_RELIEF_M   = 400.f;   // 条件: 区画の最高点の海抜(m)。区画の外の隆起が決める
-const float SEA_DEPTH_M     = 60.f;    // 条件: 区画の中の海の最も深い所(m)
-const float ELEV_M          = LAND_RELIEF_M/(1.f-SEA_LEVEL);   // 標高の尺度 1 が何 m か(約 690 m)
+const float ELEV_M          = 400.f/(1.f-SEA_LEVEL);   // 標高の尺度 1 が何 m か(約 690 m)。表し方の単位で、起伏は決めない
+const float SEA_DEPTH_M     = 60.f;    // 条件: 区画の南の端の海の深さ(m)。沈降する帯の初期の面
 const float COAST_FRAC      = 0.25f;   // 条件: 南から何割の帯が沈降して海の下にあるか
 const float REPOSE_SLOPE    = 0.70f;   // 安息角 35° の勾配(tan 35°)。これより急な斜面は崩れて残らない
-// 地形を作るときだけ使う。最後に海抜 LAND_RELIEF_M へ写すので、尺度は形にしか効かない
-const float TERRAIN_NOISE   = 0.004f;  // 初期の面の起伏(標準偏差)。海岸線を曲げる
-const float TERRAIN_TILT    = 0.05f;   // 初期の面の南北の傾き
-const float UPLIFT_LAND     = 0.006f;  // 1 回あたりの隆起。北ほど大きい(傾動する地塊)
-const float UPLIFT_VARY     = 0.40f;   // 隆起の場所ごとのばらつき
-const float TARGET_RELIEF   = 0.42f;   // 侵食係数の逆算に使う起伏(形だけに効く)
-// Cordonnier et al. 2016 のストリームパワー式。n=1, m=0.5
+// 地形を作るときだけ使う。すべて実際の単位(m・年)で書き、起伏と傾斜は
+// 隆起・川の侵食・斜面拡散の釣り合いから出す。地球の傾斜に合わせて写し直さない
+const float TERRAIN_NOISE_M = 2.0f;    // 初期の面の起伏(標準偏差、m)。海岸線を曲げる
+const float UPLIFT_MM_YR    = 0.3f;    // 条件: 北の端の隆起の速さ(mm/年)。北ほど大きい(傾動する地塊)。
+                                       // 中程度に活発な海岸の山地の値(0.1〜1 mm/年)
+const float UPLIFT_VARY     = 0.40f;   // 条件: 隆起の場所ごとのばらつき
+// ストリームパワー則 dz/dt = U − K A^m S(n=1、m=0.5)。Cordonnier et al. 2016 の陰的解法
 const float EROSION_M       = 0.5f;    // 流域面積の指数
-const float EROSION_DT      = 2.5f;    // 時間刻み。陰的解法なので大きく取れる
-const float DIFFUSE_K       = 0.20f;   // 斜面拡散(1 回あたりに隣との差を均す割合)
-const int   DIFFUSE_PASS    = 4;       // 斜面拡散を 1 回に何度かけるか
+const float EROSION_K       = 1.0e-5f; // 侵食係数(/年、A は m²)。m=0.5 の岩盤の川の値は 1e-6〜1e-4
+                                       // (Stock & Montgomery 1999、Harel et al. 2016)の中ほど
+const float EROSION_DT_YR   = 10000.f; // 時間刻み(年)。川は陰的解法なので大きく取れる
+// 斜面拡散(土壌の匍行)の係数。土に覆われた斜面で 1e-3〜1e-2 m²/年。
+// オレゴン海岸山脈で 0.0032 m²/年(Roering et al. 1999)
+const float HILL_DIFFUSE_M2_YR = 0.0032f;
+const int   REPOSE_PASS     = 20;      // 1 回の侵食のあとに崩れを繰り返す最大の回数(崩れが止まれば打ち切る)
+const float FILL_EPS_M      = 0.005f;  // 窪地を埋めた面に付ける 1 マスあたりの最小の傾き(m)
 // 川の始まり。流域がこれより小さい斜面は川に削られず、拡散だけで形が決まる
 // (Montgomery & Dietrich 1988。谷頭の集水面積はおよそ 0.01〜0.1 km²)
 const float CHANNEL_AREA    = 100.0f;    // 何マス(1 マス 100 m²)から川が削るか
-const int   EROSION_STEPS   = 250;     // 侵食を回す回数
+const int   EROSION_STEPS   = 300;     // 条件: 地塊が隆起を始めてからの年数(300 × 1 万年 = 300 万年)。
+                                       // この長さではまだ釣り合いに届かない(起伏は隆起の年数で決まる)
 
 // --- 気候(惑星規模の条件) ---
 // 緯度・季節ごとの日射・卓越風・背景の気温は外から与える。区画は 9 km × 5 km で
@@ -1288,11 +1293,13 @@ void fill_depressions(std::vector<float>& z, float sea_lv){
     std::vector<char> done(GRID_W*GRID_H,0);
     for(int i=0;i<GRID_W*GRID_H;i++)
         if(z[i]<sea_lv){ done[i]=1; pq.push({z[i],i}); }
-    for(int x=0;x<GRID_W;x++)
-        for(int y : {0,GRID_H-1}){
-            int i=idx(x,y);
-            if(!done[i]){ done[i]=1; pq.push({z[i],i}); }
-        }
+    // 南の端(海)だけを出口にする。北の端は傾動する地塊の頂(分水嶺)で、
+    // 区画の外から川は入らず、外へも流れ出ない(条件)。北の端を出口にすると、
+    // そこは削られずに隆起だけを受ける基準面になり、高さが限りなく伸びる
+    for(int x=0;x<GRID_W;x++){
+        int i=idx(x,GRID_H-1);
+        if(!done[i]){ done[i]=1; pq.push({z[i],i}); }
+    }
     while(!pq.empty()){
         Node n=pq.top(); pq.pop();
         int x=n.i%GRID_W, y=n.i/GRID_W;
@@ -1303,7 +1310,7 @@ void fill_depressions(std::vector<float>& z, float sea_lv){
             if(ny<0||ny>=GRID_H) continue;
             int j=idx(nx,ny);
             if(done[j]) continue;
-            if(z[j]<n.v+1e-5f) z[j]=n.v+1e-5f;
+            if(z[j]<n.v+FILL_EPS_M) z[j]=n.v+FILL_EPS_M;
             done[j]=1; pq.push({z[j],j});
         }
     }
@@ -1341,21 +1348,40 @@ void route_flow(const std::vector<float>& zf, const std::vector<float>& rain,
     }
 }
 
-// h_max = 2.244 u/k。最大の隆起から、望む起伏になる侵食係数を逆算する
-inline float erosion_k(){
-    return 2.244f*UPLIFT_LAND*(1.f+UPLIFT_VARY)/std::max(1e-6f,TARGET_RELIEF);
+// 安息角。急な斜面の物質は下の隣へ落ちる(崩れ)。陸の中だけで動かし、質量は保つ
+void relax_repose(std::vector<float>& zm,int max_pass){
+    const float dmax=REPOSE_SLOPE*CELL_M;
+    const int DX[4]={1,-1,0,0}, DY[4]={0,0,1,-1};
+    for(int pass=0;pass<max_pass;pass++){
+        int moved=0;
+        for(int y=0;y<GRID_H;y++) for(int x=0;x<GRID_W;x++){
+            int i=idx(x,y);
+            if(zm[i]<0.f) continue;
+            for(int d=0;d<4;d++){
+                int nx=x+DX[d], ny=y+DY[d];
+                if(nx<0) nx+=GRID_W; if(nx>=GRID_W) nx-=GRID_W;
+                if(ny<0||ny>=GRID_H) continue;
+                int j=idx(nx,ny);
+                if(zm[j]<0.f) continue;
+                float diff=zm[i]-zm[j];
+                if(diff<=dmax) continue;
+                float mv=(diff-dmax)*0.5f;
+                zm[i]-=mv; zm[j]+=mv; moved++;
+            }
+        }
+        if(!moved) break;
+    }
 }
 
 void erode_step(std::vector<float>& z, const std::vector<float>& rain,
                 const std::vector<float>& uplift, float sea_lv){
     int N=GRID_W*GRID_H;
-    for(int i=0;i<N;i++) z[i]+=uplift[i]*EROSION_DT;
+    for(int i=0;i<N;i++) z[i]+=uplift[i]*EROSION_DT_YR;
     std::vector<float> zf=z;
     fill_depressions(zf,sea_lv);
     static std::vector<int> rec, order;
     static std::vector<float> acc;
     route_flow(zf,rain,rec,acc,order);
-    const float K=erosion_k();
 
     // 陰的スキーム。下流の新しい高さを先に求め、それを使って上流を解く。
     // 大きな時間刻みでも安定するため、収束が速い
@@ -1368,18 +1394,26 @@ void erode_step(std::vector<float>& z, const std::vector<float>& rain,
         int x1=i%GRID_W, y1=i/GRID_W, x2=r%GRID_W, y2=r/GRID_W;
         int dx=x1-x2; if(dx>GRID_W/2) dx-=GRID_W; if(dx<-GRID_W/2) dx+=GRID_W;
         int dy=y1-y2;
-        float dist=std::sqrt((float)(dx*dx+dy*dy));
-        float c=K*std::pow(acc[i],EROSION_M)/std::max(0.5f,dist);
-        z[i]=(z[i]+EROSION_DT*c*z[r])/(1.f+c*EROSION_DT);
+        float dist=std::sqrt((float)(dx*dx+dy*dy))*CELL_M;               // m
+        float area=acc[i]*CELL_M*CELL_M;                                  // m²
+        float c=EROSION_K*std::pow(area,EROSION_M)/dist;                  // /年
+        z[i]=(z[i]+EROSION_DT_YR*c*z[r])/(1.f+c*EROSION_DT_YR);
     }
 
-    // 斜面拡散。土壌の匍行で尾根が丸くなる
+    // 斜面拡散 dz/dt = D ∇²z。土壌の匍行で尾根が丸くなる。
+    // 3×3 の平均との差は ∇²z·Δx²/3 なので、1 回に均す割合は 3·D·Δt/Δx²。
+    // 安定のため、割合が 0.5 を超えないように刻みを分ける
+    const float kd=3.f*HILL_DIFFUSE_M2_YR*EROSION_DT_YR/(CELL_M*CELL_M);
+    const int npass=std::max(1,(int)std::ceil(kd/0.5f));
     static std::vector<float> sm;
-    for(int p=0;p<DIFFUSE_PASS;p++){
+    for(int p=0;p<npass;p++){
         sm=z;
         box_blur(sm,1,1);
-        for(int i=0;i<N;i++) z[i]+=(sm[i]-z[i])*DIFFUSE_K;
+        for(int i=0;i<N;i++) z[i]+=(sm[i]-z[i])*(kd/npass);
     }
+    // 匍行より速く隆起する急な斜面は、安息角を超えた所で崩れて下へ移る
+    // (しきい値の斜面。Roering et al. 1999、Montgomery & Brandon 2002)
+    relax_repose(z,REPOSE_PASS);
 }
 
 // 吹送流。区画は大洋の循環を決めるには小さすぎる(海流は区画の外の条件)。
@@ -1398,7 +1432,7 @@ void compute_currents(){
 // 1. 初期の面: 南が低く北が高い緩い傾きに、波長の違う起伏を重ねる
 // 2. 区画の外の地殻変動として、北ほど大きく隆起させる(傾動地塊。条件)
 // 3. 隆起と川の侵食(ストリームパワー則)と斜面拡散を繰り返し、谷と尾根を刻ませる
-// 4. 最高点を海抜 LAND_RELIEF_M、最深部を SEA_DEPTH_M に写して m 単位にする
+// 4. すべて m・年の単位で計算するので、出てきた高さをそのまま使う(写し直さない)
 // 5. 安息角より急な斜面を崩し、物質を下へ移す(質量は保つ)
 // 東西は他の場(風・匂い・生き物の移動)と同じくつながっているので、継ぎ目の無い形にする
 void init_terrain(){
@@ -1432,43 +1466,16 @@ void init_terrain(){
         float land=(s-COAST_FRAC)/(1.f-COAST_FRAC);   // 負なら海の下
         for(int x=0;x<GRID_W;x++){
             int i=idx(x,y);
-            h[i]=TERRAIN_TILT*land+TERRAIN_NOISE*rough[i];
-            float u=UPLIFT_LAND*clamp01(land)*(1.f+UPLIFT_VARY*clampf(vary[i],-1.f,1.f));
+            // 初期の面: 沈降する帯の海底の傾き(南の端で SEA_DEPTH_M)をそのまま陸へ延ばした面
+            h[i]=SEA_DEPTH_M/COAST_FRAC*(s-COAST_FRAC)+TERRAIN_NOISE_M*rough[i];
+            float u=UPLIFT_MM_YR*1e-3f*clamp01(land)*(1.f+UPLIFT_VARY*clampf(vary[i],-1.f,1.f));
             up[i]=std::max(0.f,u);
         }
     }
     for(int it=0;it<EROSION_STEPS;it++) erode_step(h,rain,up,0.f);
 
-    // m 単位へ写す。陸は最高点、海は最深部で揃える
-    float hmax=1e-6f, hmin=-1e-6f;
-    for(float v:h){ if(v>hmax)hmax=v; if(v<hmin)hmin=v; }
-    std::vector<float> zm(N);
-    for(int i=0;i<N;i++)
-        zm[i]=(h[i]>=0.f) ? h[i]/hmax*LAND_RELIEF_M : h[i]/(-hmin)*SEA_DEPTH_M;
-    // 安息角。急な斜面の物質は下の隣へ落ちる。陸の中だけで動かし、質量は保つ
-    {
-        const float dmax=REPOSE_SLOPE*CELL_M;
-        const int DX[4]={1,-1,0,0}, DY[4]={0,0,1,-1};
-        for(int pass=0;pass<200;pass++){
-            int moved=0;
-            for(int y=0;y<GRID_H;y++) for(int x=0;x<GRID_W;x++){
-                int i=idx(x,y);
-                if(zm[i]<0.f) continue;
-                for(int d=0;d<4;d++){
-                    int nx=x+DX[d], ny=y+DY[d];
-                    if(nx<0) nx+=GRID_W; if(nx>=GRID_W) nx-=GRID_W;
-                    if(ny<0||ny>=GRID_H) continue;
-                    int j=idx(nx,ny);
-                    if(zm[j]<0.f) continue;
-                    float diff=zm[i]-zm[j];
-                    if(diff<=dmax) continue;
-                    float mv=(diff-dmax)*0.5f;
-                    zm[i]-=mv; zm[j]+=mv; moved++;
-                }
-            }
-            if(!moved) break;
-        }
-    }
+    std::vector<float> zm=h;   // すでに m
+    relax_repose(zm,200);
     for(int i=0;i<N;i++) elev[i]=SEA_LEVEL+zm[i]/ELEV_M;
 
     for(int i=0;i<N;i++) sea[i]=(elev[i]<SEA_LEVEL)?1:0;
