@@ -848,6 +848,7 @@ double dbg_light=0, dbg_tf=0, dbg_wf=0, dbg_co2=0;
 struct AnimalGene {
     float speed,turn,reach,size,diet,jaw,cold_tol,aquatic,resp,detritus,sexual,arboreal;
     float brood,lifespan;
+    float toxin,tox_resist,burrow,nocturnal,store_fat,repro_alloc,bite_size,digest;
     float im[N_IMMUNE];
     Animal::Sensor sen[N_SENSOR];
     float w[N_W];
@@ -877,6 +878,9 @@ void remember_animals(){
         g.aquatic=a.aquatic; g.resp=a.resp; g.detritus=a.detritus;
         g.sexual=a.sexual;   g.arboreal=a.arboreal; g.lin=a.lin;
         g.brood=a.brood;     g.lifespan=a.lifespan;
+        g.toxin=a.toxin;     g.tox_resist=a.tox_resist; g.burrow=a.burrow;
+        g.nocturnal=a.nocturnal; g.store_fat=a.store_fat; g.repro_alloc=a.repro_alloc;
+        g.bite_size=a.bite_size; g.digest=a.digest;
         for(int k=0;k<N_IMMUNE;k++) g.im[k]=a.im[k];
         for(int k=0;k<N_W;k++) g.w[k]=a.w[k];
         for(int k=0;k<N_NODE;k++) g.ngain[k]=a.ngain[k];
@@ -3720,7 +3724,7 @@ void release_animals(int per_species,int frame){
                 if(score>bscore){ bscore=score; bx=gx; by=gy; }
             }
             if(bx<0) continue;
-            Animal a;
+            Animal a{};   // 脂肪・潜り具合などの状態は 0 から始める
             a.x=bx+frand(0.f,1.f); a.y=by+frand(0.f,1.f);
             a.dir=frand(0.f,6.2832f);
             a.energy=A_DIVIDE_TH*0.7f; a.alive=true; a.age=0; a.eaten=0;
@@ -3731,6 +3735,9 @@ void release_animals(int per_species,int frame){
             a.mut_rate=0.3f;                    a.mother=-1; a.father=-1; a.gen=0; a.lesion=false;
             for(int k=0;k<N_REC;k++) a.rec[k]=0.f;
             a.brood=g.brood;     a.lifespan=g.lifespan;
+            a.toxin=g.toxin;     a.tox_resist=g.tox_resist; a.burrow=g.burrow;
+            a.nocturnal=g.nocturnal; a.store_fat=g.store_fat; a.repro_alloc=g.repro_alloc;
+            a.bite_size=g.bite_size; a.digest=g.digest;
             for(int k=0;k<N_IMMUNE;k++) a.im[k]=g.im[k];
             a.body=g.size*MATURE_FRAC;      // 成熟した状態で放つ
             a.id=next_animal_id++; a.lin=g.lin;
