@@ -855,7 +855,9 @@ double sg_p_pop[N_SG_P]={0}, sg_p_rep[N_SG_P]={0};
 long   sg_a_np=0, sg_a_nr=0, sg_p_np=0, sg_p_nr=0;
 // 観察のための帳簿(測定だけ。規則の入力には使わない): 育ち切っていない個体と成熟した個体の、
 // 1 回の更新あたりの摂取・支出・成長・脂肪への回し・食べようとした回数・消化管が満ちた回数
-struct JuvBudget { double n=0,tis=0,grown=0,eat=0,spent=0,grow=0,fat=0,want=0,full=0,gutcap=0; };
+struct JuvBudget { double n=0,tis=0,grown=0,eat=0,spent=0,grow=0,fat=0,want=0,full=0,gutcap=0;
+                   // 支出の内訳(測定だけ): 基礎代謝・脳と感覚器・生息環境の不適合・脂肪を担ぐ・その他の形質・歩く・老化・長命・発病・O2 不足の上乗せ・呼吸器
+                   double bas=0,brain=0,hab=0,fatc=0,trait=0,walk=0,sen=0,life=0,inf=0,o2d=0,resp=0, fatst=0,est=0; };
 JuvBudget jb[2];
 // 全体の記録(--census)用の、繁殖した親の遺伝子の和。ログの表示とは別の間隔で区切るので別に持つ
 double cs_a_rep[N_SG_A]={0}, cs_p_rep[N_SG_P]={0};
@@ -3202,7 +3204,7 @@ void update_animals(){
         const int jk=(a.body<a.size*MATURE_FRAC)?0:1;   // 帳簿の区分(測定だけ)
         { JuvBudget& b=jb[jk]; b.n+=1; b.tis+=a.body*CORPSE_RETURN; b.grown+=(a.size>0.f?a.body/a.size:0.f);
           b.eat+=a.energy-e_start; b.want+=(want_eat>ACT_THRESH); b.gutcap+=gut_cap(a.body);
-          b.full+=(a.gut>=gut_cap(a.body)*0.999f); }
+          b.full+=(a.gut>=gut_cap(a.body)*0.999f); b.fatst+=a.fat; b.est+=a.energy; }
         float hma=habitat_a(a,ci);
         // 食虫植物に捕らえられる。土壌の窒素が乏しい場所ほど罠が育つ
         if(a.depth<0.2f){
@@ -3243,12 +3245,17 @@ void update_animals(){
         // 基礎代謝と形質の維持費は組織の炭素に比例する。歩く費用は別に足す
         float metab=A_SMR*a.body*CORPSE_RETURN*(1.f+upkeep/A_TRAIT_REF)
                    +sp*A_MOVE_COST*std::pow(std::max(a.body,1e-6f),A_MOVE_EXP);
+        double lb_bas=(double)A_SMR*a.body*CORPSE_RETURN, lb_k=lb_bas/A_TRAIT_REF;   // 帳簿の内訳(測定だけ。規則には使わない)
+        double lb_brain=lb_k*(sensor_span*SENSOR_COST+brain_use*SYN_COST), lb_hab=lb_k*HABITAT_COST_A*hma*hma,
+               lb_fatc=lb_k*a.fat*FAT_COST, lb_trait=lb_k*upkeep-lb_brain-lb_hab-lb_fatc,
+               lb_walk=(double)sp*A_MOVE_COST*std::pow(std::max(a.body,1e-6f),A_MOVE_EXP), lb_m0=metab;
         // 呼吸器と長命な体の維持費も、維持する組織の量に比例する(形質の維持費と同じ考え)。
         // 以前は 1 個体あたりの定数で、組織の炭素 0.25 の幼い個体では支出の約 7 割を占めていた
         const float tis_k=A_SMR*a.body*CORPSE_RETURN/A_TRAIT_REF;
         float sen=senesce(a.age,a.lifespan);
         metab *= (1.f+sen);
         metab += LIFESPAN_COST*a.lifespan*tis_k;
+        double lb_sen=lb_m0*sen, lb_life=(double)LIFESPAN_COST*a.lifespan*tis_k, lb_m1=metab;
         // 発病
         if(aload[ci]>0.02f){
             float inf=aload[ci]*immune_match(a.im,ci,astrain);
@@ -3256,6 +3263,8 @@ void update_animals(){
             infect_a+=inf;
         }
         // 呼吸: 酸素の分圧で効率が決まる。水中と高所は薄い
+        { JuvBudget& b=jb[jk]; b.bas+=lb_bas; b.brain+=lb_brain; b.hab+=lb_hab; b.fatc+=lb_fatc; b.trait+=lb_trait;
+          b.walk+=lb_walk; b.sen+=lb_sen; b.life+=lb_life; b.inf+=metab-lb_m1; }
         float o2_need = metab*O2_PER_METAB*(1.f-RESP_EFFICIENCY*a.resp);
         float avail   = std::min(o2_need,o2[ci]);
         float eff=(o2_need>1e-9f)?avail/o2_need:1.f;
@@ -3268,7 +3277,8 @@ void update_animals(){
           float ox=std::min(fc,std::max(0.f,o2[ci]));
           o2_add(ci,-ox); co2_add(ci,ox);
           egest(ci,(fc-ox)/CO2_PER_ENERGY);
-          a.energy -= spent; jb[jk].spent+=spent; }
+          a.energy -= spent; jb[jk].spent+=spent;
+          jb[jk].o2d+=metab/eff-metab; jb[jk].resp+=a.resp*RESP_COST*tis_k; }
         // 育つ。この更新の正味の稼ぎ(飲み込んで同化した分 − 支出)のうち grow_alloc を体の合成に回す。
         // 以前は 1 個体あたりの定数の速さ BODY_GROW_RATE で育っていた。今は上限を消化管の容量(稼ぎ)と
         // 成長の費用が決めるので、速く育つ種も遅く育つ種も生まれうる
@@ -5854,6 +5864,9 @@ int main(int argc,char** argv){
                            k?"adult":"juv", b.n, b.n?b.grown/b.n:0.0, b.n?b.tis/b.n:0.0,
                            b.eat/T*d, b.spent/T*d, b.grow/T*d, b.fat/T*d,
                            b.n?b.want/b.n:0.0, b.n?b.full/b.n:0.0);
+                    printf("      [budget %s spend] per tisC per day: basal %.3f brain %.3f habitat %.3f fatcarry %.3f traits %.3f walk %.3f senesce %.3f lifespan %.3f infect %.3f o2short %.3f resp %.3f | stock per tisC: fat %.3f energy %.3f\n",
+                           k?"adult":"juv", b.bas/T*d, b.brain/T*d, b.hab/T*d, b.fatc/T*d, b.trait/T*d, b.walk/T*d,
+                           b.sen/T*d, b.life/T*d, b.inf/T*d, b.o2d/T*d, b.resp/T*d, b.fatst/T, b.est/T);
                     jb[k]=JuvBudget(); }
                 if(sg_a_nr>20){
                     for(auto& a:animals){ if(!a.alive) continue;
