@@ -199,7 +199,7 @@ const float GAS_DIFFUSE     = FRAC(PMF(0.55f,GAS_INTERVAL),GAS_INTERVAL);  // 4t
 const float GAS_RELAX       = FRAC(PMF(0.0060f,GAS_INTERVAL),GAS_INTERVAL);  // [率 1.46e-05 /分]
 const float WIND_STRENGTH   = LIN(PM(0.35f,GAS_INTERVAL),GAS_INTERVAL);  // 拡散に負けない強さにする [1分あたり 0.000851]
 // 条件: 地上 10 m の風の速さ。北半球の中緯度の陸の観測点の平均はおよそ 3 m/s(Vautard et al. 2010)。
-// 向きは卓越風の帯(wind[] の符号)に従う。大気の移流はこの速さで運ぶ。wind[] の大きさは、匂いと海流の換算の基準としてだけ残す
+// 向きは卓越風の帯(wind[] の符号)に従う。大気の移流はこの速さで運ぶ。wind[] の大きさは、海流の換算の基準としてだけ残す
 const float WIND_SURF_MS    = 3.0f;
 const float GAS_SHIFT       = LIN(WIND_SURF_MS*60.0/CELL_M,GAS_INTERVAL);  // 1 回の更新で空気が進むマス数 [1分あたり 18 マス]
 const float O2_PER_CO2      = 1.00f;
@@ -397,7 +397,14 @@ const int   N_ODOR          = 4;   // 0=生体 1=腐敗 2=食害 3=災害
 const char* ODOR_NAME[4]    = {"生体","腐敗","食害","災害"};
 const float ODOR_DIFFUSE    = FRAC(PMF(0.42f,ODOR_INTERVAL),ODOR_INTERVAL);  // 拡散 [率 0.00132 /分]
 const float ODOR_DECAY      = FRAC(PMF(0.055f,ODOR_INTERVAL),ODOR_INTERVAL);  // 散逸 [率 0.000137 /分]
-const float ODOR_WIND       = LIN(PM(0.30f,ODOR_INTERVAL),ODOR_INTERVAL);  // 風による移流 [1分あたり 0.000729]
+// 匂いを運ぶ風。地表を歩く虫の匂いは、地表近くの空気の層で運ばれる。
+// 地表近くの風は対数分布 u(z) = u*/κ·ln(z/z0) に従う(接地境界層の相似則)。u* は地上 10 m の風(WIND_SURF_MS、条件)から決める。
+// 粗度 z0 = 0.01 m(草の短い開けた土地。Wieringa 1993)、匂いの層は地表から 0.1 m までとし、その層の平均の速さで運ぶ
+const double ODOR_Z0        = 0.01;   // 地表の粗度(m)
+const double ODOR_LAYER_M   = 0.10;   // 匂いを運ぶ地表近くの層の厚さ(m)
+const double ODOR_USTAR     = 0.40*WIND_SURF_MS/std::log(10.0/ODOR_Z0);   // 摩擦速度(m/s)。カルマン定数 0.40
+const double ODOR_WIND_MS   = ODOR_USTAR/0.40*(ODOR_LAYER_M*std::log(ODOR_LAYER_M/ODOR_Z0)-ODOR_LAYER_M+ODOR_Z0)/(ODOR_LAYER_M-ODOR_Z0);  // 層の平均 約 0.68 m/s
+const float ODOR_SHIFT      = LIN(ODOR_WIND_MS*60.0/CELL_M,ODOR_INTERVAL);  // 1 回の更新で匂いが進むマス数 [1分あたり 約 4.1 マス]
 const float ODOR_SCALE      = 2.5f;   // 感覚器が飽和する濃さ
 // 放出量
 const float ODOR_PLANT      = LIN(PM(0.010f,ODOR_INTERVAL),ODOR_INTERVAL);  // 植物の体臭(高さと毒に比例) [1分あたり 2.43e-05]
@@ -1958,14 +1965,17 @@ void update_odor(){
         std::vector<float>& g=odor[k];
         // 風で流れる
         for(int y=0;y<GRID_H;y++){
-            float u=wind[y]*ODOR_WIND/WIND_STRENGTH;
+            float u=wind[y];
             if(std::fabs(u)<1e-4f) continue;
-            float f=std::min(0.85f,std::fabs(u));
+            // セミラグランジュ法: 各マスの匂いは、ODOR_SHIFT マス風上にあった空気が運ばれてきたもの。間は線形に補う
+            int d=(u>0)?1:-1;
+            int n=(int)ODOR_SHIFT; float f=ODOR_SHIFT-(float)n;
             for(int x=0;x<GRID_W;x++){
-                int up=(u>0)?x-1:x+1;
+                int a=x-d*n, b=x-d*(n+1);
                 // 風上の端から入る空気は、区画の生き物の匂いを持たない(条件)
-                float gu=(up<0||up>=GRID_W)?0.f:g[idx(up,y)];
-                odor_buf[idx(x,y)]=g[idx(x,y)]*(1.f-f)+gu*f;
+                float ga=(a>=0&&a<GRID_W)?g[idx(a,y)]:0.f;
+                float gb=(b>=0&&b<GRID_W)?g[idx(b,y)]:0.f;
+                odor_buf[idx(x,y)]=ga+(gb-ga)*f;
             }
             for(int x=0;x<GRID_W;x++) g[idx(x,y)]=odor_buf[idx(x,y)];
         }
