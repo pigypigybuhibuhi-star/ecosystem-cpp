@@ -853,6 +853,10 @@ const char* SG_P_NAME[N_SG_P]={
 double sg_a_pop[N_SG_A]={0}, sg_a_rep[N_SG_A]={0};
 double sg_p_pop[N_SG_P]={0}, sg_p_rep[N_SG_P]={0};
 long   sg_a_np=0, sg_a_nr=0, sg_p_np=0, sg_p_nr=0;
+// 観察のための帳簿(測定だけ。規則の入力には使わない): 育ち切っていない個体と成熟した個体の、
+// 1 回の更新あたりの摂取・支出・成長・脂肪への回し・食べようとした回数・消化管が満ちた回数
+struct JuvBudget { double n=0,tis=0,grown=0,eat=0,spent=0,grow=0,fat=0,want=0,full=0,gutcap=0; };
+JuvBudget jb[2];
 // 全体の記録(--census)用の、繁殖した親の遺伝子の和。ログの表示とは別の間隔で区切るので別に持つ
 double cs_a_rep[N_SG_A]={0}, cs_p_rep[N_SG_P]={0};
 long   cs_a_nr=0, cs_p_nr=0;
@@ -3195,6 +3199,10 @@ void update_animals(){
                 }
             }
         }
+        const int jk=(a.body<a.size*MATURE_FRAC)?0:1;   // 帳簿の区分(測定だけ)
+        { JuvBudget& b=jb[jk]; b.n+=1; b.tis+=a.body*CORPSE_RETURN; b.grown+=(a.size>0.f?a.body/a.size:0.f);
+          b.eat+=a.energy-e_start; b.want+=(want_eat>ACT_THRESH); b.gutcap+=gut_cap(a.body);
+          b.full+=(a.gut>=gut_cap(a.body)*0.999f); }
         float hma=habitat_a(a,ci);
         // 食虫植物に捕らえられる。土壌の窒素が乏しい場所ほど罠が育つ
         if(a.depth<0.2f){
@@ -3260,14 +3268,14 @@ void update_animals(){
           float ox=std::min(fc,std::max(0.f,o2[ci]));
           o2_add(ci,-ox); co2_add(ci,ox);
           egest(ci,(fc-ox)/CO2_PER_ENERGY);
-          a.energy -= spent; }
+          a.energy -= spent; jb[jk].spent+=spent; }
         // 育つ。この更新の正味の稼ぎ(飲み込んで同化した分 − 支出)のうち grow_alloc を体の合成に回す。
         // 以前は 1 個体あたりの定数の速さ BODY_GROW_RATE で育っていた。今は上限を消化管の容量(稼ぎ)と
         // 成長の費用が決めるので、速く育つ種も遅く育つ種も生まれうる
         { float net=a.energy-e_start;
           if(a.body<a.size && net>0.f){
             float g=std::min(a.grow_alloc*net/BODY_GROW_COST,a.size-a.body);
-            a.body+=g; a.energy-=g*BODY_GROW_COST;
+            a.body+=g; a.energy-=g*BODY_GROW_COST; jb[jk].grow+=g*BODY_GROW_COST;
             // 組織に残るのは CORPSE_RETURN ぶん。残りは合成の呼吸で CO2 になる
             a_burn(co2.data(),o2.data(),hci,g*(BODY_GROW_COST-CORPSE_RETURN));
           } }
@@ -3276,7 +3284,7 @@ void update_animals(){
         if(a.energy>dth*0.6f && a.fat<a.store_fat*FAT_MAX){
             float put=std::min((a.energy-dth*0.6f)*FAT_RATE,
                                a.store_fat*FAT_MAX-a.fat);
-            a.energy-=put; a.fat+=put*0.85f;
+            a.energy-=put; a.fat+=put*0.85f; jb[jk].fat+=put;
             a_burn(co2.data(),o2.data(),ci,put*0.15f);   // 脂肪の合成の呼吸
         } else if(a.energy<dth*0.25f && a.fat>0.f){
             float take=std::min(a.fat,FAT_DRAW);
@@ -5839,6 +5847,14 @@ int main(int argc,char** argv){
                 // 繁殖した親と集団全体を比べる。正なら押し上げ、負なら削られている
                 printf("      [debug] repro events since last: A=%ld P=%ld\n",
                        sg_a_nr,sg_p_nr);
+                // 組織の炭素あたり、1 日あたりに直す(1 回の更新は ANIMAL_STRIDE·DT 分)
+                for(int k=0;k<2;k++){ const JuvBudget& b=jb[k]; double d=DAY_MIN/(ANIMAL_STRIDE*DT);
+                    double T=std::max(1e-12,b.tis);
+                    printf("      [budget %s] n/upd %.0f grown %.2f tisC %.3f | per tisC per day: eat %.3f spent %.3f grow %.3f fat %.3f | want %.2f gutfull %.2f\n",
+                           k?"adult":"juv", b.n, b.n?b.grown/b.n:0.0, b.n?b.tis/b.n:0.0,
+                           b.eat/T*d, b.spent/T*d, b.grow/T*d, b.fat/T*d,
+                           b.n?b.want/b.n:0.0, b.n?b.full/b.n:0.0);
+                    jb[k]=JuvBudget(); }
                 if(sg_a_nr>20){
                     for(auto& a:animals){ if(!a.alive) continue;
                         double v[N_SG_A]; sg_vec_a(a,v);
