@@ -199,7 +199,7 @@ const float GAS_DIFFUSE     = FRAC(PMF(0.55f,GAS_INTERVAL),GAS_INTERVAL);  // 4t
 const float GAS_RELAX       = FRAC(PMF(0.0060f,GAS_INTERVAL),GAS_INTERVAL);  // [率 1.46e-05 /分]
 const float WIND_STRENGTH   = LIN(PM(0.35f,GAS_INTERVAL),GAS_INTERVAL);  // 拡散に負けない強さにする [1分あたり 0.000851]
 // 条件: 地上 10 m の風の速さ。北半球の中緯度の陸の観測点の平均はおよそ 3 m/s(Vautard et al. 2010)。
-// 向きは卓越風の帯(wind[] の符号)に従う。大気の移流はこの速さで運ぶ。wind[] の大きさは、海流の換算の基準としてだけ残す
+// 向きは卓越風の帯(wind[] の符号)に従う。大気の移流と水面の漂流はこの速さから決める
 const float WIND_SURF_MS    = 3.0f;
 const float GAS_SHIFT       = LIN(WIND_SURF_MS*60.0/CELL_M,GAS_INTERVAL);  // 1 回の更新で空気が進むマス数 [1分あたり 18 マス]
 const float O2_PER_CO2      = 1.00f;
@@ -384,7 +384,10 @@ const int   ANIMAL_INIT_N   = 500;
 // --- 水域と地形 ---
 const float WATER_ATTEN     = 3.0f;    // 水深による光の減衰
 const float BUOY_COST       = LIN(PM(0.030f));  // 浮くための組織の維持費 [1分あたり 0.000292]
-const float BUOY_DRIFT      = LIN(PM(0.55f,PLANT_STRIDE),PLANT_STRIDE);  // 海流に流される強さ [1分あたり 0.00178]
+// 水面に浮く物は、地上 10 m の風の約 3% の速さで風下へ流される(吹送流と波のストークス・ドリフトを合わせた表層の漂流。
+// Wu 1983、油の漂流の目安 3%)。浮く強さ(buoyancy)は水面から出ている割合として、この速さに掛ける
+const double SURF_DRIFT_FRAC = 0.03;
+const float BUOY_DRIFT      = LIN(SURF_DRIFT_FRAC*WIND_SURF_MS*60.0/CELL_M,PLANT_STRIDE);  // 1 回の更新で流されるマス数 [1分あたり 0.54 マス]
 const float HABITAT_COST_P  = LIN(PM(0.35f));  // 生息環境の不適合(植物) [1分あたり 0.0034]
 const float HABITAT_COST_A  = LIN(PM(0.10f,ANIMAL_STRIDE),ANIMAL_STRIDE);  // 生息環境の不適合(動物) [1分あたり 0.000486]
 const float SLOPE_COEF      = 0.50f;   // 勾配による減速。45°(勾配 1)で速さが 2/3。小さな昆虫は体重あたりの登坂の仕事が小さい
@@ -553,7 +556,7 @@ struct Budget {
     double w_relax=0;                // 陸の土壌水: 降水・河川・流出による目標への緩和(上下限込み)
     double w_transp=0;               // 蒸散: 陸の土の水と植物の貯水から大気へ出る水(大気の水蒸気は帳簿の外)
     double w_sea=0;                  // 海のマスの植物と海との水のやりとり(海の水は帳簿の外)
-    double c_immig=0, n_immig=0;     // 土地の外から入ってくる生き物(動物の放流・微生物の胞子・浮遊植物)が持ち込む炭素と窒素
+    double c_immig=0, n_immig=0;     // 土地の外との生き物の出入り(動物の放流・微生物の胞子・浮遊植物が持ち込む分、流されて端から出る浮遊植物の分は負)
 } g_bud;
 // 光合成ループは並列なので、蒸散の帳簿はマスごとに積み、帳簿を出すときに順に足す(足す順を固定して決定性を保つ)
 std::vector<double> w_transp_cell(GRID_W*GRID_H, 0.0);
@@ -1462,7 +1465,7 @@ void compute_currents(){
     std::fill(cur_v.begin(),cur_v.end(),0.f);
     for(int y=0;y<GRID_H;y++) for(int x=0;x<GRID_W;x++){
         int i=idx(x,y);
-        if(sea[i]) cur_u[i]=wind[y]/WIND_STRENGTH;
+        if(sea[i]) cur_u[i]=(wind[y]>0.f)?1.f:(wind[y]<0.f?-1.f:0.f);   // 向きだけ。速さは BUOY_DRIFT が持つ
     }
 }
 
@@ -2574,7 +2577,14 @@ void update_plants(){
         if(sea[ci] && p.buoyancy>0.4f){
             p.x+=cur_u[ci]*BUOY_DRIFT*p.buoyancy;
             p.y+=cur_v[ci]*BUOY_DRIFT*p.buoyancy;
-            if(p.x<0.f) p.x=0.f;     if(p.x>=GRID_W) p.x=GRID_W-1.f;
+            // 東西は開いた境界。流されて端を越えた個体は区画の外へ出る。体の炭素と窒素は外へ出たぶんとして帳簿に付ける
+            // (貯水は、死んだ株の貯水を戻す処理が区画の外の水として帳簿に付ける)
+            if(p.x<0.f || p.x>=GRID_W){
+                p.alive=false;
+                g_bud.c_immig-=(p.energy+p.height*GROW_COST)*CO2_PER_ENERGY;
+                g_bud.n_immig-=p.n_store+p.height*N_PER_GROWTH;
+                continue;
+            }
             if(p.y<0.f) p.y=0.f;     if(p.y>=GRID_H) p.y=GRID_H-1.f;
         }
         upkeep += BUOY_COST*p.buoyancy
