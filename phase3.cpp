@@ -198,6 +198,10 @@ const float ALT_O2_DECAY    = ELEV_M/8400.f;  // 標高による空気の薄ま�
 const float GAS_DIFFUSE     = FRAC(PMF(0.55f,GAS_INTERVAL),GAS_INTERVAL);  // 4tickに一度呼ぶぶん強める [率 0.00194 /分]
 const float GAS_RELAX       = FRAC(PMF(0.0060f,GAS_INTERVAL),GAS_INTERVAL);  // [率 1.46e-05 /分]
 const float WIND_STRENGTH   = LIN(PM(0.35f,GAS_INTERVAL),GAS_INTERVAL);  // 拡散に負けない強さにする [1分あたり 0.000851]
+// 条件: 地上 10 m の風の速さ。北半球の中緯度の陸の観測点の平均はおよそ 3 m/s(Vautard et al. 2010)。
+// 向きは卓越風の帯(wind[] の符号)に従う。大気の移流はこの速さで運ぶ。wind[] の大きさは、匂いと海流の換算の基準としてだけ残す
+const float WIND_SURF_MS    = 3.0f;
+const float GAS_SHIFT       = LIN(WIND_SURF_MS*60.0/CELL_M,GAS_INTERVAL);  // 1 回の更新で空気が進むマス数 [1分あたり 18 マス]
 const float O2_PER_CO2      = 1.00f;
 
 // --- 火 ---
@@ -1793,14 +1797,20 @@ void update_gases(){
         for(int pass=0;pass<2;pass++){
             std::vector<float>& g=(pass==0)?co2:o2;
             float base=(pass==0)?CO2_BASE:O2_BASE;
-            int xin=(u>0)?0:GRID_W-1, xout=(u>0)?GRID_W-1:0;
-            edge[pass]+=((double)base-g[idx(xout,y)])*std::fabs(u);
+            // セミラグランジュ法: 各マスの空気は、GAS_SHIFT マス風上にあった空気が運ばれてきたもの。
+            // 出発点が区画の外なら、区画の外の空気(基準の濃度)が入る。間は線形に補う
+            int d=(u>0)?1:-1;
+            int n=(int)GAS_SHIFT; float f=GAS_SHIFT-(float)n;
+            double r0=0, r1=0;
+            for(int x=0;x<GRID_W;x++) r0+=g[idx(x,y)];
             for(int x=0;x<GRID_W;x++){
-                int up=(u>0)?x-1:x+1;
-                float gu=(x==xin)?base:g[idx(up,y)];
-                gbuf[idx(x,y)]=g[idx(x,y)]+(gu-g[idx(x,y)])*std::fabs(u);
+                int a=x-d*n, b=x-d*(n+1);
+                float ga=(a>=0&&a<GRID_W)?g[idx(a,y)]:base;
+                float gb=(b>=0&&b<GRID_W)?g[idx(b,y)]:base;
+                gbuf[idx(x,y)]=ga+(gb-ga)*f;
             }
-            for(int x=0;x<GRID_W;x++) g[idx(x,y)]=gbuf[idx(x,y)];
+            for(int x=0;x<GRID_W;x++){ g[idx(x,y)]=gbuf[idx(x,y)]; r1+=g[idx(x,y)]; }
+            edge[pass]+=r1-r0;   // 区画の中の移しかえは総量を変えない。行の総量の変化は、端から入った分と出た分の差
         }
     }
     for(int pass=0;pass<2;pass++){
