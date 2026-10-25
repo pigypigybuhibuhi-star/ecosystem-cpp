@@ -461,6 +461,16 @@ const float MICROBE_TURNOVER = FRAC(0.05/DAY_MIN,MICROBE_STRIDE);  // 1 回の�
 // 土の微生物の最大比増殖速度は、基質を加えた呼吸の解析で 0.1〜0.4 /時(Blagodatsky et al. 2000、Panikov 1995)。
 // 下端の 0.1 /時を炭素利用効率 MICROBE_EFF で割り、取り込みの上限とする。以前は上限が無く、マスの死骸が多いほど際限なく取れた
 const float MICROBE_VMAX = (float)(0.1/60.0/0.40);  // 1 分あたり、体の炭素あたりの取り込みの上限 [4.17e-03 /分]
+// 死骸への胞子の定着。空気には菌の胞子が 1 m³ あたり 10^3〜10^4 個ある(Lacey 1996)。終端速度 1 mm/s で落ちると、
+// 1 マス(100 m²)に 1 分あたり 6000 個以上が降るので、どの死骸にも胞子はすぐ届く。定着の遅れを決めるのは、
+// 届いた胞子が死骸を食って、ここで 1 個体として数える群落(体の炭素 0.4)まで育つ時間のほう。
+// 群落 0.4 は約 2.4 mg C(動物の尺度: 体 1 = 生重 100 mg、組織 1 あたり CORPSE_RETURN 2.5)、直径 10 µm の胞子は約 7.5e-8 mg C。
+// その比 3e7 の対数 17.3 を、最大比増殖速度の下端 0.1 /時(MICROBE_VMAX と同じ根拠)で割った 173 時間(約 7 日)を、定着の平均の時間とする。
+// 以前は、分裂のときにしか広がらず、最初の 3000 個体から離れた死骸(r6 の測定で死骸のあるマスの 99.9%)は分解されなかった。
+// 実際の土と落葉は、どこでも数日のうちに微生物に取りつかれる(Voříšková & Baldrian 2013)
+const float MICROBE_COLONIZE_LAG = (float)(17.3/0.1*60.0);   // [分] 173 時間
+const float MICROBE_COLONIZE = FRAC(1.0/MICROBE_COLONIZE_LAG,MICROBE_STRIDE);   // 1 回の確かめ(STRIDE tick)で定着する確率 [率 9.63e-05 /分]
+const float MICROBE_COLONY_E = 0.40f;   // 1 個体として数え始める群落の体の炭素(撒く初めの個体と同じ)
 const float STORE_DRAW      = FRAC(PMF(0.02f));   // 土の水が足りないとき、不足分のうち体の貯水から補う割合
 const float STORE_SURPLUS   = FRAC(PMF(0.5f,PLANT_STRIDE),PLANT_STRIDE);   // 余った土の水のうち、1 回の更新で貯水に回せる割合
 const float FIRE_SHOOT_LOSS = LIN(PM(0.60f,PLANT_STRIDE),PLANT_STRIDE);  // 炎が幹と葉を焼く速さ(高さ/火勢)
@@ -684,6 +694,7 @@ std::vector<Microbe> microbes;
 int next_microbe_id=0;
 long d_micro=0;
 long g_mic_upd=0, g_mic_cap=0;   // 基質のあるマスでの微生物の更新の数と、そのうち取り込みが上限で決まった数
+long g_mic_col=0;                // 胞子が死骸のマスに定着した数(表示だけ)
 int  g_frame=0;   // 現在の tick。関数の引数に足さずに参照できるようにする
 
 // 選択した個体の一生を記録する。進化の観察とデバッグの両方に効く
@@ -2111,6 +2122,49 @@ void update_microbes(){
     for(auto& b:babies) microbes.push_back(b);
     microbes.erase(std::remove_if(microbes.begin(),microbes.end(),
         [](const Microbe& m){ return !m.alive; }),microbes.end());
+    // 胞子の定着。STRIDE tick に 1 回、微生物のいない死骸のマスを確かめる。
+    // 胞子の型は、空気に混ざった土地の微生物の胞子から一つ(生きている個体を一つ選び、分裂と同じく変異させる)。
+    // 群落の体の炭素はそのマスの死骸を食って作ったもので、分解と同じく、食った炭素の EFF が体に、残りが CO2 に、窒素は土に出る
+    if(mphase==0 && !microbes.empty() && !corpses.empty()){
+        static std::vector<unsigned char> occ;
+        occ.assign(GRID_W*GRID_H,0);
+        for(const auto& m:microbes){ int gx=(int)m.x, gy=(int)m.y; if(gx>=0&&gx<GRID_W&&gy>=0&&gy<GRID_H) occ[idx(gx,gy)]=1; }
+        int n_src=(int)microbes.size();
+        for(int i=0;i<(int)corpses.size();i++){
+            int gx=(int)corpses[i].x, gy=(int)corpses[i].y;
+            if(gx<0||gx>=GRID_W||gy<0||gy>=GRID_H) continue;
+            int ci=idx(gx,gy);
+            int cb=cgrid.b(ci), ce=cgrid.e(ci);
+            if(cb>=ce || cgrid.items[cb]!=i || occ[ci]) continue;   // マスの最初の死骸でだけ、一度だけ確かめる
+            if((int)microbes.size()>=800000) break;
+            const Microbe& src=microbes[(size_t)frand(0.f,(float)n_src-0.001f)];
+            float dT=(temper[ci]-(24.f-20.f*src.cold_tol))/22.f;
+            if(temper[ci]<-8.f-30.f*src.cold_tol) continue;
+            float act=std::exp(-dT*dT);
+            float pr=-std::expm1(act*std::log1p(-MICROBE_COLONIZE));   // 活動が低いと育つのが遅れ、率が act 倍になる
+            if(frand(0.f,1.f)>=pr) continue;
+            float avail=0.f; for(int t=cb;t<ce;t++) avail+=corpses[cgrid.items[t]].energy;
+            if(avail<=0.f) continue;
+            float g=std::min(MICROBE_COLONY_E,avail*MICROBE_EFF);
+            float frac=g/MICROBE_EFF/avail;
+            for(int t=cb;t<ce;t++){
+                int pk=cgrid.items[t];
+                float dec=corpses[pk].energy*frac;
+                float dn=corpses[pk].n*std::min(1.f,frac);
+                corpses[pk].n-=dn; corpses[pk].energy-=dec;
+                a_burn(co2.data(),o2.data(),ci,dec*(1.f-MICROBE_EFF));
+                soil_n[ci]+=dn;
+            }
+            Microbe c=src;
+            c.x=gx+frand(0.f,0.999f); c.y=gy+frand(0.f,0.999f);
+            c.energy=g; c.alive=true;
+            c.rate    =mutate(src.rate,    0.05f,1.0f);
+            c.cold_tol=mutate(src.cold_tol,0.0f,1.0f);
+            c.id=next_microbe_id++; c.age=0;
+            microbes.push_back(c);
+            occ[ci]=1; g_mic_col++;
+        }
+    }
     // 分解者が絶えた場合、死骸の山から再び湧く
     if(microbes.size()<50 && corpses.size()>1000){
         for(int t=0;t<200;t++){
@@ -5804,9 +5858,9 @@ int main(int argc,char** argv){
                          np2?100.0*sex_p/np2:0.0, na2?100.0*sex_a/na2:0.0); }
                 { double mr2=0,mc2=0; int nm=(int)microbes.size();
                   for(const auto& m:microbes){ mr2+=m.rate; mc2+=m.cold_tol; }
-                  printf("      microbe: %d  rate %.3f  cold %.3f  deaths %ld  capped %.1f%%\n",
-                         nm, nm?mr2/nm:0.0, nm?mc2/nm:0.0, d_micro, g_mic_upd?100.0*g_mic_cap/g_mic_upd:0.0);
-                  g_mic_upd=g_mic_cap=0; }
+                  printf("      microbe: %d  rate %.3f  cold %.3f  deaths %ld  capped %.1f%%  colonized %ld\n",
+                         nm, nm?mr2/nm:0.0, nm?mc2/nm:0.0, d_micro, g_mic_upd?100.0*g_mic_cap/g_mic_upd:0.0, g_mic_col);
+                  g_mic_upd=g_mic_cap=g_mic_col=0; }
                 compute_averages();   // レーダー図に重ねる集団平均
                 printf("      deaths: starve %ld  cold %ld  preyed %ld  slide %ld\n",
                        d_starve,d_cold,d_preyed,d_slide);
