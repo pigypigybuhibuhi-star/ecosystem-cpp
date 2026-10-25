@@ -279,8 +279,12 @@ const float PATH_ADAPT      = FRAC(PMF(0.030f,PATH_INTERVAL),PATH_INTERVAL);  //
 const float PATH_GROW       = LIN(PM(0.020f,PATH_INTERVAL),PATH_INTERVAL);  // 宿主密度に応じた増殖 [1分あたり 6.48e-05]
 const float PATH_DECAY      = FRAC(PMF(0.015f,PATH_INTERVAL),PATH_INTERVAL);  // 宿主がいなければ衰える [率 4.9e-05 /分]
 const float PATH_LOAD_MAX   = 2.50f;
-const float PATH_VIRULENCE  = LIN(PM(0.055f));  // 型が一致したときの被害 [1分あたり 0.000535]
+const float PATH_VIRULENCE  = LIN(PM(0.055f));  // 植物で型が一致したときの被害 [1分あたり 0.000535]
 const float PATH_WIDTH      = 0.42f;   // 一致とみなす幅(狭いほど型が効く)
+// 動物の発病の費用は、免疫の応答による代謝の上昇。組織の基礎代謝への上乗せの比で表す。
+// 甲虫の幼虫(Tenebrio molitor)は免疫の刺激で標準代謝が 25〜60% 上がる(Catalán et al. 2012, J Insect Physiol 58:310)。
+// 負荷が上限 PATH_LOAD_MAX で型が一致したときに上限の 60% とし、それより軽ければ比例して小さくする
+const float PATH_METAB_RISE = 0.60f;
 
 // --- 樹上生活 ---
 const float ARBOREAL_COST   = LIN(PM(0.028f,ANIMAL_STRIDE),ANIMAL_STRIDE);  // 登攀に適した体の維持費 [1分あたり 0.000136]
@@ -3273,7 +3277,7 @@ void update_animals(){
         // 発病
         if(aload[ci]>0.02f){
             float inf=aload[ci]*immune_match(a.im,ci,astrain);
-            metab+=inf*PATH_VIRULENCE;
+            metab+=A_SMR*a.body*CORPSE_RETURN*PATH_METAB_RISE*(inf/PATH_LOAD_MAX);
             infect_a+=inf;
         }
         // 呼吸: 酸素の分圧で効率が決まる。水中と高所は薄い
