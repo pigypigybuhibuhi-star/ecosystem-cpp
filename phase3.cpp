@@ -223,9 +223,13 @@ const float FIRE_FUEL_MIN   = 1.5f;
 
 // --- 撹乱 ---
 const float SLIDE_SLOPE     = 0.58f;   // これ以上の勾配(30°)で崩れうる。表層崩壊の多くは 30° を超える斜面で起きる
-const float SLIDE_RATE      = FRAC(PMF(1.2e-5f));  // 崩落率/マス/tick [率 1.17e-07 /分]
 // 崩れる厚さ。表層崩壊は土層と基盤の境で滑り、厚さは 0.5〜2 m(小さな崩壊の中央値はおよそ 1 m、Larsen et al. 2010)
 const float SLIDE_DEPTH_M   = 1.0f;
+// 崩落率/マス/分(勾配が SLIDE_SLOPE のとき。急なほど比例して増える)。崩れが削る速さから決める。
+// 急な斜面が安息の限りにある土地では、地表が削られる速さは岩盤の隆起の速さに揃う(Montgomery & Brandon 2002)。
+// 隆起は条件の UPLIFT_MM_YR(北の端 0.3 mm/年)なので、1 回の崩れで SLIDE_DEPTH_M 削るなら 0.3e-3/1.0 回/年 = 5.7e-10 /分。
+// 以前は 1.17e-07 /分(急な斜面が 1 年に約 6 cm 削られる)で、この約 200 倍だった
+const float SLIDE_RATE      = FRAC(UPLIFT_MM_YR*1e-3/SLIDE_DEPTH_M/YEAR_MIN);  // [率 5.71e-10 /分]
 // 崩土の到達。見通し角 H/L は体積で決まる: log10(H/L) = −0.085 log10(V) + 0.047(Corominas 1996、全種類の当てはめ)。
 // 1 マスの崩壊 V = 厚さ × 10 m × 10 m で H/L ≈ 0.75
 const float SLIDE_HL        = std::pow(10.f,-0.085f*std::log10(SLIDE_DEPTH_M*CELL_M*CELL_M)+0.047f);
