@@ -494,6 +494,11 @@ const float SENESCE_RATE    = 2.4f;    // 衰えの速さ
 const float LIFESPAN_COST   = LIN(PM(0.030f));  // 長命な体の維持費 [1分あたり 0.000292]
 const int   LIFE_MIN        = (int)TICKS(900*DT0);  // 最短の寿命 [64.3 日]
 const int   LIFE_MAX        = (int)TICKS(40000*DT0);  // 最長の寿命 [2.86e+03 日]
+// 動物(地面を歩く昆虫程度)の寿命の幅。植物の幅(惑星版のまま)とは分ける。生理の条件
+// 短い側: 卵から死ぬまで約 30 日(Drosophila melanogaster、25℃で発生 10 日+成虫の中央値 30〜40 日の下端)
+// 長い側: 約 3 年(オサムシ科の成虫は 2〜3 年、まれに 4 年生きる。Lövei & Sunderland 1996)
+const int   LIFE_MIN_A      = (int)TICKS(30*DAY_MIN);     // [30 日]
+const int   LIFE_MAX_A      = (int)TICKS(3*YEAR_MIN);     // [1095 日]
 const int   SAMPLE_INTERVAL = 300;
 const int   AUTOSAVE_EVERY  = 7200;
 const int   PRINT_EVERY     = 60;
@@ -1824,8 +1829,8 @@ void update_gases(){
 }
 
 // 老化。寿命の後半に入ると、代謝が上がり、繁殖の力が落ちる
-inline float senesce(int age,float lifespan){
-    float L=LIFE_MIN+(LIFE_MAX-LIFE_MIN)*lifespan;
+inline float senesce(int age,float lifespan,int lmin=LIFE_MIN,int lmax=LIFE_MAX){
+    float L=lmin+(lmax-lmin)*lifespan;
     float u=(float)age/L;
     if(u<SENESCE_START) return 0.f;
     float t=(u-SENESCE_START)/(1.f-SENESCE_START);
@@ -3238,7 +3243,7 @@ void update_animals(){
                    +a.fat*FAT_COST;
         // 基礎代謝と形質の維持費は組織の炭素に比例する。歩く費用は別に足す
         float metab=A_SMR*a.body*CORPSE_RETURN*(1.f+upkeep/A_TRAIT_REF)+sp*A_MOVE_COST;
-        float sen=senesce(a.age,a.lifespan);
+        float sen=senesce(a.age,a.lifespan,LIFE_MIN_A,LIFE_MAX_A);
         metab *= (1.f+sen);
         metab += LIFESPAN_COST*a.lifespan;
         // 発病
