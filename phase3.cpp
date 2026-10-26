@@ -2392,7 +2392,10 @@ void update_storms(){
     strikes.clear();
     if(g_replay)                       // 再生中の雷は記録の各件だけ。再生した雷からは着火しない(火の更新が再生の分岐を通る)
         ev_replay_due(EV_LIGHTNING,[](const EnvEvent& e){ strikes.push_back(idx(e.x,e.y)); });
-    if(storms.empty()) return;
+    if(storms.empty()){                // 雲が無くなれば冷気も突風も消える(残った風が源なしに吹き続けないように)
+        if(g_frame%ODOR_INTERVAL==0) update_gust();
+        return;
+    }
     // 雨と冷気。強さは一生の中で sin の形に盛り上がって衰える(積雲期・成熟期・消散期)
     const float sr=R*0.5f, sc=RC*0.5f;          // ガウス形の幅。半径は 2σ
     static std::vector<double> row_w(GRID_H);
