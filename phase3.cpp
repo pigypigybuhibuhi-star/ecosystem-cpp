@@ -208,7 +208,6 @@ const float O2_PER_CO2      = 1.00f;
 // 酸素が17%未満では燃え広がらず、35%を超えると消火が困難になる(火の窓)
 // 地球の21%を1.0とした比。17%未満では広がらず、35%超で消火困難
 const float FIRE_O2_MIN     = 0.81f;   // 17% / 21%
-const float FIRE_IGNITE     = FRAC(PMF(8.0e-8f));  // 落雷による着火率/マス/tick [率 7.78e-10 /分]
 const float FIRE_SPREAD     = FRAC(PMF(0.20f));  // 隣へ移る強さ [率 0.00217 /分]
 const float FIRE_BURN       = FRAC(PMF(0.45f));  // 一tickで燃える燃料の割合 [率 0.00581 /分]
 const float FIRE_DECAY      = FRAC(PMF(0.38f));  // 火勢の減衰。燃え尽きたら消える [率 0.00465 /分]
@@ -258,6 +257,13 @@ const float SOIL_W_MM       = 100.0f;
 // 条件: 対流の発生の頻度(1 km² あたり 1 分あたり、日射の正弦 1・飽和水蒸気圧の比 1 のとき)。
 // 中緯度の内陸で雷の日は年 30〜50 日(Changnon 1988)。一地点が年におよそ 30 回雨雲の下に入る値にした
 const double STORM_INIT     = 1.3e-6;
+// 雷: 対地放電は雨雲の雨と同じ対流から生じる。1 回の対地放電あたりの降水量(rain yield)は
+// 大陸の対流でおよそ 1e8 kg(Petersen & Rutledge 1998。大陸 1e7〜1e8、海洋 1e9〜1e10)。
+// 雲がその tick に降らせた雨の質量 ÷ この値が、その tick の対地放電の回数の期待値になる
+const double LIGHT_RAIN_YIELD_KG = 1.0e8;
+// 長い連続電流(40 ms 以上)を伴う対地放電の割合。燃料に着火しうるのはこの放電(Fuquay et al. 1972、約 2 割)。
+// 当たった燃料が燃え出す確率は、この割合に湿りによる燃焼の弱まり(Rothermel の η_M)と酸素の比を掛ける
+const float LIGHT_LCC       = 0.20f;
 
 // --- 変異 ---
 const float MUT_STRENGTH    = 0.02f;
@@ -789,17 +795,17 @@ long slide_events=0;
 // 環境の出来事の記録と再生。生き物と無関係に起きる離散的な出来事を
 // 1件ずつ tick・位置・種類・強さで書き出し、時刻と場所を混ぜて再生できるようにする。
 // 書式: 1行1件 "tick 種類 x y 強さ"。'#' で始まる行は注記
-enum EvKind { EV_FIRE=0, EV_SLIDE=1, EV_STORM=2, EV_N };
-const char* EV_NAME[EV_N]={"fire","slide","storm"};
+enum EvKind { EV_FIRE=0, EV_SLIDE=1, EV_STORM=2, EV_LIGHTNING=3, EV_N };
+const char* EV_NAME[EV_N]={"fire","slide","storm","lightning"};
 struct EnvEvent { long tick; int kind; int x,y; float strength; };
 FILE* g_rec=nullptr;                       // --record の出力先
 bool  g_replay=false;                      // --replay 中は該当種類を物理から起こさない
 std::vector<EnvEvent> g_replay_ev;         // 混ぜたあと tick 順に並べた出来事
 size_t g_replay_pos=0;
-long   g_replay_done[EV_N]={0,0,0};
+long   g_replay_done[EV_N]={0,0,0,0};
 
-long   g_cs_ev_n[EV_N]={0,0,0};        // 全体の記録(--census)用: 前の記録からの件数と強さの和
-double g_cs_ev_s[EV_N]={0,0,0};
+long   g_cs_ev_n[EV_N]={0,0,0,0};        // 全体の記録(--census)用: 前の記録からの件数と強さの和
+double g_cs_ev_s[EV_N]={0,0,0,0};
 void ev_record(int kind,int x,int y,float s){
     g_cs_ev_n[kind]++; g_cs_ev_s[kind]+=s;
     if(!g_rec) return;
@@ -2258,6 +2264,10 @@ std::uniform_real_distribution<float> wx01(0.f,1.f);
 std::vector<float> storm_dT(GRID_W*GRID_H,0.f);   // 冷気による気温の下がり(負)。毎 tick 作り直す
 bool   storm_dT_on=false;
 long   storm_events=0;
+// 雷は雲ごとの雨から別の乱数で起こす。雷を足しても雲の乱数列(発生・強さ)は変わらない
+std::mt19937 lt_rng(12344u^0x9E3779B9u);
+std::vector<int> strikes;             // この tick に区画の陸へ落ちた対地放電のマス。火の更新が着火に使う
+long   lightning_events=0;            // 区画の中への対地放電の累計
 double storm_rain_mm=0;               // 前の表示からの、陸に降った雨の陸の平均(mm)
 // 飽和水蒸気圧の 20 °C との比(マグヌスの式)
 inline float es_ratio(float t){ return std::exp(17.62f*t/(243.12f+t)-17.62f*20.f/(243.12f+20.f)); }
@@ -2290,6 +2300,9 @@ void update_storms(){
     storms.erase(std::remove_if(storms.begin(),storms.end(),[&](const Storm& s){
         return s.age>=STORM_LIFE || (d>0.f? s.x>GRID_W+RC : s.x<-RC); }),storms.end());
     if(storm_dT_on){ std::fill(storm_dT.begin(),storm_dT.end(),0.f); storm_dT_on=false; }
+    strikes.clear();
+    if(g_replay)                       // 再生中の雷は記録の各件だけ。再生した雷からは着火しない(火の更新が再生の分岐を通る)
+        ev_replay_due(EV_LIGHTNING,[](const EnvEvent& e){ strikes.push_back(idx(e.x,e.y)); });
     if(storms.empty()) return;
     // 雨と冷気。強さは一生の中で sin の形に盛り上がって衰える(積雲期・成熟期・消散期)
     const float sr=R*0.5f, sc=RC*0.5f;          // ガウス形の幅。半径は 2σ
@@ -2299,6 +2312,24 @@ void update_storms(){
         float I=s.ipeak*std::sin(3.14159265f*s.age/STORM_LIFE);
         if(I<=0.f) continue;
         float dTc=-STORM_COLD_DT*std::min(2.f,I/STORM_I_MEAN);
+        if(!g_replay){
+            // 対地放電。この tick の雨の質量(中心の強さ × ガウス形の面積、半径 2σ の内側)÷ rain yield
+            double sm=sr*CELL_M;
+            double kg=(double)I/60.0*DT*2.0*3.14159265358979*sm*sm*(1.0-std::exp(-2.0));
+            double e=kg/LIGHT_RAIN_YIELD_KG;
+            int n=(int)e; double f=e-n;
+            if(f>0.0 && wx01(lt_rng)<f) n++;
+            for(int k=0;k<n;k++){
+                // 落ちる場所は雨の芯と同じ広がり(ボックス・ミュラー)
+                float u1=std::max(1e-7f,wx01(lt_rng)), u2=wx01(lt_rng);
+                float rr=sr*std::sqrt(-2.f*std::log(u1));
+                int gx=(int)std::floor(s.x+rr*std::cos(6.2831853f*u2)), gy=(int)std::floor(s.y+rr*std::sin(6.2831853f*u2));
+                if(gx<0||gx>=GRID_W||gy<0||gy>=GRID_H) continue;
+                lightning_events++;
+                ev_record(EV_LIGHTNING,gx,gy,1.f);     // 強さ 1 = 対地放電 1 回
+                if(!sea[idx(gx,gy)]) strikes.push_back(idx(gx,gy));
+            }
+        }
         float wc=I/60.f*(float)DT/SOIL_W_MM;    // 中心で 1 tick に降る量(土の水の単位)
         int ya=std::max(0,(int)std::floor(s.y-RC)), yb=std::min(GRID_H,(int)std::ceil(s.y+RC)+1);
         int xa=std::max(0,(int)std::floor(s.x-RC)), xb=std::min(GRID_W,(int)std::ceil(s.x+RC)+1);
@@ -2375,7 +2406,7 @@ void update_fire(int frame){
             fire_events++;
             ev_record(EV_FIRE,e.x,e.y,e.strength);
         });
-    } else
+    } else {
     for(int y=0;y<GRID_H;y++){
         for(int x=0;x<GRID_W;x++){
             int i=idx(x,y);
@@ -2393,13 +2424,26 @@ void update_fire(int frame){
             float r=fuel_moist[i]/wet_ok;
             float dryness=std::max(0.f,1.f-2.59f*r+5.11f*r*r-3.52f*r*r*r);
             f+=nb*FIRE_SPREAD*dryness;
-            if(dist01(rng)<FIRE_IGNITE*dryness*o2r) { f+=1.f; fire_events++; }
             f*=(1.f-FIRE_DECAY);
             if(f>3.f) f=3.f;
             fire_buf[i]=f;
-            // 燃え始めたマス(落雷でも燃え移りでも)を1件として記録する
+            // 燃え移りで燃え始めたマスを1件として記録する(落雷による着火は下で記録する)
             if(fire[i]<0.05f && f>=0.05f) ev_record(EV_FIRE,x,y,f);
         }
+    }
+    // 落雷による着火。雨雲から落ちた対地放電のうち、長い連続電流を伴うものが乾いた燃料に火を付ける
+    for(int i:strikes){
+        if(fuel[i]<FIRE_FUEL_MIN || fuel_moist[i]>=wet_ok) continue;
+        float r=fuel_moist[i]/wet_ok;
+        float dryness=std::max(0.f,1.f-2.59f*r+5.11f*r*r-3.52f*r*r*r);
+        if(dryness<=0.f) continue;
+        if(wx01(lt_rng)<LIGHT_LCC*dryness*o2r){
+            float f0=fire_buf[i];
+            fire_buf[i]=std::min(3.f,f0+(1.f-FIRE_DECAY));
+            fire_events++;
+            if(fire[i]<0.05f && f0<0.05f) ev_record(EV_FIRE,i%GRID_W,i/GRID_W,fire_buf[i]);
+        }
+    }
     }
     fire.swap(fire_buf);
 
@@ -3853,6 +3897,7 @@ void save_state(const std::string& fn,int frame){
         // 天気の状態。雨雲は 1 時間ほどしか続かないが、再開しても同じ続きになるよう乱数ごと残す
         f<<"WEATHER "<<storms.size()<<'\n'<<wx_rng<<'\n';
         for(auto& s:storms){ char b[160]; snprintf(b,sizeof b,"%a %a %a %a\n",s.x,s.y,s.age,s.ipeak); f<<b; }
+        f<<"LIGHTNING\n"<<lt_rng<<'\n'<<lightning_events<<'\n';
         f<<"HISTORY\n";
         io_hist(sw);
         f<<"END\n";
@@ -3944,6 +3989,7 @@ bool load_state(const std::string& fn,int& frame){
                                   std::strtof(c.c_str(),nullptr),std::strtof(d.c_str(),nullptr)}); }
             f>>sec;
         }
+        if(sec=="LIGHTNING"){ f>>lt_rng; f>>lightning_events; f>>sec; }
         if(sec=="HISTORY"){
             io_hist(sr);
             f>>sec;
@@ -4973,7 +5019,7 @@ int main(int argc,char** argv){
     std::string assay_path, assay_save, assay_out; int assay_max=1000;
     for(int i=1;i<argc;i++){
         std::string a=argv[i];
-        if(a=="--seed"    && i+1<argc){ unsigned sd=(unsigned)std::stoul(argv[++i]); rng.seed(sd); wx_rng.seed(sd^0x2545F491u); }
+        if(a=="--seed"    && i+1<argc){ unsigned sd=(unsigned)std::stoul(argv[++i]); rng.seed(sd); wx_rng.seed(sd^0x2545F491u); lt_rng.seed(sd^0x9E3779B9u); }
         if(a=="--stop-at" && i+1<argc) g_stop_at=std::stol(argv[++i]);
         if(a=="--record"  && i+1<argc) rec_path=argv[++i];
         if(a=="--replay"  && i+1<argc) replay_path=argv[++i];
@@ -5002,7 +5048,7 @@ int main(int argc,char** argv){
         g_rec=fopen(rec_path.c_str(),"w");
         if(!g_rec){ fprintf(stderr,"record: cannot open %s\n",rec_path.c_str()); return 1; }
         fprintf(g_rec,"# evosim environment events v1: tick kind x y strength\n");
-        fprintf(g_rec,"# fire strength = fire intensity at ignition; slide strength = slope; storm strength = peak rain rate mm/h (x y may lie upwind outside the plot)\n");
+        fprintf(g_rec,"# fire strength = fire intensity at ignition; slide strength = slope; storm strength = peak rain rate mm/h (x y may lie upwind outside the plot); lightning strength = 1 per cloud-to-ground flash\n");
     }
     if(!replay_path.empty()){
         if(!ev_load_replay(replay_path.c_str(),shuffle_seed)) return 1;
@@ -5542,8 +5588,8 @@ int main(int argc,char** argv){
             if(g_stop_at>0 && frame>=g_stop_at){
                 printf("=== stop at t=%d  mean fps (t>=50000) %.2f over %ld frames ===\n",
                        frame, g_fps_time>0? g_fps_n/g_fps_time : 0.0, g_fps_n);
-                if(g_replay) printf("replay: done fire %ld slide %ld storm %ld of %zu\n",
-                                    g_replay_done[EV_FIRE],g_replay_done[EV_SLIDE],g_replay_done[EV_STORM],g_replay_ev.size());
+                if(g_replay) printf("replay: done fire %ld slide %ld storm %ld lightning %ld of %zu\n",
+                                    g_replay_done[EV_FIRE],g_replay_done[EV_SLIDE],g_replay_done[EV_STORM],g_replay_done[EV_LIGHTNING],g_replay_ev.size());
                 if(g_rec){ fclose(g_rec); g_rec=nullptr; }
                 field_close();
                 census_close();
@@ -5846,8 +5892,8 @@ int main(int argc,char** argv){
                            slide_events); }
                   { int nl=0; float cold=0.f;
                     for(int i=0;i<GRID_W*GRID_H;i++){ if(sea[i]) continue; nl++; cold=std::min(cold,storm_dT[i]); }
-                    printf("      weather: storms %ld (active %zu) | rain land mean %.2f mm since last | cold pool now %.1f C\n",
-                           storm_events, storms.size(), nl?storm_rain_mm/nl:0.0, cold);
+                    printf("      weather: storms %ld (active %zu) | lightning %ld | rain land mean %.2f mm since last | cold pool now %.1f C\n",
+                           storm_events, storms.size(), lightning_events, nl?storm_rain_mm/nl:0.0, cold);
                     storm_rain_mm=0; }
                          printf("      plant: parasite %.3f carnivory %.3f fireSeed %.3f reproAlloc %.3f\n",
                                  n?spa/n:0.0,
