@@ -2054,6 +2054,13 @@ void update_odor(){
                         if(sx<0||sx>=GRID_W||sy<0||sy>=GRID_H) continue;
                         v+=g[idx(sx,sy)]*(jx?fx:1.f-fx)*(jy?fy:1.f-fy);
                     }
+                    // 地表の層の質量の保存: 広がる流れ(∇·u > 0)では、層から出た空気の分だけ上から空気が降りて入る。
+                    // 上の空気は地表の匂いを持たない(条件)ので、濃さは exp(−∇·u·Δt) に薄まる。
+                    // 集まる流れ(∇·u < 0)では、空気はその濃さのまま上へ抜けるので、濃さは変わらない(匂いは区画の上へ出る)
+                    const int xl=(x>0)?x-1:x, xr=(x<GRID_W-1)?x+1:x, yl=(y>0)?y-1:y, yr=(y<GRID_H-1)?y+1:y;
+                    float dv=((gust_u[idx(xr,y)]-gust_u[idx(xl,y)])/(float)(xr-xl)
+                             +(gust_v[idx(x,yr)]-gust_v[idx(x,yl)])/(float)(yr-yl))*GUST_ODOR_CELLS;   // 1 回の更新の ∇·u·Δt
+                    if(dv>0.f) v*=std::exp(-dv);
                     odor_buf[i]=v;
                 }
                 continue;
