@@ -303,6 +303,9 @@ const float SEED_FAR        = 12.0f;
 const float PLANT_DIVIDE_TH = 8.0f;
 const float PLANT_INIT_E    = 6.0f;    // 立ち上がりの緩衝
 const int   PLANT_INIT_N    = 400;
+const int   PLANT_INIT_LAND = 200;     // 始まりの条件: そのうち陸に置く株
+const float PLANT_LAND_DORM = 5.0f;    // 始まりの条件: 陸の株の休眠の気温 [℃]
+const int   PLANT_INIT_ROOTED = 100;   // 始まりの条件: 海に置く株のうち根を張る株(残りは浮く)
 const int   PLANT_MAX       = 260000;  // これを超えると繁殖を止める。観察のための上限
 const int   ANIMAL_MAX      = 60000;
 const float SEX_COST        = LIN(PM(0.015f,ANIMAL_STRIDE),ANIMAL_STRIDE);  // 生殖器官の維持費 [1分あたり 7.29e-05]
@@ -5190,14 +5193,26 @@ int main(int argc,char** argv){
                land?sw/land:0.0,land?gap/land:0.0,gmax);
     }
     classify_climate();
+    // 区画は惑星の一部で、まわりの陸と海から種が入ってくるのが始まりの条件(D-2026-10-24-1 の作者の答え)。
+    // 最初の植物の一部は陸に、陸に合う遺伝子(aquatic 0・根を張る)で置く。
+    // 海の植物の一部は根を張る遺伝子(buoyancy < 0.4 で漂流しない)にし、残りは浮く。
+    // 陸の株は、種子の発芽と同じく土の水が足りるマスにだけ置く
     int placed=0,guard=0;
-    while(placed<PLANT_INIT_N && guard++<200000){
+    while(placed<PLANT_INIT_N && guard++<400000){
         Plant p;
         p.x=frand(0.f,(float)GRID_W); p.y=frand(0.f,(float)GRID_H);
         int gx=(int)p.x, gy=(int)p.y;
         if(gx<0||gx>=GRID_W||gy<0||gy>=GRID_H) continue;
-        if(!sea[idx(gx,gy)]) continue;              // 生命は海から始まる
-        if(depthn(idx(gx,gy))>0.35f) continue;      // ただし浅い海に
+        bool on_land=placed<PLANT_INIT_LAND;
+        bool rooted =on_land || placed<PLANT_INIT_LAND+PLANT_INIT_ROOTED;
+        int ci0=idx(gx,gy);
+        if(on_land){
+            if(sea[ci0]) continue;
+            if(soil_water[ci0]<0.25f) continue;
+        } else {
+            if(!sea[ci0]) continue;
+            if(depthn(ci0)>0.35f) continue;         // 海の株は浅い海に
+        }
         p.energy=PLANT_INIT_E; p.height=0.05f; p.alive=true; p.age=0;
         p.absorb=0.92f; p.max_height=0.25f; p.shade_tol=0.10f;
         p.tough=0.0f; p.clonal=0.0f; p.disperse=0.2f; p.cold_tol=0.05f;
@@ -5207,7 +5222,10 @@ int main(int argc,char** argv){
         for(int k=0;k<N_IMMUNE;k++) p.im[k]=frand(0.f,1.f);
         p.brood=0.1f; p.n_fix=0.0f; p.n_store=1.0f; p.lifespan=0.05f;
         p.parasite=0.f; p.carnivory=0.f; p.fire_seed=0.f; p.repro_alloc=0.5f;
-        p.seed_bank=0.f; p.defense=0.f; p.seed_wait=0; p.buoyancy=0.6f;
+        p.seed_bank=0.f; p.defense=0.f; p.seed_wait=0; p.buoyancy=rooted?0.2f:0.6f;
+        // 陸の株は、まわりの陸の温帯の草本の性質で入る: 水に頼らず(aquatic 0)、
+        // 生育の下限の気温(温帯の草本の基準温度 5℃、積算温度の基準。McMaster & Wilhelm 1997)を下回ると休眠に入る
+        if(on_land){ p.aquatic=0.0f; p.dorm_temp=PLANT_LAND_DORM; }
         p.mut_rate=0.3f;        p.mother=-1; p.father=-1; p.gen=0;
         p.id=next_plant_id++; p.genet=p.id; p.lin=-1;
         plants.push_back(p); placed++;
