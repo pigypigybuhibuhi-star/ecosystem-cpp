@@ -430,7 +430,17 @@ const float SHALLOW_EASE    = 0.30f;   // 浅瀬の緩さ(小さいほど岸が�
 const int   N_ODOR          = 4;   // 0=生体 1=腐敗 2=食害 3=災害
 const char* ODOR_NAME[4]    = {"生体","腐敗","食害","災害"};
 const float ODOR_DIFFUSE    = FRAC(PMF(0.42f,ODOR_INTERVAL),ODOR_INTERVAL);  // 拡散 [率 0.00132 /分]
-const float ODOR_DECAY      = FRAC(PMF(0.055f,ODOR_INTERVAL),ODOR_INTERVAL);  // 散逸 [率 0.000137 /分]
+const float ODOR_DECAY      = FRAC(PMF(0.055f,ODOR_INTERVAL),ODOR_INTERVAL);  // 災害(煙)の散逸。寿命 約 5 日 [率 0.000137 /分]
+// 生体・腐敗・食害の匂いは揮発性の有機物で、大気の中で OH ラジカル(昼)とオゾン(昼夜)に酸化されて消える。
+// 1 分あたりの率 = (k_OH·[OH] + k_O3·[O3])·60。速度定数は 298 K の値(Atkinson & Arey 2003)。
+// 代表の物質: 生体 = α-ピネン(植物の放出の主なモノテルペン)、腐敗 = 二硫化ジメチル(死骸の匂いの主成分)、
+// 食害 = (Z)-3-ヘキセノール(傷ついた葉の匂い)。煙は粒子で、酸化ではなく沈着で消えるので ODOR_DECAY のまま
+// 条件: [OH] は太陽高度の正弦に比例し、真上の太陽で 4e6 個/cm³(中緯度で一日の平均が約 1e6。Prinn et al. 2005)。
+// [O3] は背景の 30 ppb = 7.4e11 個/cm³(地表の空気 2.46e19 個/cm³)で、昼夜一定とする
+const double ODOR_OH_PEAK   = 4.0e6;
+const double ODOR_O3        = 30e-9*2.46e19;
+const double ODOR_K_OH[3]   = {5.3e-11, 2.3e-10, 1.08e-10};   // cm³/個/s
+const double ODOR_K_O3[3]   = {8.7e-17, 0.0,     6.4e-17};    // 二硫化ジメチルとオゾンの反応は無視できるほど遅い
 // 匂いを運ぶ風。地表を歩く虫の匂いは、地表近くの空気の層で運ばれる。
 // 地表近くの風は対数分布 u(z) = u*/κ·ln(z/z0) に従う(接地境界層の相似則)。u* は地上 10 m の風(WIND_SURF_MS、条件)から決める。
 // 粗度 z0 = 0.01 m(草の短い開けた土地。Wieringa 1993)、匂いの層は地表から 0.1 m までとし、その層の平均の速さで運ぶ
@@ -2003,6 +2013,10 @@ void update_odor(){
     // --- 移流・拡散・散逸 ---
     for(int k=0;k<N_ODOR;k++){
         std::vector<float>& g=odor[k];
+        // 1 回の更新(ODOR_INTERVAL tick)で残る割合。指数の形で換算する
+        const float keep=(k<3)
+            ? (float)std::exp(-(ODOR_K_OH[k]*ODOR_OH_PEAK*g_sun+ODOR_K_O3[k]*ODOR_O3)*60.0*ODOR_INTERVAL*DT)
+            : 1.f-ODOR_DECAY;
         // 風で流れる
         for(int y=0;y<GRID_H;y++){
             float u=wind[y];
@@ -2031,7 +2045,7 @@ void update_odor(){
             }
             int i=idx(x,y);
             float v=g[i]+(s/c-g[i])*ODOR_DIFFUSE;
-            v*=(1.f-ODOR_DECAY);
+            v*=keep;
             odor_buf[i]=(v<1e-5f)?0.f:v;
         }
         });
