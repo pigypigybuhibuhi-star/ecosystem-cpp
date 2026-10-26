@@ -248,6 +248,13 @@ const float STORM_R_M       = 2500.f;
 const float STORM_COLD_R_M  = 5000.f;
 // 冷気プールによる気温の低下。中緯度の対流の通過で中央値 5〜6 °C(Engerer et al. 2008)
 const float STORM_COLD_DT   = 6.0f;
+// 突風前線: 冷気プールは周りより重い空気の塊で、密度流として外へ広がる。広がる速さは c = k·√(g'·h)、
+// g' = g·ΔT/T(冷えた分の浮力の不足)。k = 0.7(Benjamin 1968 の深い流れの値。観測のフルード数 0.7〜1.0)、
+// 冷気の厚さ h は条件で 1000 m(観測で 0.5〜2 km。Charba 1974)。冷気 6 °C で約 10 m/s(観測の突風前線は 5〜15 m/s)。
+// 風は冷気の気圧の高まり(静水圧)の勾配に沿って外へ吹く。冷気をガウス形としたので、強さは勾配の形
+// (r/σ)·exp((1 − r²/σ²)/2)(r = σ で 1)に従う。3σ より外は無視する
+const float GUST_FROUDE     = 0.7f;
+const float GUST_DEPTH_M    = 1000.f;
 // 成熟期の中心の降水強度。対流性の雨は 10〜100 mm/h。雲ごとに指数分布で、平均は 30 mm/h を
 // 20 °C との飽和水蒸気圧の比で増減させる(クラウジウス・クラペイロン、Lenderink & van Meijgaard 2008)
 const float STORM_I_MEAN    = 30.0f;   // mm/h
@@ -448,6 +455,8 @@ const double ODOR_LAYER_M   = 0.10;   // 匂いを運ぶ地表近くの層の厚
 const double ODOR_USTAR     = 0.40*WIND_SURF_MS/std::log(10.0/ODOR_Z0);   // 摩擦速度(m/s)。カルマン定数 0.40
 const double ODOR_WIND_MS   = ODOR_USTAR/0.40*(ODOR_LAYER_M*std::log(ODOR_LAYER_M/ODOR_Z0)-ODOR_LAYER_M+ODOR_Z0)/(ODOR_LAYER_M-ODOR_Z0);  // 層の平均 約 0.68 m/s
 const float ODOR_SHIFT      = LIN(ODOR_WIND_MS*60.0/CELL_M,ODOR_INTERVAL);  // 1 回の更新で匂いが進むマス数 [1分あたり 約 4.1 マス]
+// 地上 10 m の突風 1 m/s が、1 回の更新で匂いを運ぶマス数。同じ対数分布で匂いの層の平均へ写す
+const float GUST_ODOR_CELLS = LIN(ODOR_WIND_MS/WIND_SURF_MS*60.0/CELL_M,ODOR_INTERVAL);
 // 横への広がりは層の中の乱流の拡散。渦拡散係数は混合距離の理論で K = κ·u*·z(Prandtl。接地境界層の中立の場合)とし、
 // 層の上端 z = ODOR_LAYER_M で評価する(約 0.007 m²/s)。周りの 3×3 の平均へ寄せる差分では、平均 − 中心 ≈ Δx²∇²/3 なので、
 // 1 回の更新で寄せる割合 = 3·K·Δt/Δx²(陽解法。1 を超えると不安定になるが、この値は 0.05 程度)
@@ -621,6 +630,11 @@ float sun_dec = 0.f;                   // 今の太陽赤緯(ラジアン)
 float g_sun   = 0.f;                   // 今の太陽高度の正弦(地平線の下は 0)。区画の中で一様
 float g_t_bg  = 0.f;                   // 海抜 0 の陸の今の気温。区画の外の背景の気温(条件)としても使う
 std::vector<float> odor[N_ODOR], odor_buf;
+// 雨雲の突風前線による地上 10 m の風(m/s、東向きと南向きの成分)。卓越風に重ねる。匂いの更新の tick に雲から作り直す
+std::vector<float> gust_u(GRID_W*GRID_H,0.f), gust_v(GRID_W*GRID_H,0.f);
+std::vector<char>  gust_row(GRID_H,0);   // 突風のある行。無い行は卓越風だけで運ぶ
+bool   gust_on=false;
+float  gust_max=0.f;                     // 前の表示からの、陸の突風の最大(m/s)
 double odor_total[N_ODOR]={0,0,0,0};
 std::vector<float> flow_acc(GRID_W*GRID_H, 0.f);
 std::vector<char>  river(GRID_W*GRID_H, 0);
@@ -2022,11 +2036,30 @@ void update_odor(){
             ? (float)std::exp(-(ODOR_K_OH[k]*ODOR_OH_PEAK*g_sun+ODOR_K_O3[k]*ODOR_O3)*60.0*ODOR_INTERVAL*DT)
             : 1.f-ODOR_DECAY;
         // 風で流れる
-        for(int y=0;y<GRID_H;y++){
+        parallel_for(0,GRID_H,[&](int ya,int yb){
+        for(int y=ya;y<yb;y++){
             float u=wind[y];
-            if(std::fabs(u)<1e-4f) continue;
-            // セミラグランジュ法: 各マスの匂いは、ODOR_SHIFT マス風上にあった空気が運ばれてきたもの。間は線形に補う
             int d=(u>0)?1:-1;
+            if(gust_on && gust_row[y]){
+                // 突風のある行: 卓越風と突風を重ねた風で、出発点を二次元で戻る(セミラグランジュ法、双線形で補う)。
+                // 区画の外から入る空気は、区画の生き物の匂いを持たない(条件)
+                const float bx=(std::fabs(u)<1e-4f)?0.f:d*ODOR_SHIFT;
+                for(int x=0;x<GRID_W;x++){
+                    int i=idx(x,y);
+                    float X=x-(bx+gust_u[i]*GUST_ODOR_CELLS), Y=y-gust_v[i]*GUST_ODOR_CELLS;
+                    int x0=(int)std::floor(X), y0=(int)std::floor(Y);
+                    float fx=X-x0, fy=Y-y0, v=0.f;
+                    for(int jy=0;jy<2;jy++) for(int jx=0;jx<2;jx++){
+                        int sx=x0+jx, sy=y0+jy;
+                        if(sx<0||sx>=GRID_W||sy<0||sy>=GRID_H) continue;
+                        v+=g[idx(sx,sy)]*(jx?fx:1.f-fx)*(jy?fy:1.f-fy);
+                    }
+                    odor_buf[i]=v;
+                }
+                continue;
+            }
+            if(std::fabs(u)<1e-4f){ for(int x=0;x<GRID_W;x++) odor_buf[idx(x,y)]=g[idx(x,y)]; continue; }
+            // セミラグランジュ法: 各マスの匂いは、ODOR_SHIFT マス風上にあった空気が運ばれてきたもの。間は線形に補う
             int n=(int)ODOR_SHIFT; float f=ODOR_SHIFT-(float)n;
             for(int x=0;x<GRID_W;x++){
                 int a=x-d*n, b=x-d*(n+1);
@@ -2035,8 +2068,9 @@ void update_odor(){
                 float gb=(b>=0&&b<GRID_W)?g[idx(b,y)]:0.f;
                 odor_buf[idx(x,y)]=ga+(gb-ga)*f;
             }
-            for(int x=0;x<GRID_W;x++) g[idx(x,y)]=odor_buf[idx(x,y)];
         }
+        });
+        g.swap(odor_buf);
         // 拡散して散逸する
         parallel_for(0,GRID_H,[&](int ya,int yb){
         for(int y=ya;y<yb;y++) for(int x=0;x<GRID_W;x++){
@@ -2289,6 +2323,43 @@ long   lightning_events=0;            // 区画の中への対地放電の累計
 double storm_rain_mm=0;               // 前の表示からの、陸に降った雨の陸の平均(mm)
 // 飽和水蒸気圧の 20 °C との比(マグヌスの式)
 inline float es_ratio(float t){ return std::exp(17.62f*t/(243.12f+t)-17.62f*20.f/(243.12f+20.f)); }
+// 突風前線の風を雲の一覧から作る。匂いの更新(ODOR_INTERVAL ごと)で使う
+void update_gust(){
+    if(gust_on){
+        std::fill(gust_u.begin(),gust_u.end(),0.f); std::fill(gust_v.begin(),gust_v.end(),0.f);
+        std::fill(gust_row.begin(),gust_row.end(),0); gust_on=false;
+    }
+    const float sc=STORM_COLD_R_M/CELL_M*0.5f, RG=3.f*sc;
+    for(const auto& s:storms){
+        float I=s.ipeak*std::sin(3.14159265f*s.age/STORM_LIFE);
+        if(I<=0.f) continue;
+        float dT=STORM_COLD_DT*std::min(2.f,I/STORM_I_MEAN);
+        float c=GUST_FROUDE*std::sqrt(9.81f*dT/(273.15f+g_t_bg)*GUST_DEPTH_M);   // 密度流の速さ(m/s)
+        int ya=std::max(0,(int)std::floor(s.y-RG)), yb=std::min(GRID_H,(int)std::ceil(s.y+RG)+1);
+        int xa=std::max(0,(int)std::floor(s.x-RG)), xb=std::min(GRID_W,(int)std::ceil(s.x+RG)+1);
+        if(ya>=yb||xa>=xb) continue;
+        gust_on=true;
+        parallel_for(ya,yb,[&](int y0,int y1){
+            for(int y=y0;y<y1;y++){
+                float dy=y+0.5f-s.y; bool any=false;
+                for(int x=xa;x<xb;x++){
+                    float dx=x+0.5f-s.x, r2=dx*dx+dy*dy;
+                    if(r2>=RG*RG || r2<1e-6f) continue;
+                    float r=std::sqrt(r2), q=r/sc;
+                    float sp=c*q*std::exp(0.5f*(1.f-q*q));
+                    int i=idx(x,y);
+                    gust_u[i]+=sp*dx/r; gust_v[i]+=sp*dy/r; any=true;
+                }
+                if(any) gust_row[y]=1;
+            }
+        });
+    }
+    if(gust_on) for(int i=0;i<GRID_W*GRID_H;i++){
+        if(sea[i]) continue;
+        float m=std::sqrt(gust_u[i]*gust_u[i]+gust_v[i]*gust_v[i]);
+        if(m>gust_max) gust_max=m;
+    }
+}
 void update_storms(){
     const float d=(wind[GRID_H/2]>0.f)?1.f:-1.f;
     const float R=STORM_R_M/CELL_M, RC=STORM_COLD_R_M/CELL_M;
@@ -2375,6 +2446,7 @@ void update_storms(){
     g_bud.w_storm+=w;
     storm_rain_mm+=w*SOIL_W_MM;
     if(storm_dT_on) for(int i=0;i<GRID_W*GRID_H;i++) temper[i]+=storm_dT[i];
+    if(g_frame%ODOR_INTERVAL==0) update_gust();
 }
 
 // 燃料の湿りを大気に追従させる。水蒸気圧は日平均の気温と条件の相対湿度で決まり、一日の中では変わらない。
@@ -5910,9 +5982,9 @@ int main(int argc,char** argv){
                            slide_events); }
                   { int nl=0; float cold=0.f;
                     for(int i=0;i<GRID_W*GRID_H;i++){ if(sea[i]) continue; nl++; cold=std::min(cold,storm_dT[i]); }
-                    printf("      weather: storms %ld (active %zu) | lightning %ld | rain land mean %.2f mm since last | cold pool now %.1f C\n",
-                           storm_events, storms.size(), lightning_events, nl?storm_rain_mm/nl:0.0, cold);
-                    storm_rain_mm=0; }
+                    printf("      weather: storms %ld (active %zu) | lightning %ld | rain land mean %.2f mm since last | cold pool now %.1f C | gust max %.1f m/s since last\n",
+                           storm_events, storms.size(), lightning_events, nl?storm_rain_mm/nl:0.0, cold, gust_max);
+                    storm_rain_mm=0; gust_max=0.f; }
                          printf("      plant: parasite %.3f carnivory %.3f fireSeed %.3f reproAlloc %.3f\n",
                                  n?spa/n:0.0,
                                  n?sca/n:0.0,
