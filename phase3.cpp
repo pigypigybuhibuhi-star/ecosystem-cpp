@@ -235,6 +235,30 @@ const float SLIDE_RATE      = FRAC(UPLIFT_MM_YR*1e-3/SLIDE_DEPTH_M/YEAR_MIN);  /
 const float SLIDE_HL        = std::pow(10.f,-0.085f*std::log10(SLIDE_DEPTH_M*CELL_M*CELL_M)+0.047f);
 const int   SLIDE_RUN_MAX   = 200;     // 到達を追う歩数の安全の上限(計算のためだけ)
 
+// --- 天気: 対流の雨雲 ---
+// 雨雲は日射で暖まった地表の空気が持ち上がって生じ、中層の風に流され、一生を終えて消える。
+// 区画は雨雲一つほどの広さしかないので、区画の外(風上)で生じて流れ込む雲も同じ規則で起こす
+// 条件: 雨雲を流す中層の風(指向流)の速さ。中緯度の 500 hPa の風はおよそ 10 m/s。向きは卓越風の帯に従う
+const float STORM_STEER_MS  = 10.0f;
+const float STORM_SHIFT     = LIN(STORM_STEER_MS*60.0/CELL_M);  // 1 分に雨雲が進むマス数 [1分あたり 60 マス]
+// 単一の対流セルの一生(積雲期・成熟期・消散期)はおよそ 1 時間(Byers & Braham 1949)
+const float STORM_LIFE      = 60.0f;   // 分
+// 雨の降る範囲の半径。対流セルの径は 2〜10 km
+const float STORM_R_M       = 2500.f;
+// 冷気外出流(冷気プール)の半径。降水域より広がり、雨の届く前に気温が下がる(突風前線)
+const float STORM_COLD_R_M  = 5000.f;
+// 冷気プールによる気温の低下。中緯度の対流の通過で中央値 5〜6 °C(Engerer et al. 2008)
+const float STORM_COLD_DT   = 6.0f;
+// 成熟期の中心の降水強度。対流性の雨は 10〜100 mm/h。雲ごとに指数分布で、平均は 30 mm/h を
+// 20 °C との飽和水蒸気圧の比で増減させる(クラウジウス・クラペイロン、Lenderink & van Meijgaard 2008)
+const float STORM_I_MEAN    = 30.0f;   // mm/h
+const float STORM_I_MAX     = 150.0f;  // 観測される最大級の降水強度(計算の安全のため)
+// 土の水 1.0 が何 mm にあたるか。根の届く層の有効水分量(50〜200 mm)の中ほど
+const float SOIL_W_MM       = 100.0f;
+// 条件: 対流の発生の頻度(1 km² あたり 1 分あたり、日射の正弦 1・飽和水蒸気圧の比 1 のとき)。
+// 中緯度の内陸で雷の日は年 30〜50 日(Changnon 1988)。一地点が年におよそ 30 回雨雲の下に入る値にした
+const double STORM_INIT     = 1.3e-6;
+
 // --- 変異 ---
 const float MUT_STRENGTH    = 0.02f;
 const float MUT_RATE_MAX    = 3.0f;    // 変異率の上限(基準の何倍まで)
@@ -557,6 +581,7 @@ struct Budget {
     double w_relax=0;                // 陸の土壌水: 降水・河川・流出による目標への緩和(上下限込み)
     double w_transp=0;               // 蒸散: 陸の土の水と植物の貯水から大気へ出る水(大気の水蒸気は帳簿の外)
     double w_sea=0;                  // 海のマスの植物と海との水のやりとり(海の水は帳簿の外)
+    double w_storm=0;                // 雨雲から陸の土に降った雨(雲の水は大気の水蒸気から来る。大気は帳簿の外)
     double c_immig=0, n_immig=0;     // 土地の外から入ってくる生き物(動物の放流・微生物の胞子・浮遊植物)が持ち込む炭素と窒素
 } g_bud;
 // 光合成ループは並列なので、蒸散の帳簿はマスごとに積み、帳簿を出すときに順に足す(足す順を固定して決定性を保つ)
@@ -573,6 +598,8 @@ int  g_last_view = -1;       // 背景を描き直させるための印
 std::vector<float> h_soil, h_nut, h_ice, h_path, h_odor, h_sst;
 std::vector<float> daylit(GRID_W*GRID_H, 1.f);   // マスごとの昼夜(0=夜 1=昼)
 float sun_dec = 0.f;                   // 今の太陽赤緯(ラジアン)
+float g_sun   = 0.f;                   // 今の太陽高度の正弦(地平線の下は 0)。区画の中で一様
+float g_t_bg  = 0.f;                   // 海抜 0 の陸の今の気温。区画の外の背景の気温(条件)としても使う
 std::vector<float> odor[N_ODOR], odor_buf;
 double odor_total[N_ODOR]={0,0,0,0};
 std::vector<float> flow_acc(GRID_W*GRID_H, 0.f);
@@ -762,17 +789,17 @@ long slide_events=0;
 // 環境の出来事の記録と再生。生き物と無関係に起きる離散的な出来事を
 // 1件ずつ tick・位置・種類・強さで書き出し、時刻と場所を混ぜて再生できるようにする。
 // 書式: 1行1件 "tick 種類 x y 強さ"。'#' で始まる行は注記
-enum EvKind { EV_FIRE=0, EV_SLIDE=1, EV_N };
-const char* EV_NAME[EV_N]={"fire","slide"};
+enum EvKind { EV_FIRE=0, EV_SLIDE=1, EV_STORM=2, EV_N };
+const char* EV_NAME[EV_N]={"fire","slide","storm"};
 struct EnvEvent { long tick; int kind; int x,y; float strength; };
 FILE* g_rec=nullptr;                       // --record の出力先
 bool  g_replay=false;                      // --replay 中は該当種類を物理から起こさない
 std::vector<EnvEvent> g_replay_ev;         // 混ぜたあと tick 順に並べた出来事
 size_t g_replay_pos=0;
-long   g_replay_done[EV_N]={0,0};
+long   g_replay_done[EV_N]={0,0,0};
 
-long   g_cs_ev_n[EV_N]={0,0};          // 全体の記録(--census)用: 前の記録からの件数と強さの和
-double g_cs_ev_s[EV_N]={0,0};
+long   g_cs_ev_n[EV_N]={0,0,0};        // 全体の記録(--census)用: 前の記録からの件数と強さの和
+double g_cs_ev_s[EV_N]={0,0,0};
 void ev_record(int kind,int x,int y,float s){
     g_cs_ev_n[kind]++; g_cs_ev_s[kind]+=s;
     if(!g_rec) return;
@@ -814,12 +841,13 @@ bool ev_load_replay(const char* path,unsigned shuffle_seed){
     g_replay_pos=0;
     return true;
 }
-// この tick に起こす再生の出来事を、種類ごとに呼び出し側へ渡す
-template<class F> void ev_replay_due(int kind,F apply){
+// この tick に起こす再生の出来事を、種類ごとに呼び出し側へ渡す。
+// 雨雲は区画の外で生じて流れ込むので、inside=false で区画の外の位置も渡す
+template<class F> void ev_replay_due(int kind,F apply,bool inside=true){
     for(size_t i=g_replay_pos;i<g_replay_ev.size() && g_replay_ev[i].tick<=g_frame;i++){
         const EnvEvent& e=g_replay_ev[i];
         if(e.kind!=kind || e.tick<g_frame) continue;
-        if(e.x<0||e.x>=GRID_W||e.y<0||e.y>=GRID_H) continue;
+        if(inside && (e.x<0||e.x>=GRID_W||e.y<0||e.y>=GRID_H)) continue;
         apply(e); g_replay_done[kind]++;
     }
 }
@@ -1756,6 +1784,8 @@ void update_climate(int frame){
     float sinh=sp*sd+cp*cd*std::cos(rot);              // 時角は自転の位相だけで決まる
     float sun=(sinh>0.f)?sinh:0.f;                     // 地平線の下なら日射はゼロ
     float dl=clamp01(sinh*5.f);                        // 薄明を挟んだ昼夜
+    g_sun=sun;
+    g_t_bg=base+seas_land+DIURNAL_LAND*(dl-0.5f);
     for(int y=0;y<GRID_H;y++){
         for(int x=0;x<GRID_W;x++){
             int i=idx(x,y);
@@ -2219,6 +2249,85 @@ inline float emc_simard(float rh,float tc){
     else            m=21.0606f+0.005565f*H*H-0.00035f*H*T-0.483199f*H;
     return std::max(0.f,m)*0.01f;
 }
+// 対流の雨雲。日射と水蒸気から生じ、中層の風に流され、約 1 時間で消える。
+// 雲の下には雨が降り、周りには冷気が広がる。冷気は雨より広いので、流れてくる雲の前触れになる
+struct Storm { float x,y,age,ipeak; };   // 位置(マス。区画の外もありうる)、齢(分)、成熟期の中心の降水強度(mm/h)
+std::vector<Storm> storms;
+std::mt19937 wx_rng(12344u^0x2545F491u);   // 天気だけの乱数。雲が生じても生き物の乱数列は動かない
+std::uniform_real_distribution<float> wx01(0.f,1.f);
+std::vector<float> storm_dT(GRID_W*GRID_H,0.f);   // 冷気による気温の下がり(負)。毎 tick 作り直す
+bool   storm_dT_on=false;
+long   storm_events=0;
+double storm_rain_mm=0;               // 前の表示からの、陸に降った雨の陸の平均(mm)
+// 飽和水蒸気圧の 20 °C との比(マグヌスの式)
+inline float es_ratio(float t){ return std::exp(17.62f*t/(243.12f+t)-17.62f*20.f/(243.12f+20.f)); }
+void update_storms(){
+    const float d=(wind[GRID_H/2]>0.f)?1.f:-1.f;
+    const float R=STORM_R_M/CELL_M, RC=STORM_COLD_R_M/CELL_M;
+    // 発生。区画と、一生のうちに区画へ流れ込みうる風上の範囲で起こす
+    if(g_replay){                      // 再生中は記録の各件だけを起こす
+        ev_replay_due(EV_STORM,[](const EnvEvent& e){
+            storms.push_back({(float)e.x,(float)e.y,0.f,e.strength}); },false);
+    } else if(g_sun>0.f){
+        const float up=STORM_SHIFT*STORM_LIFE/(float)DT;
+        float x0=-RC-(d>0.f?up:0.f), x1=GRID_W+RC+(d<0.f?up:0.f);
+        float y0=-RC, y1=GRID_H+RC;
+        double area=(double)(x1-x0)*(y1-y0)*CELL_M*CELL_M*1e-6;   // km²
+        float cc=es_ratio(g_t_bg);
+        double e=STORM_INIT*area*g_sun*cc*DT;
+        int n=(int)e; double f=e-n;
+        if(f>0.0 && wx01(wx_rng)<f) n++;
+        for(int k=0;k<n;k++){
+            float x=x0+(x1-x0)*wx01(wx_rng), y=y0+(y1-y0)*wx01(wx_rng);
+            float ip=-STORM_I_MEAN*cc*std::log(std::max(1e-6f,1.f-wx01(wx_rng)));
+            ip=std::min(ip,STORM_I_MAX);
+            storms.push_back({x,y,0.f,ip}); storm_events++;
+            ev_record(EV_STORM,(int)std::floor(x),(int)std::floor(y),ip);
+        }
+    }
+    // 流れて歳をとる。一生を終えたか、冷気も届かない風下へ抜けたものは消える
+    for(auto& s:storms){ s.x+=d*STORM_SHIFT; s.age+=(float)DT; }
+    storms.erase(std::remove_if(storms.begin(),storms.end(),[&](const Storm& s){
+        return s.age>=STORM_LIFE || (d>0.f? s.x>GRID_W+RC : s.x<-RC); }),storms.end());
+    if(storm_dT_on){ std::fill(storm_dT.begin(),storm_dT.end(),0.f); storm_dT_on=false; }
+    if(storms.empty()) return;
+    // 雨と冷気。強さは一生の中で sin の形に盛り上がって衰える(積雲期・成熟期・消散期)
+    const float sr=R*0.5f, sc=RC*0.5f;          // ガウス形の幅。半径は 2σ
+    static std::vector<double> row_w(GRID_H);
+    std::fill(row_w.begin(),row_w.end(),0.0);
+    for(const auto& s:storms){
+        float I=s.ipeak*std::sin(3.14159265f*s.age/STORM_LIFE);
+        if(I<=0.f) continue;
+        float dTc=-STORM_COLD_DT*std::min(2.f,I/STORM_I_MEAN);
+        float wc=I/60.f*(float)DT/SOIL_W_MM;    // 中心で 1 tick に降る量(土の水の単位)
+        int ya=std::max(0,(int)std::floor(s.y-RC)), yb=std::min(GRID_H,(int)std::ceil(s.y+RC)+1);
+        int xa=std::max(0,(int)std::floor(s.x-RC)), xb=std::min(GRID_W,(int)std::ceil(s.x+RC)+1);
+        if(ya>=yb||xa>=xb) continue;
+        storm_dT_on=true;
+        parallel_for(ya,yb,[&](int y0,int y1){
+            for(int y=y0;y<y1;y++){
+                float dy=y+0.5f-s.y; double wsum=0;
+                for(int x=xa;x<xb;x++){
+                    int i=idx(x,y);
+                    if(sea[i]) continue;
+                    float dx=x+0.5f-s.x, r2=dx*dx+dy*dy;
+                    if(r2>=RC*RC) continue;
+                    storm_dT[i]+=dTc*std::exp(-r2/(2.f*sc*sc));
+                    if(r2>=R*R) continue;
+                    // 土が受け止めきれない分は地表を流れ去る(流れた水は帳簿の外)
+                    float add=std::min(wc*std::exp(-r2/(2.f*sr*sr)),std::max(0.f,FIELD_CAP-soil_water[i]));
+                    soil_water[i]+=add; wsum+=add;
+                }
+                row_w[y]+=wsum;
+            }
+        });
+    }
+    double w=0; for(int y=0;y<GRID_H;y++) w+=row_w[y];   // 足す順を固定する
+    g_bud.w_storm+=w;
+    storm_rain_mm+=w*SOIL_W_MM;
+    if(storm_dT_on) for(int i=0;i<GRID_W*GRID_H;i++) temper[i]+=storm_dT[i];
+}
+
 // 燃料の湿りを大気に追従させる。水蒸気圧は日平均の気温と条件の相対湿度で決まり、一日の中では変わらない。
 // 昼に気温が上がれば相対湿度が下がり(飽和水蒸気圧はマグヌスの式)、燃料は時定数で乾く
 void update_fuel_moisture(){
@@ -2227,7 +2336,8 @@ void update_fuel_moisture(){
             int i=idx(x,y);
             if(sea[i]) continue;
             float tn=temper[i];
-            float tm=tn-DIURNAL_LAND*(daylit[i]-0.5f);       // 日平均の気温
+            // 日平均の気温。雨雲の冷気で下がった分は空気の水蒸気圧を変えないので除く(冷えた分だけ相対湿度が上がる)
+            float tm=tn-storm_dT[i]-DIURNAL_LAND*(daylit[i]-0.5f);
             float rh=LAND_RH_MEAN*std::exp(17.62f*tm/(243.12f+tm)-17.62f*tn/(243.12f+tn));
             if(rh>1.f) rh=1.f;
             float emc=emc_simard(rh,tn);
@@ -3740,6 +3850,9 @@ void save_state(const std::string& fn,int frame){
         f<<"LINEAGES "<<lineages.size()<<'\n';
         for(auto& L:lineages) write_rec(f,ls,L);
         f<<"RNG\n"<<rng<<'\n';
+        // 天気の状態。雨雲は 1 時間ほどしか続かないが、再開しても同じ続きになるよう乱数ごと残す
+        f<<"WEATHER "<<storms.size()<<'\n'<<wx_rng<<'\n';
+        for(auto& s:storms){ char b[160]; snprintf(b,sizeof b,"%a %a %a %a\n",s.x,s.y,s.age,s.ipeak); f<<b; }
         f<<"HISTORY\n";
         io_hist(sw);
         f<<"END\n";
@@ -3823,6 +3936,14 @@ bool load_state(const std::string& fn,int& frame){
         for(long i=0;i<n;i++){ Lineage L; read_rec(f,ls,ml,L); lineages.push_back(L); }
         f>>sec;
         if(sec=="RNG"){ f>>rng; f>>sec; }
+        storms.clear();
+        if(sec=="WEATHER"){
+            long n; f>>n; f>>wx_rng;
+            for(long i=0;i<n;i++){ std::string a,b,c,d; f>>a>>b>>c>>d;
+                storms.push_back({std::strtof(a.c_str(),nullptr),std::strtof(b.c_str(),nullptr),
+                                  std::strtof(c.c_str(),nullptr),std::strtof(d.c_str(),nullptr)}); }
+            f>>sec;
+        }
         if(sec=="HISTORY"){
             io_hist(sr);
             f>>sec;
@@ -4852,7 +4973,7 @@ int main(int argc,char** argv){
     std::string assay_path, assay_save, assay_out; int assay_max=1000;
     for(int i=1;i<argc;i++){
         std::string a=argv[i];
-        if(a=="--seed"    && i+1<argc) rng.seed((unsigned)std::stoul(argv[++i]));
+        if(a=="--seed"    && i+1<argc){ unsigned sd=(unsigned)std::stoul(argv[++i]); rng.seed(sd); wx_rng.seed(sd^0x2545F491u); }
         if(a=="--stop-at" && i+1<argc) g_stop_at=std::stol(argv[++i]);
         if(a=="--record"  && i+1<argc) rec_path=argv[++i];
         if(a=="--replay"  && i+1<argc) replay_path=argv[++i];
@@ -4881,12 +5002,12 @@ int main(int argc,char** argv){
         g_rec=fopen(rec_path.c_str(),"w");
         if(!g_rec){ fprintf(stderr,"record: cannot open %s\n",rec_path.c_str()); return 1; }
         fprintf(g_rec,"# evosim environment events v1: tick kind x y strength\n");
-        fprintf(g_rec,"# fire strength = fire intensity at ignition; slide strength = slope\n");
+        fprintf(g_rec,"# fire strength = fire intensity at ignition; slide strength = slope; storm strength = peak rain rate mm/h (x y may lie upwind outside the plot)\n");
     }
     if(!replay_path.empty()){
         if(!ev_load_replay(replay_path.c_str(),shuffle_seed)) return 1;
         g_replay=true;
-        printf("replay: %s shuffle-seed %u (fire/slide physics off)\n",replay_path.c_str(),shuffle_seed);
+        printf("replay: %s shuffle-seed %u (fire/slide/storm physics off)\n",replay_path.c_str(),shuffle_seed);
     }
     prevent_sleep_begin();
     for(int k=0;k<N_ODOR;k++) odor[k].assign(GRID_W*GRID_H,0.f);
@@ -5377,7 +5498,7 @@ int main(int argc,char** argv){
 
         if(!paused){
             g_frame=frame;
-            prof_begin(); update_climate(frame);                     prof_end(0);
+            prof_begin(); update_climate(frame); update_storms();    prof_end(0);
             prof_begin();
             if(frame%PRECIP_INTERVAL==0){ compute_precip(); classify_climate(); }
                                                                       prof_end(1);
@@ -5421,8 +5542,8 @@ int main(int argc,char** argv){
             if(g_stop_at>0 && frame>=g_stop_at){
                 printf("=== stop at t=%d  mean fps (t>=50000) %.2f over %ld frames ===\n",
                        frame, g_fps_time>0? g_fps_n/g_fps_time : 0.0, g_fps_n);
-                if(g_replay) printf("replay: done fire %ld slide %ld of %zu\n",
-                                    g_replay_done[EV_FIRE],g_replay_done[EV_SLIDE],g_replay_ev.size());
+                if(g_replay) printf("replay: done fire %ld slide %ld storm %ld of %zu\n",
+                                    g_replay_done[EV_FIRE],g_replay_done[EV_SLIDE],g_replay_done[EV_STORM],g_replay_ev.size());
                 if(g_rec){ fclose(g_rec); g_rec=nullptr; }
                 field_close();
                 census_close();
@@ -5660,9 +5781,9 @@ int main(int argc,char** argv){
                                oatm,oatm-po,g_bud.o_relax,g_bud.o_edge,g_bud.o_trans,oint,cbio-pcb-g_bud.c_immig,oint-(cbio-pcb-g_bud.c_immig));
                         printf("      budget N: soil land %.1f sea %.1f plant %.1f dead %.1f | dN %+.2f = sink %+.2f runoff %+.2f upwell %+.2f clamp %+.3f fix %+.2f fire %+.3f carn %+.3f immig %+.3f + internal %+.2f\n",
                                nl,ns,np,nc,ntot-pn,g_bud.n_sink,g_bud.n_runoff,g_bud.n_upwell,g_bud.n_clamp,g_bud.n_fix,g_bud.n_fire,g_bud.n_carn,g_bud.n_immig,ntot-pn-next);
-                        double wext=g_bud.w_relax+g_bud.w_transp+g_bud.w_sea;
-                        printf("      budget W: soil land %.1f plant %.1f | dW %+.2f = relax %+.2f transp %+.2f sea %+.3f + internal %+.2f\n",
-                               wl,wp,wtot-pw,g_bud.w_relax,g_bud.w_transp,g_bud.w_sea,wtot-pw-wext);
+                        double wext=g_bud.w_relax+g_bud.w_transp+g_bud.w_sea+g_bud.w_storm;
+                        printf("      budget W: soil land %.1f plant %.1f | dW %+.2f = relax %+.2f transp %+.2f sea %+.3f storm %+.2f + internal %+.2f\n",
+                               wl,wp,wtot-pw,g_bud.w_relax,g_bud.w_transp,g_bud.w_sea,g_bud.w_storm,wtot-pw-wext);
                     }
                     have=true; pc=ctot; po=oatm; pn=ntot; pw=wtot; pcb=cbio;
                     g_bud=Budget();
@@ -5723,6 +5844,11 @@ int main(int argc,char** argv){
                     printf("      defense %.3f (tough %.3f) | seedBank %.3f waiting %d | ice %d cells | slides %ld\n",
                            n?sdf/n:0.0, n?stg/n:0.0, n?sbk/n:0.0, nseed, nice,
                            slide_events); }
+                  { int nl=0; float cold=0.f;
+                    for(int i=0;i<GRID_W*GRID_H;i++){ if(sea[i]) continue; nl++; cold=std::min(cold,storm_dT[i]); }
+                    printf("      weather: storms %ld (active %zu) | rain land mean %.2f mm since last | cold pool now %.1f C\n",
+                           storm_events, storms.size(), nl?storm_rain_mm/nl:0.0, cold);
+                    storm_rain_mm=0; }
                          printf("      plant: parasite %.3f carnivory %.3f fireSeed %.3f reproAlloc %.3f\n",
                                  n?spa/n:0.0,
                                  n?sca/n:0.0,
