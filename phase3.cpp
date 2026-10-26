@@ -429,7 +429,6 @@ const float SHALLOW_EASE    = 0.30f;   // 浅瀬の緩さ(小さいほど岸が�
 // 4本のチャンネル。視覚と違い、時間に残り、遮蔽を回り込む
 const int   N_ODOR          = 4;   // 0=生体 1=腐敗 2=食害 3=災害
 const char* ODOR_NAME[4]    = {"生体","腐敗","食害","災害"};
-const float ODOR_DIFFUSE    = FRAC(PMF(0.42f,ODOR_INTERVAL),ODOR_INTERVAL);  // 拡散 [率 0.00132 /分]
 const float ODOR_DECAY      = FRAC(PMF(0.055f,ODOR_INTERVAL),ODOR_INTERVAL);  // 災害(煙)の散逸。寿命 約 5 日 [率 0.000137 /分]
 // 生体・腐敗・食害の匂いは揮発性の有機物で、大気の中で OH ラジカル(昼)とオゾン(昼夜)に酸化されて消える。
 // 1 分あたりの率 = (k_OH·[OH] + k_O3·[O3])·60。速度定数は 298 K の値(Atkinson & Arey 2003)。
@@ -449,6 +448,11 @@ const double ODOR_LAYER_M   = 0.10;   // 匂いを運ぶ地表近くの層の厚
 const double ODOR_USTAR     = 0.40*WIND_SURF_MS/std::log(10.0/ODOR_Z0);   // 摩擦速度(m/s)。カルマン定数 0.40
 const double ODOR_WIND_MS   = ODOR_USTAR/0.40*(ODOR_LAYER_M*std::log(ODOR_LAYER_M/ODOR_Z0)-ODOR_LAYER_M+ODOR_Z0)/(ODOR_LAYER_M-ODOR_Z0);  // 層の平均 約 0.68 m/s
 const float ODOR_SHIFT      = LIN(ODOR_WIND_MS*60.0/CELL_M,ODOR_INTERVAL);  // 1 回の更新で匂いが進むマス数 [1分あたり 約 4.1 マス]
+// 横への広がりは層の中の乱流の拡散。渦拡散係数は混合距離の理論で K = κ·u*·z(Prandtl。接地境界層の中立の場合)とし、
+// 層の上端 z = ODOR_LAYER_M で評価する(約 0.007 m²/s)。周りの 3×3 の平均へ寄せる差分では、平均 − 中心 ≈ Δx²∇²/3 なので、
+// 1 回の更新で寄せる割合 = 3·K·Δt/Δx²(陽解法。1 を超えると不安定になるが、この値は 0.05 程度)
+const double ODOR_K_M2S     = 0.40*ODOR_USTAR*ODOR_LAYER_M;
+const float ODOR_DIFFUSE    = (float)(3.0*ODOR_K_M2S*60.0*ODOR_INTERVAL*DT/((double)CELL_M*CELL_M));  // [1 回の更新で 約 0.050]
 const float ODOR_SCALE      = 2.5f;   // 感覚器が飽和する濃さ
 // 放出量
 const float ODOR_PLANT      = LIN(PM(0.010f,ODOR_INTERVAL),ODOR_INTERVAL);  // 植物の体臭(高さと毒に比例) [1分あたり 2.43e-05]
