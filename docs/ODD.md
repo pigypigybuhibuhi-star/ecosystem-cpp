@@ -3,7 +3,7 @@
 ODD プロトコル(Overview, Design concepts, Details。Grimm et al. 2020)の形で、シミュレータの中身を書く。
 コードを読まずに分かることを目標にする。式と定数はコード(phase3.cpp と src/)の値をそのまま写した。
 
-- 版: 最初の版(2026-10-28 夜)。main 3e4e230 の phase3.cpp に基づく。7.14 病原体を 2026-10-28 22 時に書き足した
+- 版: 最初の版(2026-10-28 夜)。main 3e4e230 の phase3.cpp に基づく。7.14 病原体を 2026-10-28 22 時に書き足した。7.10 の植物の特殊な形質と文献の一覧を 2026-10-28 23 時に書き足した
 - 書き終えていない所は「(次の版で書く)」と記した
 - 印: **[法則]** は既知の物理・生物の法則から来る規則。**[条件]** は外から与える条件(惑星規模の状態・始まりの状態・区画の外)。**[未換算]** は、移行の段階 3 より前の「1 回の更新あたりの値」を時間の単位に換算しただけで、まだ実際の 1 分あたりの物理量に置き換えていない定数(移行の段階 5 の対象)
 
@@ -224,7 +224,15 @@ PM と PMF を通った値が **[未換算]** に当たる。1 回の更新に�
 - **窒素**: 固定できる株は大気から(費用を払う)、できない株は土から吸う。同じマスの株で分け合う
 - **防御**: 食害の匂いを感じると、遺伝子 tough を上限に防御を立ち上げる。**注意**: 常に張る分と匂いで張る分の割合を遺伝子にする作業が「上の階層の書き込みを外す」に残っている
 - **休眠**: 気温が休眠の気温を下回ると休眠し、3 °C の余裕を超えて上がると覚める
-- **寄生・食虫・つる・地下茎・火後発芽・土中の種子**: (次の版で詳しく書く)
+- **つる** [法則]+[未換算]: 遺伝子 climb(0〜1)。マスの中で最も高い株を支えにする。実効的な高さ = 自分の高さ × (1 − 0.45·climb) + 支えの余り × climb × 0.85(支えの余り = max(0, そのマスで最も高い株 − 自分の高さ))。自立する幹を作らないので、支えの無いマスでは自分の高さより低くなる。つるの実効的な高さも林冠になり、後に見る株の支えになる(マスの株を見る順に依存する)。維持費 2.14e-4 /分 × climb **[未換算]**(巻きひげと気根)
+- **寄生** [法則]+[未換算]: 遺伝子 parasite(0〜1)。4 分に一度、2 株以上いるマスで、寄生の遺伝子が 0.30 以下の株のうち最もエネルギーの多い株を宿主に選ぶ。parasite ≥ 0.10 の株が吸器を刺し、宿主のエネルギー × 5.5e-4 /分 × 4 分 × 刺さり具合 を奪う。刺さり具合 = parasite / (parasite + 宿主の防御)。奪った量の 85% を自分のエネルギーにし、15% は呼吸で CO2 になる(O2 を 1:1 で使う)。窒素も、宿主の貯え・奪った量の 2%・自分の空き の最も小さい分を移す。同じ宿主に複数の寄生者がいれば、順に奪う。維持費 2.92e-4 /分 × parasite **[未換算]**
+- **地下茎(クローン)** [法則]+[未換算]: 遺伝子 clonal(0〜1)。子を産むとき、確率 clonal で親の近く(1.5 マス)に置き、親と同じ株(genet)の一員にする。それ以外は 1.5 + 12·disperse マス先に散らし、新しい株にする。10 分に一度、clonal ≥ 0.05 の株は、同じ genet の平均のエネルギーへ 2.17e-3 /分 × 10 分 × clonal の割合で寄る(地下茎を通した融通)。維持費 9.72e-5 /分 × clonal **[未換算]**。**注意**: 寄る割合が株ごとの clonal に比例するので、同じ genet の中で clonal が違う(子は変異する)と、融通の前後で genet のエネルギーの合計が保たれない。土中で待つ種子も同じ genet に数えられる
+- **火後発芽** [法則]: 遺伝子 fire_seed(0〜1)。0.35 を超える株の種子は、落ちたマスが焼けてから 64.3 日(BURN_WINDOW)より後なら芽吹かずに朽ちる(炭素は死骸へ)。焼けて間もないマスにだけ芽生える。維持費 1.17e-4 /分 × fire_seed **[未換算]**。燃えたことは煙と焼け跡の匂い(7.9)で感じ取れる
+- **耐火(厚い樹皮)** [未換算]: 遺伝子 fire_tol。炎の強さ × (1 − 0.65·fire_tol) の害を受け、エネルギーを失い、高さが縮む(下限 0.03)。焼けた組織の炭素は CO2 に、窒素は揮発する(帳簿の fire)。焼け死んだ株は高さ × 0.25 を炭として死骸に残し、窒素も同じ割合で残す。維持費 7.29e-4 /分 × fire_tol **[未換算]**
+- **土中の種子** [法則]+[未換算]: 遺伝子 seed_bank(0〜1)。種子は確率 seed_bank で土中に入り、2.86〜100 日(一様)待つ。待つ間は光合成も成長もせず、寒さや火でも死なない。8 分に一度まとめて、呼吸 3.4e-5 /分(CO2 になる)を払い、種子食者に見つかる率 1.17e-5 /分 **[未換算]** で死ぬ(体は死骸へ。種子食者は動物の個体ではなく、率として与えている)。待ち終えたとき土の水が 0.25 未満なら、3.43 日後にもう一度土を見る。土中の種子も上限 PLANT_MAX の数に入る
+- **食虫** [法則]+[未換算]: 遺伝子 carnivory(0〜1)。0.12 以上の株のいるマスで、潜っていない(深さ 0.2 未満の)動物は、動物の更新ごとに確率 carnivory × 7.33e-4 /分(を更新の間隔に換算) ÷ (1 + 1.5·体) で捕らえられる。最初に捕らえた株が、動物のエネルギーの 55% と脂肪の 40% を奪う。奪った量の 70% が株のエネルギーに、30% が消化の呼吸で CO2 になる。株は奪った量 × 0.09 の窒素を得る(貯えの上限まで)。**注意**: 動物は窒素の在庫を持たないので、この窒素は帳簿の外から入る量として帳簿の carn に付けている。捕らえられてエネルギーが尽きた動物は死ぬ。維持費 4.37e-4 /分 × carnivory **[未換算]**
+- **注意(時間の換算)**: 寄生の奪う割合・地下茎の融通の割合・土中の種子の死ぬ確率は、1 回の更新あたりの値に間隔(4・10・8 分)を掛けた線形の形で、「守り続けること」の指数の形(1 − exp(−r·n·DT))になっていない。今の値では違いは 1% 前後
+- 寄生・食虫・つる・地下茎の遺伝子の閾値(0.35・0.30・0.45・0.50)は、画面の分類と要約にだけ使い、規則の入力には使わない。規則の中の閾値は上に書いたもの(寄生 0.10 と 0.30、食虫 0.12、火後発芽 0.35、地下茎 0.05)
 - **繁殖**: エネルギーが 8.0 を超え、休眠していなければ判定する。有性なら同じ lin の相手を探す(2.9 の注意)。種子の数 = 1 + brood·11。投資 = エネルギー × (0.20 + 0.55·繁殖に回す割合)。多産ほど一つあたりの構造に余分(0.22)がかかり、余分は呼吸で CO2 になる。芽生えの体は種子のエネルギーと親の窒素で作り、足りなければ朽ちる
 - **死**: エネルギーが尽きる、寿命、寒さ、火。体の炭素と窒素はすべて死骸に
 - **漂流**: 浮く株は水面の漂流(風の 3%、Wu 1983)× 浮く強さで流される。東西の端を越えた株は区画の外へ出る(帳簿に付ける)
@@ -308,4 +316,53 @@ PM と PMF を通った値が **[未換算]** に当たる。1 回の更新に�
 ---
 
 ## 文献
-(次の版で、本文に出てくる文献を一覧にする)
+本文に出てくる文献。書誌の細部を確かめきれていないものは「(書誌は次の版で確かめる)」と記した。
+
+- Addo-Bediako, A., Chown, S. L., Gaston, K. J. (2002) Metabolic cold adaptation in insects: a large-scale perspective. Functional Ecology 16: 332–338
+- Amthor, J. S. (2000) The McCree–de Wit–Penning de Vries–Thornley respiration paradigms: 30 years later. Annals of Botany 86: 1–20
+- Anderson, D. J., Adolphs, R. (2014) A framework for studying emotions across species. Cell 157: 187–200
+- Anderson, H. E. (1982) Aids to determining fuel models for estimating fire behavior. USDA Forest Service General Technical Report INT-122
+- Anderson, T.-H., Domsch, K. H. (1985) Maintenance carbon requirements of actively-metabolizing microbial populations under in situ conditions. Soil Biology and Biochemistry 17: 197–203
+- Anderson, T.-H., Domsch, K. H. (1993) The metabolic quotient for CO2 (qCO2) as a specific activity parameter to assess the effects of environmental conditions on the microbial biomass of forest soils. Soil Biology and Biochemistry 25: 393–395
+- Atkinson, R., Arey, J. (2003) Atmospheric degradation of volatile organic compounds. Chemical Reviews 103: 4605–4638
+- Austin, A. T., Vivanco, L. (2006) Plant litter decomposition in a semi-arid ecosystem controlled by photodegradation. Nature 442: 555–558
+- Benjamin, T. B. (1968) Gravity currents and related phenomena. Journal of Fluid Mechanics 31: 209–248
+- Blagodatsky, S. A. et al. (2000) 土の微生物の基質の取り込みの速さ(Monod の Vmax)(書誌は次の版で確かめる)
+- Byers, H. R., Braham, R. R. (1949) The Thunderstorm. U.S. Weather Bureau
+- Changnon, S. A. (1988) Climatography of thunder events in the conterminous United States(書誌は次の版で確かめる)
+- Charba, J. (1974) Application of gravity current model to analysis of squall-line gust front. Monthly Weather Review 102: 140–156
+- Chown, S. L., Nicolson, S. W. (2004) Insect Physiological Ecology. Oxford University Press
+- Cordonnier, G. et al. (2016) Large scale terrain generation from tectonic uplift and fluvial erosion. Computer Graphics Forum 35(2)
+- Corominas, J. (1996) The angle of reach as a mobility index for small and large landslides. Canadian Geotechnical Journal 33: 260–271
+- Dai, A. (2006) Recent climatology, variability, and trends in global surface humidity. Journal of Climate 19: 3589–3606
+- Engerer, N. A., Stensrud, D. J., Coniglio, M. C. (2008) Surface characteristics of observed cold pools. Monthly Weather Review 136: 4839–4849
+- Fosberg, M. A., Deeming, J. E. (1971) Derivation of the 1- and 10-hour timelag fuel moisture calculations for fire-danger rating. USDA Forest Service Research Note RM-207
+- Freeze, R. A., Cherry, J. A. (1979) Groundwater. Prentice-Hall
+- Fuquay, D. M. et al. (1972) Lightning discharges that caused forest fires. Journal of Geophysical Research 77(書誌は次の版で確かめる)
+- Gregory, P. H. (1973) The Microbiology of the Atmosphere, 2nd ed.
+- Grimm, V. et al. (2020) The ODD protocol for describing agent-based and other simulation models: a second update to improve clarity, replication, and structural realism. Journal of Artificial Societies and Social Simulation 23(2): 7
+- Haldane, J. B. S. (1949) Disease and evolution. La Ricerca Scientifica 19 (Suppl.): 68–76
+- Hamilton, W. D. (1980) Sex versus non-sex versus parasite. Oikos 35: 282–290
+- Harel, M.-A., Mudd, S. M., Attal, M. (2016) Global analysis of the stream power law parameters based on worldwide 10Be denudation rates. Geomorphology 268: 184–196
+- Heimsath, A. M. et al. (1997) The soil production function and landscape equilibrium. Nature 388: 358–361
+- Johnson, A. I. (1967) Specific yield — compilation of specific yields for various materials. U.S. Geological Survey Water-Supply Paper 1662-D
+- Larsen, I. J., Montgomery, D. R., Korup, O. (2010) Landslide erosion controlled by hillslope material. Nature Geoscience 3: 247–251
+- Lenderink, G., van Meijgaard, E. (2008) Increase in hourly precipitation extremes beyond expectations from temperature changes. Nature Geoscience 1: 511–514
+- Manzoni, S. et al. (2012) Environmental and stoichiometric controls on microbial carbon-use efficiency in soils. New Phytologist 196: 79–91
+- McCree, K. J. (1974) Equations for the rate of dark respiration of white clover and grain sorghum, as functions of dry weight, photosynthetic rate, and temperature. Crop Science 14: 509–514
+- Montgomery, D. R., Brandon, M. T. (2002) Topographic controls on erosion rates in tectonically active mountain ranges. Earth and Planetary Science Letters 201: 481–489
+- Montgomery, D. R., Dietrich, W. E. (1988) Where do channels begin? Nature 336: 232–234
+- Penning de Vries, F. W. T. (1974) Substrate utilization and respiration in relation to growth and maintenance in higher plants. Netherlands Journal of Agricultural Science 22: 40–44
+- Petersen, W. A., Rutledge, S. A. (1998) On the relationship between cloud-to-ground lightning and convective rainfall. Journal of Geophysical Research 103: 14025–14040
+- Prinn, R. G. et al. (2005) Evidence for variability of atmospheric hydroxyl radicals over the past quarter century. Geophysical Research Letters 32: L07809
+- Rawls, W. J., Brakensiek, D. L., Saxton, K. E. (1982) Estimation of soil water properties. Transactions of the ASAE 25: 1316–1320
+- Roering, J. J., Kirchner, J. W., Dietrich, W. E. (1999) Evidence for nonlinear, diffusive sediment transport on hillslopes and implications for landscape morphology. Water Resources Research 35: 853–870
+- Rothermel, R. C. (1972) A mathematical model for predicting fire spread in wildland fuels. USDA Forest Service Research Paper INT-115
+- Rousk, J., Bååth, E. (2011) Growth of saprotrophic fungi and bacteria in soil. FEMS Microbiology Ecology 78: 17–30
+- Ryan, M. G. (1991) Effects of climate change on plant respiration. Ecological Applications 1: 157–167
+- Simard, A. J. (1968) The moisture content of forest fuels. Forest Fire Research Institute, Ottawa(書誌は次の版で確かめる)
+- Sinsabaugh, R. L. et al. (2013) Carbon use efficiency of microbial communities: stoichiometry, methodology and modelling. Ecology Letters 16: 930–939
+- Stock, J. D., Montgomery, D. R. (1999) Geologic constraints on bedrock river incision using the stream power law. Journal of Geophysical Research 104: 4983–4993
+- Vautard, R. et al. (2010) Northern Hemisphere atmospheric stilling partly attributed to an increase in surface roughness. Nature Geoscience 3: 756–761
+- Wieringa, J. (1993) Representative roughness parameters for homogeneous terrain. Boundary-Layer Meteorology 63: 323–363
+- Wu, J. (1983) Sea-surface drift currents induced by wind and waves. Journal of Physical Oceanography 13: 1441–1451
