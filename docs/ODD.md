@@ -259,7 +259,7 @@ PM と PMF を通った値が **[未換算]** に当たる。1 回の更新に�
 - 上限 ANIMAL_MAX = 60000(計算の安全のため)。上限に達したときに配列の前(古く生まれた個体)から枠が埋まる偏りは D-2026-10-28-3 で作者の判断を待っている
 
 ### 7.12 微生物と死骸 [法則]
-- 分解: 一次反応。マスの死骸のすべてに同じ割合で取りつく。率 = 1.02e-3 /分 **[未換算]** × 分解の速さ × 活動(気温)。取り込みの上限 4.17e-3 /分 × 体の炭素(Monod の Vmax、Blagodatsky et al. 2000)
+- 分解: 一次反応。マスの死骸のすべてに同じ割合で取りつく。率 = 1.02e-3 /分 **[未換算]** × 分解の速さ × 活動(気温)。取り込みの上限 4.17e-3 /分(0.25 /時)× 体の炭素(最大比増殖速度 μmax。基質を加えた呼吸の解析で 0.1〜0.4 /時、Blagodatsky et al. 2000、Panikov 1995)
 - 炭素利用効率 0.40(Manzoni et al. 2012、Sinsabaugh et al. 2013): 分解した炭素の 40% が体に、残りは CO2。分解した割合だけ窒素が土へ無機化する
 - 維持の呼吸 1.7e-5 /分 × 体の炭素 × 酵素の係数(Anderson & Domsch 1985、1993)
 - 入れ替わり: 基質のあるマスにいる個体は 0.05 /日 で死ぬ(Rousk & Bååth 2011)。死んだ細胞の炭素は CO2 へ
@@ -327,9 +327,9 @@ PM と PMF を通った値が **[未換算]** に当たる。1 回の更新に�
 - Atkinson, R., Arey, J. (2003) Atmospheric degradation of volatile organic compounds. Chemical Reviews 103: 4605–4638
 - Austin, A. T., Vivanco, L. (2006) Plant litter decomposition in a semi-arid ecosystem controlled by photodegradation. Nature 442: 555–558
 - Benjamin, T. B. (1968) Gravity currents and related phenomena. Journal of Fluid Mechanics 31: 209–248
-- Blagodatsky, S. A. et al. (2000) 土の微生物の基質の取り込みの速さ(Monod の Vmax)(書誌は次の版で確かめる)
+- Blagodatsky, S. A., Heinemeyer, O., Richter, J. (2000) Estimating the active and total soil microbial biomass by kinetic respiration analysis. Biology and Fertility of Soils 32: 73–81. doi:10.1007/s003740000219
 - Byers, H. R., Braham, R. R. (1949) The Thunderstorm. U.S. Weather Bureau
-- Changnon, S. A. (1988) Climatography of thunder events in the conterminous United States(書誌は次の版で確かめる)
+- Changnon, S. A. (1988) Climatography of thunder events in the conterminous United States. Part I: Temporal aspects. Journal of Climate 1: 389–398
 - Charba, J. (1974) Application of gravity current model to analysis of squall-line gust front. Monthly Weather Review 102: 140–156
 - Chown, S. L., Nicolson, S. W. (2004) Insect Physiological Ecology. Oxford University Press
 - Cordonnier, G. et al. (2016) Large scale terrain generation from tectonic uplift and fluvial erosion. Computer Graphics Forum 35(2)
@@ -338,7 +338,7 @@ PM と PMF を通った値が **[未換算]** に当たる。1 回の更新に�
 - Engerer, N. A., Stensrud, D. J., Coniglio, M. C. (2008) Surface characteristics of observed cold pools. Monthly Weather Review 136: 4839–4849
 - Fosberg, M. A., Deeming, J. E. (1971) Derivation of the 1- and 10-hour timelag fuel moisture calculations for fire-danger rating. USDA Forest Service Research Note RM-207
 - Freeze, R. A., Cherry, J. A. (1979) Groundwater. Prentice-Hall
-- Fuquay, D. M. et al. (1972) Lightning discharges that caused forest fires. Journal of Geophysical Research 77(書誌は次の版で確かめる)
+- Fuquay, D. M., Taylor, A. R., Hawe, R. G., Schmid, C. W. Jr. (1972) Lightning discharges that caused forest fires. Journal of Geophysical Research 77(12): 2156–2158
 - Gregory, P. H. (1973) The Microbiology of the Atmosphere, 2nd ed.
 - Grimm, V. et al. (2020) The ODD protocol for describing agent-based and other simulation models: a second update to improve clarity, replication, and structural realism. Journal of Artificial Societies and Social Simulation 23(2): 7
 - Haldane, J. B. S. (1949) Disease and evolution. La Ricerca Scientifica 19 (Suppl.): 68–76
@@ -352,6 +352,7 @@ PM と PMF を通った値が **[未換算]** に当たる。1 回の更新に�
 - McCree, K. J. (1974) Equations for the rate of dark respiration of white clover and grain sorghum, as functions of dry weight, photosynthetic rate, and temperature. Crop Science 14: 509–514
 - Montgomery, D. R., Brandon, M. T. (2002) Topographic controls on erosion rates in tectonically active mountain ranges. Earth and Planetary Science Letters 201: 481–489
 - Montgomery, D. R., Dietrich, W. E. (1988) Where do channels begin? Nature 336: 232–234
+- Panikov, N. S. (1995) Microbial Growth Kinetics. Chapman & Hall, London
 - Penning de Vries, F. W. T. (1974) Substrate utilization and respiration in relation to growth and maintenance in higher plants. Netherlands Journal of Agricultural Science 22: 40–44
 - Petersen, W. A., Rutledge, S. A. (1998) On the relationship between cloud-to-ground lightning and convective rainfall. Journal of Geophysical Research 103: 14025–14040
 - Prinn, R. G. et al. (2005) Evidence for variability of atmospheric hydroxyl radicals over the past quarter century. Geophysical Research Letters 32: L07809
@@ -360,7 +361,7 @@ PM と PMF を通った値が **[未換算]** に当たる。1 回の更新に�
 - Rothermel, R. C. (1972) A mathematical model for predicting fire spread in wildland fuels. USDA Forest Service Research Paper INT-115
 - Rousk, J., Bååth, E. (2011) Growth of saprotrophic fungi and bacteria in soil. FEMS Microbiology Ecology 78: 17–30
 - Ryan, M. G. (1991) Effects of climate change on plant respiration. Ecological Applications 1: 157–167
-- Simard, A. J. (1968) The moisture content of forest fuels. Forest Fire Research Institute, Ottawa(書誌は次の版で確かめる)
+- Simard, A. J. (1968) The moisture content of forest fuels — I. A review of the basic concepts. Information Report FF-X-14, Forest Fire Research Institute, Department of Forestry and Rural Development, Ottawa
 - Sinsabaugh, R. L. et al. (2013) Carbon use efficiency of microbial communities: stoichiometry, methodology and modelling. Ecology Letters 16: 930–939
 - Stock, J. D., Montgomery, D. R. (1999) Geologic constraints on bedrock river incision using the stream power law. Journal of Geophysical Research 104: 4983–4993
 - Vautard, R. et al. (2010) Northern Hemisphere atmospheric stilling partly attributed to an increase in surface roughness. Nature Geoscience 3: 756–761
