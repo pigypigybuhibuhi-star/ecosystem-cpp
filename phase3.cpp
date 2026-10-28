@@ -5264,6 +5264,9 @@ int main(int argc,char** argv){
         if(!sea[idx(gx,gy)]) continue;              // 生命は海から始まる
         if(depthn(idx(gx,gy))>0.35f) continue;      // ただし浅い海に
         sea_plant_genes(p);
+        // 条件(D-2026-10-24-1 の作者の答え (c)): 最初の海の植物の半分は海底に根を張る(浮く強さ 0.3。水面の漂流を受けない)。
+        // 浮く強さは遺伝子なので、どちらの生き方が残るかは進化に任せる。乱数は引かない
+        if(placed%2==1) p.buoyancy=0.3f;
         plants.push_back(p); placed++;
     }
     // 分解者を撒く。死骸だけを食い、炭素と窒素を還す第三の界
