@@ -261,6 +261,17 @@ const float STORM_I_MEAN    = 30.0f;   // mm/h
 const float STORM_I_MAX     = 150.0f;  // 観測される最大級の降水強度(計算の安全のため)
 // 土の水 1.0 が何 mm にあたるか。根の届く層の有効水分量(50〜200 mm)の中ほど
 const float SOIL_W_MM       = 100.0f;
+// 地下水(D-2026-10-26-2 の答え (a))。岩盤の上の風化した土と砂礫の層を、一定の厚さの帯水層として置く(条件)。
+// 斜面の風化層の厚さは 1〜5 m(Heimsath et al. 1997)。比産出率(重力で抜ける間隙の割合)は砂質の土で 0.1〜0.3(Johnson 1967)
+const float GW_DEPTH_M      = 3.0f;
+const float GW_SY           = 0.2f;
+const float GW_W            = GW_SY*1000.f/SOIL_W_MM;   // 飽和した厚さ 1 m が土の水の単位でいくつか
+// 地表の浸透の上限(飽和透水係数)。ローム 13 mm/h(Rawls et al. 1982)。これを超える強さの雨は地表を流れ去る(ホートン型の地表流)
+const float GW_KS_MM        = 13.0f/60.0f;            // 1 分あたり mm
+// 帯水層の水平の透水係数。シルト質の砂 1e-5 m/s(Freeze & Cherry 1979、1e-7〜1e-3 m/s)
+const float GW_K_M          = 1.0e-5f*60.0f;          // 1 分あたり m(ダルシーの式の K)
+// 地下の流れを何 tick ごとに解くか。陽解法の安定の限界は Δx²·Sy/(4·K·h) ≈ 1100 分なので、60 分は十分小さい
+const int   GW_INTERVAL     = 60;
 // 条件: 対流の発生の頻度(1 km² あたり 1 分あたり、日射の正弦 1・飽和水蒸気圧の比 1 のとき)。
 // 中緯度の内陸で雷の日は年 30〜50 日(Changnon 1988)。一地点が年におよそ 30 回雨雲の下に入る値にした
 const double STORM_INIT     = 1.3e-6;
@@ -600,6 +611,7 @@ std::vector<float> slope(GRID_W*GRID_H, 0.f);
 std::vector<float> precip(GRID_W*GRID_H, 0.f);
 std::vector<float> soil_water(GRID_W*GRID_H, 0.f);
 std::vector<float> soil_n(GRID_W*GRID_H, SOIL_N_BASE);
+std::vector<float> gw_h(GRID_W*GRID_H, 0.f);   // 陸の帯水層の飽和した厚さ(m、0〜GW_DEPTH_M)。海のマスは使わない
 // 収支の帳簿。系の外とのやりとり(明示した出入り)を種類ごとに積算する。
 // 読むだけで物理は変えない。BUDGET_EVERY ごとに在庫の変化と並べて出力し、0 に戻す
 const int BUDGET_EVERY = 600;
@@ -614,7 +626,11 @@ struct Budget {
     double w_relax=0;                // 陸の土壌水: 降水・河川・流出による目標への緩和(上下限込み)
     double w_transp=0;               // 蒸散: 陸の土の水と植物の貯水から大気へ出る水(大気の水蒸気は帳簿の外)
     double w_sea=0;                  // 海のマスの植物と海との水のやりとり(海の水は帳簿の外)
-    double w_storm=0;                // 雨雲から陸の土に降った雨(雲の水は大気の水蒸気から来る。大気は帳簿の外)
+    double w_storm=0;                // 雨雲から陸の土と地下水に染み込んだ雨(雲の水は大気の水蒸気から来る。大気は帳簿の外)
+    double w_gw_sea=0;               // 地下水と海とのやりとり(陸へ入る向きが正。海の水は帳簿の外)
+    double w_gw_edge=0;              // 区画の端を通る地下水の出入り(端の外は同じ傾きが続くとする条件)
+    double w_gw_out=0;               // 地下水面が地表に出て湧き、土に収まらず地表を流れ去る分(負)
+    double w_gw_clamp=0;             // 飽和した厚さが負になるのを切り捨てた分(陽解法の破れ。0 であるべき)
     double c_immig=0, n_immig=0;     // 土地の外との生き物の出入り(動物の放流・微生物の胞子・浮遊植物が持ち込む分、流されて端から出る浮遊植物の分は負)
 } g_bud;
 // 光合成ループは並列なので、蒸散の帳簿はマスごとに積み、帳簿を出すときに順に足す(足す順を固定して決定性を保つ)
@@ -1777,6 +1793,75 @@ void update_water(int frame){
     }
 }
 
+// 地下水の流れ(ダルシーの式、ブシネスクの近似)。水頭 = 岩盤の高さ + 飽和した厚さ。
+// 隣のマスとの間の流れ = K × 上流側の飽和した厚さ × 水頭の差 / Δx × 辺の長さ。海のマスは海面の水頭で一定(帯水層は海につながる)。
+// 区画の端の外は、端のマスと一つ内側のマスの水頭の傾きがそのまま続くとする(開いた境界の条件)。
+// 地下水面が地表に届いた分は湧き出し、まず根の層の土を満たし、残りは地表を流れ去る
+void update_groundwater(int frame){
+    if(frame%GW_INTERVAL!=0) return;
+    const int N=GRID_W*GRID_H;
+    // 辺を通る流量 K·h·(ΔH/Δx)·Δx = K·h·ΔH を、マスの面積 Δx² と比産出率で割って厚さの変化にする
+    const float c=GW_K_M*(float)(GW_INTERVAL*DT)/(CELL_M*CELL_M*GW_SY);
+    static std::vector<float> head(N), dh(N);
+    static std::vector<double> r_sea(GRID_H), r_edge(GRID_H), r_out(GRID_H), r_clamp(GRID_H);
+    parallel_for(0,GRID_H,[&](int ya,int yb){
+        for(int i=ya*GRID_W;i<yb*GRID_W;i++)
+            head[i]=sea[i]?0.f:(elev[i]-SEA_LEVEL)*ELEV_M-GW_DEPTH_M+gw_h[i]; });
+    parallel_for(0,GRID_H,[&](int ya,int yb){
+        for(int y=ya;y<yb;y++){
+            double se=0,ed=0;
+            for(int x=0;x<GRID_W;x++){
+                int i=idx(x,y);
+                if(sea[i]){ dh[i]=0.f; continue; }
+                float hi=gw_h[i], d=0.f;
+                const int dx4[4]={1,-1,0,0}, dy4[4]={0,0,1,-1};
+                for(int k=0;k<4;k++){
+                    int nx=x+dx4[k], ny=y+dy4[k];
+                    if(nx<0||nx>=GRID_W||ny<0||ny>=GRID_H){
+                        int ox=x-dx4[k], oy=y-dy4[k];     // 内側の隣(端の外の水頭を外挿する)
+                        if(ox<0||ox>=GRID_W||oy<0||oy>=GRID_H) continue;
+                        float f=c*hi*(head[i]-head[idx(ox,oy)]);
+                        d+=f; ed+=f*GW_W;
+                        continue;
+                    }
+                    int j=idx(nx,ny);
+                    float dH=head[j]-head[i];
+                    float up=dH>0.f?(sea[j]?GW_DEPTH_M:gw_h[j]):hi;   // 上流側の飽和した厚さ
+                    float f=c*up*dH;
+                    d+=f;
+                    if(sea[j]) se+=f*GW_W;
+                }
+                dh[i]=d;
+            }
+            r_sea[y]=se; r_edge[y]=ed;
+        }
+    });
+    parallel_for(0,GRID_H,[&](int ya,int yb){
+        for(int y=ya;y<yb;y++){
+            double out=0,cl=0;
+            for(int x=0;x<GRID_W;x++){
+                int i=idx(x,y);
+                if(sea[i]) continue;
+                float h=gw_h[i]+dh[i];
+                if(h<0.f){ cl-=h*GW_W; h=0.f; }
+                if(h>GW_DEPTH_M){
+                    float ex=(h-GW_DEPTH_M)*GW_W;      // 湧き出す水(土の水の単位)
+                    float add=std::min(ex,std::max(0.f,FIELD_CAP-soil_water[i]));
+                    soil_water[i]+=add;
+                    out-=ex-add;
+                    h=GW_DEPTH_M;
+                }
+                gw_h[i]=h;
+            }
+            r_out[y]=out; r_clamp[y]=cl;
+        }
+    });
+    for(int y=0;y<GRID_H;y++){                 // 足す順を固定する
+        g_bud.w_gw_sea+=r_sea[y]; g_bud.w_gw_edge+=r_edge[y];
+        g_bud.w_gw_out+=r_out[y]; g_bud.w_gw_clamp+=r_clamp[y];
+    }
+}
+
 // 年平均気温と降水から気候区分を決める(ケッペンの判定順に従う)
 void classify_climate(){
     for(int y=0;y<GRID_H;y++){
@@ -2448,9 +2533,14 @@ void update_storms(){
                     if(r2>=RC*RC) continue;
                     storm_dT[i]+=dTc*std::exp(-r2/(2.f*sc*sc));
                     if(r2>=R*R) continue;
-                    // 土が受け止めきれない分は地表を流れ去る(流れた水は帳簿の外)
-                    float add=std::min(wc*std::exp(-r2/(2.f*sr*sr)),std::max(0.f,FIELD_CAP-soil_water[i]));
-                    soil_water[i]+=add; wsum+=add;
+                    // 浸透の上限を超える強さの分は地表を流れ去る(流れた水は帳簿の外)
+                    float inf=std::min(wc*std::exp(-r2/(2.f*sr*sr)),GW_KS_MM*(float)DT/SOIL_W_MM);
+                    float add=std::min(inf,std::max(0.f,FIELD_CAP-soil_water[i]));
+                    soil_water[i]+=add;
+                    // 根の層を満たした残りは下へ染みて地下水になる。帯水層が満ちていれば流れ去る
+                    float perc=std::max(0.f,std::min((inf-add)/GW_W,GW_DEPTH_M-gw_h[i]));
+                    gw_h[i]+=perc;
+                    wsum+=add+perc*GW_W;
                 }
                 row_w[y]+=wsum;
             }
@@ -3920,6 +4010,7 @@ std::vector<Fld<int>> cell_schema(){
     fv("elev",elev,0.4); fv("co2",co2,CO2_BASE); fv("o2",o2,O2_BASE);
     fv("co2_res",co2_res,0); fv("o2_res",o2_res,0);
     fv("soil_n",soil_n,SOIL_N_BASE); fv("soil_water",soil_water,0.4);
+    fv("gw_h",gw_h,0);
     fv("pload",pload,0); fv("aload",aload,0);
     iv("burn_age",burn_age,999999);
     fv("fuel_moist",fuel_moist,-1);
@@ -5698,7 +5789,7 @@ int main(int argc,char** argv){
             prof_begin();
             if(frame%PRECIP_INTERVAL==0){ compute_precip(); classify_climate(); }
                                                                       prof_end(1);
-            prof_begin(); update_water(frame);                        prof_end(2);
+            prof_begin(); update_water(frame); update_groundwater(frame); prof_end(2);
             prof_begin(); update_animals();                           prof_end(3);
             prof_begin();
             if(frame%PATH_INTERVAL==0) update_pathogens();
@@ -5948,7 +6039,7 @@ int main(int argc,char** argv){
                 if(frame%BUDGET_EVERY==0){
                     // 在庫。生体の炭素はエネルギー×CO2_PER_ENERGY(光合成の換算と同じ)で数える。
                     // 植物の体(高さ)は建設に GROW_COST を払ったぶんの炭素を持つとみなす
-                    double ep=0,ea=0,ec=0,em=0,np=0,nc=0,ns=0,nl=0,wl=0,wp=0;
+                    double ep=0,ea=0,ec=0,em=0,np=0,nc=0,ns=0,nl=0,wl=0,wp=0,wg=0;
                     // 植物の窒素 = 貯え + 体(高さ)を作るのに使った N_PER_GROWTH ぶん
                     for(const auto& p:plants){ ep+=p.energy+p.height*GROW_COST; np+=p.n_store+p.height*N_PER_GROWTH; wp+=p.water_store; }
                     // 動物の体の組織は CORPSE_RETURN ぶんの炭素を持つ
@@ -5956,12 +6047,12 @@ int main(int argc,char** argv){
                     for(const auto& c:corpses){ ec+=c.energy; nc+=c.n; }
                     for(const auto& m:microbes) if(m.alive) em+=m.energy;
                     for(int i=0;i<GRID_W*GRID_H;i++){
-                        if(sea[i]) ns+=soil_n[i]; else { nl+=soil_n[i]; wl+=soil_water[i]; } }
+                        if(sea[i]) ns+=soil_n[i]; else { nl+=soil_n[i]; wl+=soil_water[i]; wg+=gw_h[i]*GW_W; } }
                     double catm=grid_sum(co2)+grid_sum(co2_res), oatm=grid_sum(o2)+grid_sum(o2_res);   // 持ち越しの端数も大気の在庫
                     double cbio=(ep+ea+ec+em)*CO2_PER_ENERGY;
                     double ctot=catm+cbio, ntot=np+nc+ns+nl;
                     for(int i=0;i<GRID_W*GRID_H;i++){ g_bud.w_transp+=w_transp_cell[i]; w_transp_cell[i]=0.0; }
-                    double wtot=wl+wp;
+                    double wtot=wl+wp+wg;
                     static bool have=false; static double pc=0,po=0,pn=0,pw=0,pcb=0;
                     if(have){
                         double cext=g_bud.c_relax+g_bud.c_edge+g_bud.c_trans+g_bud.c_immig;
@@ -5977,9 +6068,11 @@ int main(int argc,char** argv){
                                oatm,oatm-po,g_bud.o_relax,g_bud.o_edge,g_bud.o_trans,oint,cbio-pcb-g_bud.c_immig,oint-(cbio-pcb-g_bud.c_immig));
                         printf("      budget N: soil land %.1f sea %.1f plant %.1f dead %.1f | dN %+.2f = sink %+.2f runoff %+.2f upwell %+.2f clamp %+.3f fix %+.2f fire %+.3f carn %+.3f immig %+.3f + internal %+.2f\n",
                                nl,ns,np,nc,ntot-pn,g_bud.n_sink,g_bud.n_runoff,g_bud.n_upwell,g_bud.n_clamp,g_bud.n_fix,g_bud.n_fire,g_bud.n_carn,g_bud.n_immig,ntot-pn-next);
-                        double wext=g_bud.w_relax+g_bud.w_transp+g_bud.w_sea+g_bud.w_storm;
-                        printf("      budget W: soil land %.1f plant %.1f | dW %+.2f = relax %+.2f transp %+.2f sea %+.3f storm %+.2f + internal %+.2f\n",
-                               wl,wp,wtot-pw,g_bud.w_relax,g_bud.w_transp,g_bud.w_sea,g_bud.w_storm,wtot-pw-wext);
+                        double wext=g_bud.w_relax+g_bud.w_transp+g_bud.w_sea+g_bud.w_storm
+                                   +g_bud.w_gw_sea+g_bud.w_gw_edge+g_bud.w_gw_out+g_bud.w_gw_clamp;
+                        printf("      budget W: soil land %.1f plant %.1f ground %.1f | dW %+.2f = relax %+.2f transp %+.2f sea %+.3f storm %+.2f gwSea %+.2f gwEdge %+.2f gwOut %+.2f gwClamp %+.3f + internal %+.2f\n",
+                               wl,wp,wg,wtot-pw,g_bud.w_relax,g_bud.w_transp,g_bud.w_sea,g_bud.w_storm,
+                               g_bud.w_gw_sea,g_bud.w_gw_edge,g_bud.w_gw_out,g_bud.w_gw_clamp,wtot-pw-wext);
                     }
                     have=true; pc=ctot; po=oatm; pn=ntot; pw=wtot; pcb=cbio;
                     g_bud=Budget();
@@ -6040,8 +6133,11 @@ int main(int argc,char** argv){
                     printf("      defense %.3f (tough %.3f) | seedBank %.3f waiting %d | ice %d cells | slides %ld\n",
                            n?sdf/n:0.0, n?stg/n:0.0, n?sbk/n:0.0, nseed, nice,
                            slide_events); }
-                  { int nl=0; float cold=0.f;
-                    for(int i=0;i<GRID_W*GRID_H;i++){ if(sea[i]) continue; nl++; cold=std::min(cold,storm_dT[i]); }
+                  { int nl=0, nsat=0; float cold=0.f; double sh=0;
+                    for(int i=0;i<GRID_W*GRID_H;i++){ if(sea[i]) continue; nl++; cold=std::min(cold,storm_dT[i]);
+                        sh+=gw_h[i]; if(gw_h[i]>=GW_DEPTH_M*0.999f) nsat++; }
+                    printf("      groundwater: saturated thickness land mean %.3f m | water table at surface %d cells\n",
+                           nl?sh/nl:0.0, nsat);
                     printf("      weather: storms %ld (active %zu) | lightning %ld | rain land mean %.2f mm since last | cold pool now %.1f C | gust max %.1f m/s since last\n",
                            storm_events, storms.size(), lightning_events, nl?storm_rain_mm/nl:0.0, cold, gust_max);
                     storm_rain_mm=0; gust_max=0.f; }
