@@ -199,7 +199,7 @@ const float GAS_DIFFUSE     = FRAC(PMF(0.55f,GAS_INTERVAL),GAS_INTERVAL);  // 4t
 const float GAS_RELAX       = FRAC(PMF(0.0060f,GAS_INTERVAL),GAS_INTERVAL);  // [率 1.46e-05 /分]
 const float WIND_STRENGTH   = LIN(PM(0.35f,GAS_INTERVAL),GAS_INTERVAL);  // 拡散に負けない強さにする [1分あたり 0.000851]
 // 条件: 地上 10 m の風の速さ。北半球の中緯度の陸の観測点の平均はおよそ 3 m/s(Vautard et al. 2010)。
-// 向きは卓越風の帯(wind[] の符号)に従う。大気の移流はこの速さで運ぶ。wind[] の大きさは、海流の換算の基準としてだけ残す
+// 向きは卓越風の帯(wind[] の符号)に従う。大気の移流と水面の漂流はこの速さから決める
 const float WIND_SURF_MS    = 3.0f;
 const float GAS_SHIFT       = LIN(WIND_SURF_MS*60.0/CELL_M,GAS_INTERVAL);  // 1 回の更新で空気が進むマス数 [1分あたり 18 マス]
 const float O2_PER_CO2      = 1.00f;
@@ -425,7 +425,11 @@ const int   ANIMAL_INIT_N   = 500;
 // --- 水域と地形 ---
 const float WATER_ATTEN     = 3.0f;    // 水深による光の減衰
 const float BUOY_COST       = LIN(PM(0.030f));  // 浮くための組織の維持費 [1分あたり 0.000292]
-const float BUOY_DRIFT      = LIN(PM(0.55f,PLANT_STRIDE),PLANT_STRIDE);  // 海流に流される強さ [1分あたり 0.00178]
+// 水面に浮く物は、地上 10 m の風の約 3% の速さで風下へ流される(吹送流と波のストークス・ドリフトを合わせた表層の漂流。
+// Wu 1983、油の漂流の目安 3%)。浮く強さ(buoyancy)は水面から出ている割合として、この速さに掛ける
+const double SURF_DRIFT_FRAC = 0.03;
+const double SURF_DRIFT_CPM = SURF_DRIFT_FRAC*WIND_SURF_MS*60.0/CELL_M;   // 水面の漂流の速さ [1分あたり 0.54 マス]
+const float BUOY_DRIFT      = LIN(SURF_DRIFT_CPM,PLANT_STRIDE);  // 1 回の更新で流されるマス数 [1分あたり 0.54 マス]
 const float HABITAT_COST_P  = LIN(PM(0.35f));  // 生息環境の不適合(植物) [1分あたり 0.0034]
 const float HABITAT_COST_A  = LIN(PM(0.10f,ANIMAL_STRIDE),ANIMAL_STRIDE);  // 生息環境の不適合(動物) [1分あたり 0.000486]
 const float SLOPE_COEF      = 0.50f;   // 勾配による減速。45°(勾配 1)で速さが 2/3。小さな昆虫は体重あたりの登坂の仕事が小さい
@@ -611,7 +615,7 @@ struct Budget {
     double w_transp=0;               // 蒸散: 陸の土の水と植物の貯水から大気へ出る水(大気の水蒸気は帳簿の外)
     double w_sea=0;                  // 海のマスの植物と海との水のやりとり(海の水は帳簿の外)
     double w_storm=0;                // 雨雲から陸の土に降った雨(雲の水は大気の水蒸気から来る。大気は帳簿の外)
-    double c_immig=0, n_immig=0;     // 土地の外から入ってくる生き物(動物の放流・微生物の胞子・浮遊植物)が持ち込む炭素と窒素
+    double c_immig=0, n_immig=0;     // 土地の外との生き物の出入り(動物の放流・微生物の胞子・浮遊植物が持ち込む分、流されて端から出る浮遊植物の分は負)
 } g_bud;
 // 光合成ループは並列なので、蒸散の帳簿はマスごとに積み、帳簿を出すときに順に足す(足す順を固定して決定性を保つ)
 std::vector<double> w_transp_cell(GRID_W*GRID_H, 0.0);
@@ -1528,7 +1532,7 @@ void compute_currents(){
     std::fill(cur_v.begin(),cur_v.end(),0.f);
     for(int y=0;y<GRID_H;y++) for(int x=0;x<GRID_W;x++){
         int i=idx(x,y);
-        if(sea[i]) cur_u[i]=wind[y]/WIND_STRENGTH;
+        if(sea[i]) cur_u[i]=(wind[y]>0.f)?1.f:(wind[y]<0.f?-1.f:0.f);   // 向きだけ。速さは BUOY_DRIFT が持つ
     }
 }
 
@@ -2568,6 +2572,52 @@ void update_fire(int frame){
     fire_area=area;
 }
 
+// 海の浮く植物の始まりの遺伝子。最初に置く株と、風上の端から入ってくる区画の外の株(条件)に使う
+void sea_plant_genes(Plant& p){
+    p.energy=PLANT_INIT_E; p.height=0.05f; p.alive=true; p.age=0;
+    p.absorb=0.92f; p.max_height=0.25f; p.shade_tol=0.10f;
+    p.tough=0.0f; p.clonal=0.0f; p.disperse=0.2f; p.cold_tol=0.05f;
+    p.aquatic=1.0f; p.drought_tol=0.0f; p.dorm_temp=-15.0f; p.dormant=false;
+    p.store_cap=0.0f; p.water_store=0.0f; p.eff_height=0.05f;
+    p.fire_tol=0.0f; p.climb=0.0f; p.sexual=0.2f;
+    for(int k=0;k<N_IMMUNE;k++) p.im[k]=frand(0.f,1.f);
+    p.brood=0.1f; p.n_fix=0.0f; p.n_store=1.0f; p.lifespan=0.05f;
+    p.parasite=0.f; p.carnivory=0.f; p.fire_seed=0.f; p.repro_alloc=0.5f;
+    p.seed_bank=0.f; p.defense=0.f; p.seed_wait=0; p.buoyancy=0.6f;
+    p.mut_rate=0.3f;        p.mother=-1; p.father=-1; p.gen=0;
+    p.id=next_plant_id++; p.genet=p.id; p.lin=-1;
+}
+// 風上の端から入ってくる浮く植物。東西は開いた境界なので、流されて出る流れと同じく、入る流れがある。
+// 区画の外の海の浮く植物の密度は条件で、最初に区画の海に置いた株の、海全体の平均の密度と同じとする。
+// 1 行の端を 1 分に越える数 = 密度 [株/マス] × 漂流の速さ [マス/分] × 浮く強さ。持ち込む炭素と窒素は c_immig・n_immig に付ける
+void plant_inflow(){
+    static double dens=-1.0;
+    if(dens<0.0){ long ns=0; for(int i=0;i<GRID_W*GRID_H;i++) if(sea[i]) ns++;
+                  dens=ns?(double)PLANT_INIT_N/ns:0.0; }
+    static std::vector<int> edge; edge.clear();
+    for(int y=0;y<GRID_H;y++){
+        if(wind[y]==0.f) continue;
+        int x0=(wind[y]>0.f)?0:GRID_W-1;   // 風上の端
+        int ci=idx(x0,y);
+        if(sea[ci]&&!ice[ci]) edge.push_back(ci);
+    }
+    if(edge.empty()) return;
+    const float b0=0.6f;                   // 外の株の浮く強さ(sea_plant_genes と同じ)
+    int n=count_by_rate(dens*SURF_DRIFT_CPM*DT0*b0*edge.size());
+    for(int k=0;k<n && (int)plants.size()<PLANT_MAX;k++){
+        int ci=edge[(int)(dist01(rng)*edge.size())%edge.size()];
+        int gx=ci%GRID_W, gy=ci/GRID_W;
+        Plant p{};
+        // この分の間に端から流れ込んだ距離の中に置く
+        float d=dist01(rng)*(float)(SURF_DRIFT_CPM*DT*b0);
+        p.x=(gx==0)?d:(float)GRID_W-1e-3f-d; p.y=gy+dist01(rng);
+        if(p.x<0.f) p.x=0.f; if(p.x>=GRID_W) p.x=GRID_W-1e-3f;
+        sea_plant_genes(p);
+        plants.push_back(p);
+        g_bud.c_immig+=(p.energy+p.height*GROW_COST)*CO2_PER_ENERGY;
+        g_bud.n_immig+=p.n_store+p.height*N_PER_GROWTH;
+    }
+}
 void update_plants(){
     pgrid.reset();
     for(const auto& p:plants){
@@ -2832,7 +2882,14 @@ void update_plants(){
         if(sea[ci] && p.buoyancy>0.4f){
             p.x+=cur_u[ci]*BUOY_DRIFT*p.buoyancy;
             p.y+=cur_v[ci]*BUOY_DRIFT*p.buoyancy;
-            if(p.x<0.f) p.x=0.f;     if(p.x>=GRID_W) p.x=GRID_W-1.f;
+            // 東西は開いた境界。流されて端を越えた個体は区画の外へ出る。体の炭素と窒素は外へ出たぶんとして帳簿に付ける
+            // (貯水は、死んだ株の貯水を戻す処理が区画の外の水として帳簿に付ける)
+            if(p.x<0.f || p.x>=GRID_W){
+                p.alive=false;
+                g_bud.c_immig-=(p.energy+p.height*GROW_COST)*CO2_PER_ENERGY;
+                g_bud.n_immig-=p.n_store+p.height*N_PER_GROWTH;
+                continue;
+            }
             if(p.y<0.f) p.y=0.f;     if(p.y>=GRID_H) p.y=GRID_H-1.f;
         }
         upkeep += BUOY_COST*p.buoyancy
@@ -2979,6 +3036,7 @@ void update_plants(){
         }
     }
     for(auto& b:babies) plants.push_back(b);
+    plant_inflow();
     // 死んだ株の貯水は、そのマスの土へ戻る(海のマスでは海へ)
     for(const auto& p:plants){
         if(p.alive||p.water_store<=0.f) continue;
@@ -5205,18 +5263,10 @@ int main(int argc,char** argv){
         if(gx<0||gx>=GRID_W||gy<0||gy>=GRID_H) continue;
         if(!sea[idx(gx,gy)]) continue;              // 生命は海から始まる
         if(depthn(idx(gx,gy))>0.35f) continue;      // ただし浅い海に
-        p.energy=PLANT_INIT_E; p.height=0.05f; p.alive=true; p.age=0;
-        p.absorb=0.92f; p.max_height=0.25f; p.shade_tol=0.10f;
-        p.tough=0.0f; p.clonal=0.0f; p.disperse=0.2f; p.cold_tol=0.05f;
-        p.aquatic=1.0f; p.drought_tol=0.0f; p.dorm_temp=-15.0f; p.dormant=false;
-        p.store_cap=0.0f; p.water_store=0.0f; p.eff_height=0.05f;
-        p.fire_tol=0.0f; p.climb=0.0f; p.sexual=0.2f;
-        for(int k=0;k<N_IMMUNE;k++) p.im[k]=frand(0.f,1.f);
-        p.brood=0.1f; p.n_fix=0.0f; p.n_store=1.0f; p.lifespan=0.05f;
-        p.parasite=0.f; p.carnivory=0.f; p.fire_seed=0.f; p.repro_alloc=0.5f;
-        p.seed_bank=0.f; p.defense=0.f; p.seed_wait=0; p.buoyancy=0.6f;
-        p.mut_rate=0.3f;        p.mother=-1; p.father=-1; p.gen=0;
-        p.id=next_plant_id++; p.genet=p.id; p.lin=-1;
+        sea_plant_genes(p);
+        // 条件(D-2026-10-24-1 の作者の答え (c)): 最初の海の植物の半分は海底に根を張る(浮く強さ 0.3。水面の漂流を受けない)。
+        // 浮く強さは遺伝子なので、どちらの生き方が残るかは進化に任せる。乱数は引かない
+        if(placed%2==1) p.buoyancy=0.3f;
         plants.push_back(p); placed++;
     }
     // 分解者を撒く。死骸だけを食い、炭素と窒素を還す第三の界
