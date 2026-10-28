@@ -128,7 +128,7 @@
 - 毎晩・毎昼の試験は t=70000 で「壊れていないか」を見る
 - 週に一度(曜日は Claude が決める)、待ち行列に1年分(525600 tick)の実行を入れ、冬を越せるかと、四つの性質の割合の推移を確かめる。引数は --headless --census 1440 --dump-brains 43200 --assay-series series.csv
 
-## 研究のために必須: 測定の道具(最優先)
+## 研究のために必須: 測定の道具(実装済み)
 次の順に作る。1〜6 の道具はすべて実装済み(1: --dump-brains・--dump-max・--assay・--assay-save・--assay-max・--assay-out、--assay control で対照だけ。4: --track・--track-from・--trigger-log・--trigger-max・--positive-control・--no-recurrent。5: --census。6: --assay-series)。3 の結果(作者が 2026-10-22 に実施): 惑星版の4つのセーブで、持続は 4〜9%、再帰を切ると 0%。四つすべては 0%、一般化はほぼ 0%。
 
 1. 生体の試験(主な測り方)
