@@ -89,6 +89,7 @@ void update_water(int frame){
 
 // 地下水の流れ(ダルシーの式、ブシネスクの近似)。水頭 = 岩盤の高さ + 飽和した厚さ。
 // 隣のマスとの間の流れ = K × 上流側の飽和した厚さ × 水頭の差 / Δx × 辺の長さ。海のマスは海面の水頭で一定(帯水層は海につながる)。
+// 海の境界は出る向きだけ(陸から海へは流れ出るが、海から陸へは入らない。塩の場が入るまでの扱い)。
 // 区画の端の外は、端のマスと一つ内側のマスの水頭の傾きがそのまま続くとする(開いた境界の条件)。
 // 地下水面が地表に届いた分は湧き出し、まず根の層の土を満たし、残りは地表を流れ去る
 void update_groundwater(int frame){
@@ -120,7 +121,9 @@ void update_groundwater(int frame){
                     }
                     int j=idx(nx,ny);
                     float dH=head[j]-head[i];
-                    float up=dH>0.f?(sea[j]?GW_DEPTH_M:gw_h[j]):hi;   // 上流側の飽和した厚さ
+                    // 海から陸へは入らない(D-2026-10-28-1 の作者の答え。塩の場が入るまで、海水を淡水として作らない)
+                    if(sea[j]&&dH>0.f) continue;
+                    float up=dH>0.f?gw_h[j]:hi;   // 上流側の飽和した厚さ
                     float f=c*up*dH;
                     d+=f;
                     if(sea[j]) se+=f*GW_W;
