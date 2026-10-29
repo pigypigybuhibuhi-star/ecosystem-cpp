@@ -483,21 +483,22 @@ void update_animals(){
             c.dir=frand(0.f,6.2832f); c.age=0; c.eaten=0;
             c.body=0.10f; c.lin=a.lin;
             c.id=next_animal_id++;
-            c.speed   =mutate(a.speed,   0.0f,1.0f);
-            c.turn    =mutate(a.turn,    0.0f,1.0f);
-            c.reach   =mutate(a.reach,   0.05f,5.0f);
-            c.size    =mutate(a.size,    0.10f,4.0f);
-            c.diet    =mutate(a.diet,    0.0f,1.0f);
-            c.jaw     =mutate(a.jaw,     0.0f,2.0f);
-            c.cold_tol=mutate(a.cold_tol,0.0f,1.0f);
-            c.aquatic =mutate(a.aquatic, 0.0f,1.0f);
-            c.resp     =mutate(a.resp,     0.0f,1.0f);
-            c.detritus =mutate(a.detritus, 0.0f,1.0f);
-            c.sexual   =mutate(a.sexual,   0.0f,1.0f);
-            c.arboreal =mutate(a.arboreal, 0.0f,1.0f);
+            // 変異は、組み換えで両親から選んだ値に掛ける
+            c.speed   =mutate(c.speed,   0.0f,1.0f);
+            c.turn    =mutate(c.turn,    0.0f,1.0f);
+            c.reach   =mutate(c.reach,   0.05f,5.0f);
+            c.size    =mutate(c.size,    0.10f,4.0f);
+            c.diet    =mutate(c.diet,    0.0f,1.0f);
+            c.jaw     =mutate(c.jaw,     0.0f,2.0f);
+            c.cold_tol=mutate(c.cold_tol,0.0f,1.0f);
+            c.aquatic =mutate(c.aquatic, 0.0f,1.0f);
+            c.resp     =mutate(c.resp,     0.0f,1.0f);
+            c.detritus =mutate(c.detritus, 0.0f,1.0f);
+            c.sexual   =mutate(c.sexual,   0.0f,1.0f);
+            c.arboreal =mutate(c.arboreal, 0.0f,1.0f);
             c.perch    =0.f;                       // 子は地面から始める
             c.aerobic  =1.f;
-            for(int k=0;k<N_IMMUNE;k++) c.im[k]=mutate(a.im[k],0.0f,1.0f);
+            for(int k=0;k<N_IMMUNE;k++) c.im[k]=mutate(c.im[k],0.0f,1.0f);
             // 変異率そのものが遺伝する。環境が荒れた後に上がりうる
             float mr=0.4f+a.mut_rate*MUT_RATE_MAX;
             c.mut_rate =mutate_r(a.mut_rate, 0.f,1.f,mr);
@@ -507,26 +508,26 @@ void update_animals(){
             c.lesion=a.lesion;                         // 対照の印は変異させず、母からそのまま写す
             c.mother=a.id; c.father=mate?mate->id:-1; c.gen=a.gen+1;
             life_note(a.id,g_frame,mate?"有性繁殖":"無性繁殖",(float)nb);
-            c.brood   =mutate(a.brood,   0.0f,1.0f);
-            c.lifespan   =mutate(a.lifespan,   0.0f,1.0f);
-            c.toxin      =mutate(a.toxin,      0.0f,1.0f);
-            c.tox_resist =mutate(a.tox_resist, 0.0f,1.0f);
-            c.burrow     =mutate(a.burrow,     0.0f,1.0f);
-            c.nocturnal  =mutate(a.nocturnal,  0.0f,1.0f);
-            c.store_fat  =mutate(a.store_fat,  0.0f,1.0f);
-            c.repro_alloc=mutate(a.repro_alloc,0.0f,1.0f);
+            c.brood   =mutate(c.brood,   0.0f,1.0f);
+            c.lifespan   =mutate(c.lifespan,   0.0f,1.0f);
+            c.toxin      =mutate(c.toxin,      0.0f,1.0f);
+            c.tox_resist =mutate(c.tox_resist, 0.0f,1.0f);
+            c.burrow     =mutate(c.burrow,     0.0f,1.0f);
+            c.nocturnal  =mutate(c.nocturnal,  0.0f,1.0f);
+            c.store_fat  =mutate(c.store_fat,  0.0f,1.0f);
+            c.repro_alloc=mutate(c.repro_alloc,0.0f,1.0f);
             c.fat=0.f; c.depth=0.f;
-            for(int k=0;k<N_W;k++) c.w[k]=mutate(a.w[k],-3.0f,3.0f);
+            for(int k=0;k<N_W;k++) c.w[k]=mutate(c.w[k],-3.0f,3.0f);
             // ニューロンの有効・無効。稀に大きく飛んで、層の追加や削除が起きる
             for(int k=0;k<N_NODE;k++)
                 c.ngain[k]=(dist01(rng)<0.015f) ? frand(0.f,1.6f)
-                                                : mutate(a.ngain[k],0.f,1.6f);
+                                                : mutate(c.ngain[k],0.f,1.6f);
             for(int k=0;k<N_SENSOR;k++){
-                c.sen[k].angle=mutate(a.sen[k].angle,-3.1416f,3.1416f);
-                c.sen[k].range=mutate(a.sen[k].range, 0.0f,SENSOR_MAX);
+                c.sen[k].angle=mutate(c.sen[k].angle,-3.1416f,3.1416f);
+                c.sen[k].range=mutate(c.sen[k].range, 0.0f,SENSOR_MAX);
                 // 受容体の特異性は、稀に大きく変わる
                 c.sen[k].tune = (dist01(rng)<0.02f) ? frand(0.f,1.f)
-                                                    : mutate(a.sen[k].tune,0.0f,1.0f);
+                                                    : mutate(c.sen[k].tune,0.0f,1.0f);
             }
             babies.push_back(c);
             }
