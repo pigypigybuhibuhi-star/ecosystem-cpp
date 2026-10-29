@@ -26,6 +26,9 @@ std::vector<float> precip(GRID_W*GRID_H, 0.f);
 std::vector<float> soil_water(GRID_W*GRID_H, 0.f);
 std::vector<float> soil_n(GRID_W*GRID_H, SOIL_N_BASE);
 std::vector<float> gw_h(GRID_W*GRID_H, 0.f);   // 陸の帯水層の飽和した厚さ(m、0〜GW_DEPTH_M)。海のマスは使わない
+// 塩の在庫(陸のマスだけ。海は塩分 SEA_SALT で一定の外の溜め)。単位は「g/kg × 土の水の単位」で、水の量で割ると濃さ g/kg になる
+std::vector<float> salt_soil(GRID_W*GRID_H, 0.f);   // 根の層の土の水に溶けた塩(と、飽和を超えて結晶になった塩)
+std::vector<float> salt_gw(GRID_W*GRID_H, 0.f);     // 帯水層の水に溶けた塩
 // 収支の帳簿。系の外とのやりとり(明示した出入り)を種類ごとに積算する。
 // 読むだけで物理は変えない。BUDGET_EVERY ごとに在庫の変化と並べて出力し、0 に戻す
 const int BUDGET_EVERY = 600;
@@ -45,6 +48,8 @@ struct Budget {
     double w_gw_edge=0;              // 区画の端を通る地下水の出入り(端の外は同じ傾きが続くとする条件)
     double w_gw_out=0;               // 地下水面が地表に出て湧き、土に収まらず地表を流れ去る分(負)
     double w_gw_clamp=0;             // 飽和した厚さが負になるのを切り捨てた分(陽解法の破れ。0 であるべき)
+    double s_sea=0, s_edge=0;        // 塩: 地下水と一緒に海・区画の端と出入りする塩(陸へ入る向きが正。海の塩は帳簿の外)
+    double s_out=0, s_clamp=0;       // 塩: 湧いて地表を流れ去る水に溶けた塩(負) / 水の切り捨てと一緒に消した塩(0 であるべき)
     double c_immig=0, n_immig=0;     // 土地の外との生き物の出入り(動物の放流・微生物の胞子・浮遊植物が持ち込む分、流されて端から出る浮遊植物の分は負)
 } g_bud;
 // 光合成ループは並列なので、蒸散の帳簿はマスごとに積み、帳簿を出すときに順に足す(足す順を固定して決定性を保つ)
@@ -114,6 +119,7 @@ struct Plant {
     float x,y,energy,height;
     bool  alive;
     float absorb,max_height,shade_tol,tough,clonal,disperse,cold_tol,aquatic,drought_tol;
+    float salt_tol;         // 遺伝子: 塩への強さ(適合溶質で浸透圧を合わせられる塩分。海水を 1 とする比)。aquatic は水に浸かることへの強さ
     float dorm_temp;        // 遺伝子: この気温を下回ると休眠に入る
     float store_cap;        // 遺伝子: 貯水できる量(多肉化)
     float fire_tol;         // 遺伝子: 厚い樹皮。炎に耐える
@@ -234,6 +240,7 @@ inline void sg_vec_p(const Plant& p,double* v){
     v[0]=p.max_height; v[1]=p.shade_tol; v[2]=p.tough;      v[3]=p.clonal;
     v[4]=p.disperse;   v[5]=p.cold_tol;  v[6]=p.aquatic;    v[7]=p.drought_tol;
     v[8]=p.climb;      v[9]=p.parasite;  v[10]=p.carnivory; v[11]=p.brood;
+    v[12]=p.salt_tol;
 }
 std::vector<std::vector<int>> animal_grid(GRID_W*GRID_H);
 int next_animal_id = 0;
@@ -330,10 +337,10 @@ const int N_SG_A = 12;
 const char* SG_A_NAME[N_SG_A]={
     "diet","detr","reach","size","speed","jaw",
     "cold","aqua","resp","arbor","sexual","brood"};
-const int N_SG_P = 12;
+const int N_SG_P = 13;
 const char* SG_P_NAME[N_SG_P]={
     "maxH","shade","tough","clonal","disp","cold",
-    "aqua","dry","climb","paras","carni","brood"};
+    "aqua","dry","climb","paras","carni","brood","salt"};
 double sg_a_pop[N_SG_A]={0}, sg_a_rep[N_SG_A]={0};
 double sg_p_pop[N_SG_P]={0}, sg_p_rep[N_SG_P]={0};
 long   sg_a_np=0, sg_a_nr=0, sg_p_np=0, sg_p_nr=0;

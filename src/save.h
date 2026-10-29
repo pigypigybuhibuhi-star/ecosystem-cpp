@@ -35,6 +35,7 @@ std::vector<Fld<Plant>> plant_schema(){
         F("shade_tol",&Plant::shade_tol,0.1), F("tough",&Plant::tough,0),
         F("clonal",&Plant::clonal,0), F("disperse",&Plant::disperse,0.2),
         F("cold_tol",&Plant::cold_tol,0.05), F("aquatic",&Plant::aquatic,0),
+        F("salt_tol",&Plant::salt_tol,0),
         F("drought_tol",&Plant::drought_tol,0), F("dorm_temp",&Plant::dorm_temp,-15),
         F("dormant",&Plant::dormant,0), F("store_cap",&Plant::store_cap,0),
         F("water_store",&Plant::water_store,0), F("eff_height",&Plant::eff_height,0.05),
@@ -138,7 +139,7 @@ std::vector<Fld<int>> cell_schema(){
     fv("elev",elev,0.4); fv("co2",co2,CO2_BASE); fv("o2",o2,O2_BASE);
     fv("co2_res",co2_res,0); fv("o2_res",o2_res,0);
     fv("soil_n",soil_n,SOIL_N_BASE); fv("soil_water",soil_water,0.4);
-    fv("gw_h",gw_h,0);
+    fv("gw_h",gw_h,0); fv("salt_soil",salt_soil,0); fv("salt_gw",salt_gw,0);
     fv("pload",pload,0); fv("aload",aload,0);
     iv("burn_age",burn_age,999999);
     fv("fuel_moist",fuel_moist,-1);

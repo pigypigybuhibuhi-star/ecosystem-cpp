@@ -148,7 +148,7 @@ int main(int argc,char** argv){
         sea_plant_genes(p);
         // 陸の株は、まわりの陸の温帯の草本の性質で入る: 水に頼らず(aquatic 0)、根を張り(浮く強さ 0.3)、
         // 生育の下限の気温を下回ると休眠に入る
-        if(on_land){ p.aquatic=0.0f; p.buoyancy=0.3f; p.dorm_temp=PLANT_LAND_DORM; }
+        if(on_land){ p.aquatic=0.0f; p.salt_tol=0.0f; p.buoyancy=0.3f; p.dorm_temp=PLANT_LAND_DORM; }
         // 条件(D-2026-10-24-1 の作者の答え (c)): 最初の海の植物の半分は海底に根を張る(浮く強さ 0.3。水面の漂流を受けない)。
         // 浮く強さは遺伝子なので、どちらの生き方が残るかは進化に任せる。乱数は引かない
         else if(placed%2==1) p.buoyancy=0.3f;
@@ -371,7 +371,7 @@ int main(int argc,char** argv){
                             p.alive=true; p.age=0;
                             p.absorb=0.95f; p.max_height=0.10f; p.shade_tol=0.05f;
                             p.tough=0.f; p.clonal=0.f; p.disperse=0.5f;
-                            p.cold_tol=0.10f; p.aquatic=1.0f; p.drought_tol=0.f;
+                            p.cold_tol=0.10f; p.aquatic=1.0f; p.salt_tol=1.0f; p.drought_tol=0.f;
                             p.dorm_temp=-20.f; p.dormant=false;
                             p.store_cap=0.f; p.water_store=0.f;
                             p.fire_tol=0.f; p.climb=0.f; p.sexual=0.1f;
@@ -833,7 +833,7 @@ int main(int argc,char** argv){
                 if(frame%BUDGET_EVERY==0){
                     // 在庫。生体の炭素はエネルギー×CO2_PER_ENERGY(光合成の換算と同じ)で数える。
                     // 植物の体(高さ)は建設に GROW_COST を払ったぶんの炭素を持つとみなす
-                    double ep=0,ea=0,ec=0,em=0,np=0,nc=0,ns=0,nl=0,wl=0,wp=0,wg=0;
+                    double ep=0,ea=0,ec=0,em=0,np=0,nc=0,ns=0,nl=0,wl=0,wp=0,wg=0,sl=0,sg=0;
                     // 植物の窒素 = 貯え + 体(高さ)を作るのに使った N_PER_GROWTH ぶん
                     for(const auto& p:plants){ ep+=p.energy+p.height*GROW_COST; np+=p.n_store+p.height*N_PER_GROWTH; wp+=p.water_store; }
                     // 動物の体の組織は CORPSE_RETURN ぶんの炭素を持つ
@@ -841,13 +841,14 @@ int main(int argc,char** argv){
                     for(const auto& c:corpses){ ec+=c.energy; nc+=c.n; }
                     for(const auto& m:microbes) if(m.alive) em+=m.energy;
                     for(int i=0;i<GRID_W*GRID_H;i++){
-                        if(sea[i]) ns+=soil_n[i]; else { nl+=soil_n[i]; wl+=soil_water[i]; wg+=gw_h[i]*GW_W; } }
+                        if(sea[i]) ns+=soil_n[i]; else { nl+=soil_n[i]; wl+=soil_water[i]; wg+=gw_h[i]*GW_W; sl+=salt_soil[i]; sg+=salt_gw[i]; } }
                     double catm=grid_sum(co2)+grid_sum(co2_res), oatm=grid_sum(o2)+grid_sum(o2_res);   // 持ち越しの端数も大気の在庫
                     double cbio=(ep+ea+ec+em)*CO2_PER_ENERGY;
                     double ctot=catm+cbio, ntot=np+nc+ns+nl;
                     for(int i=0;i<GRID_W*GRID_H;i++){ g_bud.w_transp+=w_transp_cell[i]; w_transp_cell[i]=0.0; }
                     double wtot=wl+wp+wg;
-                    static bool have=false; static double pc=0,po=0,pn=0,pw=0,pcb=0;
+                    double stot=sl+sg;
+                    static bool have=false; static double pc=0,po=0,pn=0,pw=0,pcb=0,pst=0;
                     if(have){
                         double cext=g_bud.c_relax+g_bud.c_edge+g_bud.c_trans+g_bud.c_immig;
                         double next=g_bud.n_sink+g_bud.n_runoff+g_bud.n_upwell+g_bud.n_clamp+g_bud.n_fix+g_bud.n_fire+g_bud.n_carn+g_bud.n_immig;
@@ -867,8 +868,12 @@ int main(int argc,char** argv){
                         printf("      budget W: soil land %.1f plant %.1f ground %.1f | dW %+.2f = relax %+.2f transp %+.2f sea %+.3f storm %+.2f gwSea %+.2f gwEdge %+.2f gwOut %+.2f gwClamp %+.3f + internal %+.2f\n",
                                wl,wp,wg,wtot-pw,g_bud.w_relax,g_bud.w_transp,g_bud.w_sea,g_bud.w_storm,
                                g_bud.w_gw_sea,g_bud.w_gw_edge,g_bud.w_gw_out,g_bud.w_gw_clamp,wtot-pw-wext);
+                        // 塩の単位は g/kg × 土の水の単位。土の水 1.0 は 100 mm なので、1 単位は 1 m² あたり 100 g(マス 1 つで 10 kg)
+                        double sext=g_bud.s_sea+g_bud.s_edge+g_bud.s_out+g_bud.s_clamp;
+                        printf("      budget S: soil %.1f ground %.1f | dS %+.2f = sea %+.2f edge %+.2f out %+.2f clamp %+.3f + internal %+.2f\n",
+                               sl,sg,stot-pst,g_bud.s_sea,g_bud.s_edge,g_bud.s_out,g_bud.s_clamp,stot-pst-sext);
                     }
-                    have=true; pc=ctot; po=oatm; pn=ntot; pw=wtot; pcb=cbio;
+                    have=true; pc=ctot; po=oatm; pn=ntot; pw=wtot; pcb=cbio; pst=stot;
                     g_bud=Budget();
                 }
                 { double sfi=0,scl2=0,sx=0;
@@ -927,11 +932,15 @@ int main(int argc,char** argv){
                     printf("      defense %.3f (tough %.3f) | seedBank %.3f waiting %d | ice %d cells | slides %ld\n",
                            n?sdf/n:0.0, n?stg/n:0.0, n?sbk/n:0.0, nseed, nice,
                            slide_events); }
-                  { int nl=0, nsat=0; float cold=0.f; double sh=0;
+                  { int nl=0, nsat=0, ngs=0, nss=0; float cold=0.f; double sh=0, smax=0;
                     for(int i=0;i<GRID_W*GRID_H;i++){ if(sea[i]) continue; nl++; cold=std::min(cold,storm_dT[i]);
-                        sh+=gw_h[i]; if(gw_h[i]>=GW_DEPTH_M*0.999f) nsat++; }
+                        sh+=gw_h[i]; if(gw_h[i]>=GW_DEPTH_M*0.999f) nsat++;
+                        if(gw_h[i]>0.f && salt_gw[i]/(gw_h[i]*GW_W)>1.f) ngs++;   // 1 g/kg を超えると淡水ではない(汽水)
+                        float ss=soil_salinity(i); if(ss>1.f) nss++; smax=std::max(smax,(double)ss); }
                     printf("      groundwater: saturated thickness land mean %.3f m | water table at surface %d cells\n",
                            nl?sh/nl:0.0, nsat);
+                    printf("      salt: brackish groundwater %d cells | saline root zone %d cells (max %.1f g/kg)\n",
+                           ngs, nss, smax);
                     printf("      weather: storms %ld (active %zu) | lightning %ld | rain land mean %.2f mm since last | cold pool now %.1f C | gust max %.1f m/s since last\n",
                            storm_events, storms.size(), lightning_events, nl?storm_rain_mm/nl:0.0, cold, gust_max);
                     storm_rain_mm=0; gust_max=0.f; }

@@ -89,26 +89,32 @@ void update_water(int frame){
 
 // 地下水の流れ(ダルシーの式、ブシネスクの近似)。水頭 = 岩盤の高さ + 飽和した厚さ。
 // 隣のマスとの間の流れ = K × 上流側の飽和した厚さ × 水頭の差 / Δx × 辺の長さ。海のマスは海面の水頭で一定(帯水層は海につながる)。
-// 海の境界は出る向きだけ(陸から海へは流れ出るが、海から陸へは入らない。塩の場が入るまでの扱い)。
-// 区画の端の外は、端のマスと一つ内側のマスの水頭の傾きがそのまま続くとする(開いた境界の条件)。
-// 地下水面が地表に届いた分は湧き出し、まず根の層の土を満たし、残りは地表を流れ去る
+// 海のマスとの間は両向きに流れる。海から入る水は塩分 SEA_SALT の海水(D-2026-10-28-1 の作者の答え (b))。
+// 塩は水と一緒に運ばれる(移流。辺を通る塩 = 水の流量 × 上流側の濃さ)。分散と拡散は入れていない(下の注)。
+// 区画の端の外は、端のマスと一つ内側のマスの水頭の傾きがそのまま続くとする(開いた境界の条件)。端の外の水の濃さは端のマスと同じとする。
+// 地下水面が地表に届いた分は湧き出し、まず根の層の土を満たし、残りは地表を流れ去る。湧いた水は帯水層の濃さの塩を持って出る
+// 注: 帯水層と根の層の間の塩の拡散は、分子拡散 1e-9 m²/s で厚さ 1〜3 m を渡るのに数十年かかる(Freeze & Cherry 1979)ので入れていない
 void update_groundwater(int frame){
     if(frame%GW_INTERVAL!=0) return;
     const int N=GRID_W*GRID_H;
     // 辺を通る流量 K·h·(ΔH/Δx)·Δx = K·h·ΔH を、マスの面積 Δx² と比産出率で割って厚さの変化にする
     const float c=GW_K_M*(float)(GW_INTERVAL*DT)/(CELL_M*CELL_M*GW_SY);
-    static std::vector<float> head(N), dh(N);
+    static std::vector<float> head(N), dh(N), conc(N), ds(N);
     static std::vector<double> r_sea(GRID_H), r_edge(GRID_H), r_out(GRID_H), r_clamp(GRID_H);
+    static std::vector<double> rs_sea(GRID_H), rs_edge(GRID_H), rs_out(GRID_H), rs_clamp(GRID_H);
     parallel_for(0,GRID_H,[&](int ya,int yb){
-        for(int i=ya*GRID_W;i<yb*GRID_W;i++)
-            head[i]=sea[i]?0.f:(elev[i]-SEA_LEVEL)*ELEV_M-GW_DEPTH_M+gw_h[i]; });
+        for(int i=ya*GRID_W;i<yb*GRID_W;i++){
+            head[i]=sea[i]?0.f:(elev[i]-SEA_LEVEL)*ELEV_M-GW_DEPTH_M+gw_h[i];
+            // 帯水層の水の塩分(g/kg)。水が無ければ 0
+            conc[i]=sea[i]?SEA_SALT:(gw_h[i]>0.f?salt_gw[i]/(gw_h[i]*GW_W):0.f);
+        } });
     parallel_for(0,GRID_H,[&](int ya,int yb){
         for(int y=ya;y<yb;y++){
-            double se=0,ed=0;
+            double se=0,ed=0,sse=0,sed=0;
             for(int x=0;x<GRID_W;x++){
                 int i=idx(x,y);
-                if(sea[i]){ dh[i]=0.f; continue; }
-                float hi=gw_h[i], d=0.f;
+                if(sea[i]){ dh[i]=0.f; ds[i]=0.f; continue; }
+                float hi=gw_h[i], d=0.f, s=0.f;
                 const int dx4[4]={1,-1,0,0}, dy4[4]={0,0,1,-1};
                 for(int k=0;k<4;k++){
                     int nx=x+dx4[k], ny=y+dy4[k];
@@ -116,46 +122,59 @@ void update_groundwater(int frame){
                         int ox=x-dx4[k], oy=y-dy4[k];     // 内側の隣(端の外の水頭を外挿する)
                         if(ox<0||ox>=GRID_W||oy<0||oy>=GRID_H) continue;
                         float f=c*hi*(head[i]-head[idx(ox,oy)]);
+                        float fs=f*GW_W*conc[i];
                         d+=f; ed+=f*GW_W;
+                        s+=fs; sed+=fs;
                         continue;
                     }
                     int j=idx(nx,ny);
                     float dH=head[j]-head[i];
-                    // 海から陸へは入らない(D-2026-10-28-1 の作者の答え。塩の場が入るまで、海水を淡水として作らない)
-                    if(sea[j]&&dH>0.f) continue;
-                    float up=dH>0.f?gw_h[j]:hi;   // 上流側の飽和した厚さ
+                    // 上流側の飽和した厚さ。海のマスは帯水層が海につながり、満ちているとする
+                    float up=dH>0.f?(sea[j]?GW_DEPTH_M:gw_h[j]):hi;
                     float f=c*up*dH;
-                    d+=f;
-                    if(sea[j]) se+=f*GW_W;
+                    float fs=f*GW_W*(dH>0.f?conc[j]:conc[i]);   // 上流側の濃さの塩が一緒に動く
+                    d+=f; s+=fs;
+                    if(sea[j]){ se+=f*GW_W; sse+=fs; }
                 }
-                dh[i]=d;
+                dh[i]=d; ds[i]=s;
             }
-            r_sea[y]=se; r_edge[y]=ed;
+            r_sea[y]=se; r_edge[y]=ed; rs_sea[y]=sse; rs_edge[y]=sed;
         }
     });
     parallel_for(0,GRID_H,[&](int ya,int yb){
         for(int y=ya;y<yb;y++){
-            double out=0,cl=0;
+            double out=0,cl=0,sout=0,scl=0;
             for(int x=0;x<GRID_W;x++){
                 int i=idx(x,y);
                 if(sea[i]) continue;
                 float h=gw_h[i]+dh[i];
+                float sg=salt_gw[i]+ds[i];
                 if(h<0.f){ cl-=h*GW_W; h=0.f; }
+                if(h<=0.f){ scl-=sg; sg=0.f; }          // 水が無くなったマスに残る塩は、水の切り捨てと一緒に消える(0 であるべき)
+                else if(sg<0.f){ scl-=sg; sg=0.f; }
                 if(h>GW_DEPTH_M){
                     float ex=(h-GW_DEPTH_M)*GW_W;      // 湧き出す水(土の水の単位)
+                    float cs=sg/(h*GW_W);              // 湧く水の塩分
                     float add=std::min(ex,std::max(0.f,FIELD_CAP-soil_water[i]));
                     soil_water[i]+=add;
                     out-=ex-add;
+                    float s_add=add*cs, s_ex=ex*cs;
+                    salt_soil[i]+=s_add;
+                    sout-=s_ex-s_add;
+                    sg-=s_ex;
+                    if(sg<0.f){ scl-=sg; sg=0.f; }
                     h=GW_DEPTH_M;
                 }
-                gw_h[i]=h;
+                gw_h[i]=h; salt_gw[i]=sg;
             }
-            r_out[y]=out; r_clamp[y]=cl;
+            r_out[y]=out; r_clamp[y]=cl; rs_out[y]=sout; rs_clamp[y]=scl;
         }
     });
     for(int y=0;y<GRID_H;y++){                 // 足す順を固定する
         g_bud.w_gw_sea+=r_sea[y]; g_bud.w_gw_edge+=r_edge[y];
         g_bud.w_gw_out+=r_out[y]; g_bud.w_gw_clamp+=r_clamp[y];
+        g_bud.s_sea+=rs_sea[y]; g_bud.s_edge+=rs_edge[y];
+        g_bud.s_out+=rs_out[y]; g_bud.s_clamp+=rs_clamp[y];
     }
 }
 

@@ -144,6 +144,12 @@ void update_storms(){
                     // 根の層を満たした残りは下へ染みて地下水になる。帯水層が満ちていれば流れ去る
                     float perc=std::max(0.f,std::min((inf-add)/GW_W,GW_DEPTH_M-gw_h[i]));
                     gw_h[i]+=perc;
+                    // 染みていく水は根の層の水と混ざり、その濃さの塩を地下へ運ぶ(塩の洗い出し)
+                    if(perc>0.f && salt_soil[i]>0.f){
+                        float pw=perc*GW_W;
+                        float sl=salt_soil[i]*pw/(soil_water[i]+pw);
+                        salt_soil[i]-=sl; salt_gw[i]+=sl;
+                    }
                     wsum+=add+perc*GW_W;
                 }
                 row_w[y]+=wsum;
