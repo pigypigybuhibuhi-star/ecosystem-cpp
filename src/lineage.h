@@ -77,6 +77,11 @@ inline float habitat_a(const Animal& a,int ci){
     if(sea[ci]) return (1.f-a.aquatic)*(SHALLOW_EASE+(1.f-SHALLOW_EASE)*depthn(ci));
     return a.aquatic;
 }
+// 塩への不適合(動物)。salt_tol は体液の浸透圧を保てる外の塩分(海水を 1 とする比)。陸の動物は根の層の土の水(飲む水と餌の水)の塩分を受ける。
+// 塩辛ければ塩を汲み出す輸送(直腸の塩の分泌など)、薄ければ溶質を取り戻す輸送に費用がかかる(Bradley 1987)。植物と同じく差の二乗で費用にする
+inline float salt_mismatch_a(const Animal& a,int ci){
+    return soil_salinity(ci)/SEA_SALT-a.salt_tol;
+}
 sf::Color lineage_color(int i){
     float h=std::fmod(0.13f+(float)i*0.61803399f,1.0f)*360.f;
     float s=0.70f,v=1.0f;

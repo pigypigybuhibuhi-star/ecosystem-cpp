@@ -65,7 +65,7 @@ PM と PMF を通った値が **[未換算]** に当たる。1 回の更新に�
 
 状態: 位置、向き、エネルギー、体(body、成長して size に近づく)、脂肪、潜り具合、今いる高さ(perch)、酸素の充足度、再帰の値 2 つ、年齢、食べた回数、系譜。
 
-遺伝子: 速さ、旋回、届く高さ(reach)、成体の大きさ(size)、肉食(diet)、顎、耐寒性、水生、呼吸の効率、分解物食(detritus)、有性生殖の度合い、登攀(arboreal)、一度に産む数(brood)、寿命、毒、解毒、穴掘り(burrow)、夜目(nocturnal)、脂肪を貯める傾向、繁殖に回す割合、変異率、一口の大きさ、消化効率、免疫の型(3 座位)、感覚器 5 つ(向き・射程・何に反応するか)、神経網の重み(N_W 個)とニューロンの有効・無効の値(24 個)。
+遺伝子: 速さ、旋回、届く高さ(reach)、成体の大きさ(size)、肉食(diet)、顎、耐寒性、水中での呼吸と泳ぎ(aquatic)、塩への強さ(salt_tol。体液の浸透圧を保てる外の塩分、海水を 1 とする比)、呼吸の効率、分解物食(detritus)、有性生殖の度合い、登攀(arboreal)、一度に産む数(brood)、寿命、毒、解毒、穴掘り(burrow)、夜目(nocturnal)、脂肪を貯める傾向、繁殖に回す割合、変異率、一口の大きさ、消化効率、免疫の型(3 座位)、感覚器 5 つ(向き・射程・何に反応するか)、神経網の重み(N_W 個)とニューロンの有効・無効の値(24 個)。
 
 ### 2.5 微生物(Microbe)
 動かない分解者。状態: 位置、体の炭素、年齢。遺伝子: 分解の速さ(rate)、耐寒性。
@@ -259,6 +259,7 @@ PM と PMF を通った値が **[未換算]** に当たる。1 回の更新に�
 - **襲う**: 隣の 3×3 で、自分の体が相手の 1.15 倍を超え、高さが近く、穴に潜っていない相手。一口 = 相手のエネルギー × 率 9.22e-3 /分 × √肉食 × 活動。毒は解毒できなければ同化を減らし、解毒の費用がかかる
 - **食虫植物**: 地表にいれば、食虫の株に捕らえられうる
 - **維持費**: 基礎代謝 1.8e-5 /分 × 組織の炭素(Chown & Nicolson 2004、Addo-Bediako et al. 2002)×(1 + 形質の維持費の和 / 基準)+ 歩く費用。老化で上がる。病原体に型が合えば上がる
+- **塩と水に浸かること** [法則]+[未換算]: 生息環境の不適合を二つに分ける。(1) 水中での呼吸と泳ぎ aquatic: 海では (1 − aquatic) × (0.30 + 0.70 × 水深の比)、陸では aquatic を不適合とする(今までの式のまま)。(2) 塩への不適合 hs = 今いるマスの水の塩分(陸は根の層の土の水、海は 35 g/kg)/ 35 − salt_tol。外の水が体液より塩辛ければ塩を汲み出す輸送(直腸の塩の分泌など)、薄ければ溶質を取り戻す輸送に費用がかかる(Bradley 1987)。維持費の形質の和に 0.000486 /分 × hs² **[未換算]**(水に浸かることへの不適合と同じ係数)を足す。最初に放す動物は salt_tol 1。外から入れ直す動物の置き場所は、塩への不適合 0.55 を超えるマスを除く **[条件]**
 - **呼吸**: 必要な O2 = 代謝 × 0.02 × (1 − 0.6·呼吸の効率)。マスの O2 で足りない分は発酵で、炭素は有機物のまま糞に出る
 - **脂肪**: エネルギーが閾値の 0.6 を超えれば余剰を脂肪へ(合成で 15% を呼吸)。0.25 を下回れば取り崩す。**注意**: 脂肪の目標を「維持費の何日分」(日数を遺伝子に)にする作者の答え(D-2026-10-24-3)は、優先順位 1 の作業に含まれる
 - **繁殖**: エネルギーが A_DIVIDE_TH × (1.4 − 0.6·繁殖に回す割合)(A_DIVIDE_TH = 6.0)を超え、体が size の 80% 以上なら判定する。有性なら半径 3 マスで同じ lin の成熟した相手を探す(2.9 の注意)。産む数 = 1 + brood·11、投資 = エネルギー × (0.20 + 0.55·繁殖に回す割合)、一匹の取り分 = 1/(数 × (1 + (数 − 1)·0.22))。子の体は 0.10(作る費用 0.4)で、取り分がそれに届かなければ死骸になる。**注意**: 繁殖の閾値を組織の炭素に比例させ、子の体を「投資 ÷ 産む数」から決める作業(移行の段階 5 の作者の判断)は、優先順位 1 で試験中
@@ -335,6 +336,7 @@ PM と PMF を通った値が **[未換算]** に当たる。1 回の更新に�
 - Austin, A. T., Vivanco, L. (2006) Plant litter decomposition in a semi-arid ecosystem controlled by photodegradation. Nature 442: 555–558
 - Benjamin, T. B. (1968) Gravity currents and related phenomena. Journal of Fluid Mechanics 31: 209–248
 - Blagodatsky, S. A., Heinemeyer, O., Richter, J. (2000) Estimating the active and total soil microbial biomass by kinetic respiration analysis. Biology and Fertility of Soils 32: 73–81. doi:10.1007/s003740000219
+- Bradley, T. J. (1987) Physiology of osmoregulation in mosquitoes. Annual Review of Entomology 32: 439–462
 - Byers, H. R., Braham, R. R. (1949) The Thunderstorm. U.S. Weather Bureau
 - Changnon, S. A. (1988) Climatography of thunder events in the conterminous United States. Part I: Temporal aspects. Journal of Climate 1: 389–398
 - Charba, J. (1974) Application of gravity current model to analysis of squall-line gust front. Monthly Weather Review 102: 140–156

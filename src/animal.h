@@ -337,6 +337,7 @@ void update_animals(){
             }
         }
         float hma=habitat_a(a,ci);
+        float hsa=salt_mismatch_a(a,ci);
         // 食虫植物に捕らえられる。土壌の窒素が乏しい場所ほど罠が育つ
         if(a.depth<0.2f){
             for(int t=pgrid.b(ci);t<pgrid.e(ci);t++){
@@ -365,6 +366,7 @@ void update_animals(){
         float upkeep=a.reach*A_REACH_COST
                    +a.body*A_SIZE_COST+a.jaw*JAW_COST+COLD_COST_A*a.cold_tol
                    +HABITAT_COST_A*hma*hma
+                   +HABITAT_COST_A*hsa*hsa
                    +a.detritus*DETRITUS_COST+sensor_span*SENSOR_COST
                    +brain_use*SYN_COST
                    +a.sexual*SEX_COST+a.arboreal*ARBOREAL_COST
@@ -463,7 +465,7 @@ void update_animals(){
             if(mate){
                 #define PICK(F) c.F = (dist01(rng)<0.5f)? a.F : mate->F
                 PICK(speed); PICK(turn); PICK(reach); PICK(size); PICK(diet);
-                PICK(jaw); PICK(cold_tol); PICK(aquatic); PICK(resp);
+                PICK(jaw); PICK(cold_tol); PICK(aquatic); PICK(salt_tol); PICK(resp);
                 PICK(detritus); PICK(sexual); PICK(arboreal); PICK(brood);
                 PICK(lifespan); PICK(toxin); PICK(tox_resist);
                 PICK(burrow); PICK(nocturnal); PICK(store_fat); PICK(repro_alloc);
@@ -492,6 +494,7 @@ void update_animals(){
             c.jaw     =mutate(c.jaw,     0.0f,2.0f);
             c.cold_tol=mutate(c.cold_tol,0.0f,1.0f);
             c.aquatic =mutate(c.aquatic, 0.0f,1.0f);
+            c.salt_tol=mutate(c.salt_tol,0.0f,1.0f);
             c.resp     =mutate(c.resp,     0.0f,1.0f);
             c.detritus =mutate(c.detritus, 0.0f,1.0f);
             c.sexual   =mutate(c.sexual,   0.0f,1.0f);
