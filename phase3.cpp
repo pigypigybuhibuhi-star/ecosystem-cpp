@@ -32,6 +32,7 @@
 #include "src/air.h"
 #include "src/pathogen_odor.h"
 #include "src/slide.h"
+#include "src/quake.h"
 #include "src/microbe.h"
 #include "src/weather_fire.h"
 #include "src/plant.h"
@@ -44,12 +45,12 @@
 #include "src/assay.h"
 #include "src/census.h"
 int main(int argc,char** argv){
-    // 起動引数: --seed N  --stop-at N  --record FILE  --replay FILE --shuffle-seed N  --headless
+    // 起動引数: --seed N  --stop-at N  --record FILE  --replay FILE --shuffle-seed N  --headless  --quake T M
     std::string rec_path, replay_path; unsigned shuffle_seed=1;
     std::string assay_path, assay_save, assay_out; int assay_max=1000;
     for(int i=1;i<argc;i++){
         std::string a=argv[i];
-        if(a=="--seed"    && i+1<argc){ unsigned sd=(unsigned)std::stoul(argv[++i]); rng.seed(sd); wx_rng.seed(sd^0x2545F491u); lt_rng.seed(sd^0x9E3779B9u); }
+        if(a=="--seed"    && i+1<argc){ unsigned sd=(unsigned)std::stoul(argv[++i]); rng.seed(sd); wx_rng.seed(sd^0x2545F491u); lt_rng.seed(sd^0x9E3779B9u); qk_rng.seed(sd^0x85EBCA6Bu); }
         if(a=="--stop-at" && i+1<argc) g_stop_at=std::stol(argv[++i]);
         if(a=="--record"  && i+1<argc) rec_path=argv[++i];
         if(a=="--replay"  && i+1<argc) replay_path=argv[++i];
@@ -69,6 +70,7 @@ int main(int argc,char** argv){
         if(a=="--no-recurrent"     && i+1<argc) g_lesion_n=std::max(0,std::stoi(argv[++i]));
         if(a=="--assay-series" && i+1<argc) g_series_path=argv[++i];
         if(a=="--census"      && i+1<argc) g_census_every=std::max(0,std::stoi(argv[++i]));
+        if(a=="--quake"       && i+2<argc){ g_quake_force_t=std::stol(argv[++i]); g_quake_force_m=std::stof(argv[++i]); }
     }
     field_open();
     census_open();
@@ -78,12 +80,12 @@ int main(int argc,char** argv){
         g_rec=fopen(rec_path.c_str(),"w");
         if(!g_rec){ fprintf(stderr,"record: cannot open %s\n",rec_path.c_str()); return 1; }
         fprintf(g_rec,"# evosim environment events v1: tick kind x y strength\n");
-        fprintf(g_rec,"# fire strength = fire intensity at ignition; slide strength = slope; storm strength = peak rain rate mm/h (x y may lie upwind outside the plot); lightning strength = 1 per cloud-to-ground flash\n");
+        fprintf(g_rec,"# fire strength = fire intensity at ignition; slide strength = slope; storm strength = peak rain rate mm/h (x y may lie upwind outside the plot); lightning strength = 1 per cloud-to-ground flash; quake strength = magnitude (x y = epicenter on the fault outside the plot)\n");
     }
     if(!replay_path.empty()){
         if(!ev_load_replay(replay_path.c_str(),shuffle_seed)) return 1;
         g_replay=true;
-        printf("replay: %s shuffle-seed %u (fire/slide/storm physics off)\n",replay_path.c_str(),shuffle_seed);
+        printf("replay: %s shuffle-seed %u (fire/slide/storm/quake physics off)\n",replay_path.c_str(),shuffle_seed);
     }
     prevent_sleep_begin();
     for(int k=0;k<N_ODOR;k++) odor[k].assign(GRID_W*GRID_H,0.f);
@@ -604,6 +606,7 @@ int main(int argc,char** argv){
               auto tf2=std::chrono::steady_clock::now();
               ao+=std::chrono::duration<double,std::milli>(tf2-te).count();
               auto tg=std::chrono::steady_clock::now();
+              update_quakes();
               update_slides();
               if(g_replay) ev_replay_advance();
               if(g_rec && frame%600==0) fflush(g_rec);
@@ -623,8 +626,8 @@ int main(int argc,char** argv){
             if(g_stop_at>0 && frame>=g_stop_at){
                 printf("=== stop at t=%d  mean fps (t>=50000) %.2f over %ld frames ===\n",
                        frame, g_fps_time>0? g_fps_n/g_fps_time : 0.0, g_fps_n);
-                if(g_replay) printf("replay: done fire %ld slide %ld storm %ld lightning %ld of %zu\n",
-                                    g_replay_done[EV_FIRE],g_replay_done[EV_SLIDE],g_replay_done[EV_STORM],g_replay_done[EV_LIGHTNING],g_replay_ev.size());
+                if(g_replay) printf("replay: done fire %ld slide %ld storm %ld lightning %ld quake %ld of %zu\n",
+                                    g_replay_done[EV_FIRE],g_replay_done[EV_SLIDE],g_replay_done[EV_STORM],g_replay_done[EV_LIGHTNING],g_replay_done[EV_QUAKE],g_replay_ev.size());
                 if(g_rec){ fclose(g_rec); g_rec=nullptr; }
                 field_close();
                 census_close();
@@ -929,9 +932,9 @@ int main(int argc,char** argv){
                     for(const auto& p:plants){ sdf+=p.defense; sbk+=p.seed_bank;
                                                if(p.seed_wait>0) nseed++; }
                     for(int i=0;i<GRID_W*GRID_H;i++) if(ice[i]) nice++;
-                    printf("      defense %.3f (tough %.3f) | seedBank %.3f waiting %d | ice %d cells | slides %ld\n",
+                    printf("      defense %.3f (tough %.3f) | seedBank %.3f waiting %d | ice %d cells | slides %ld | quakes %ld\n",
                            n?sdf/n:0.0, n?stg/n:0.0, n?sbk/n:0.0, nseed, nice,
-                           slide_events); }
+                           slide_events, quake_events); }
                   { int nl=0, nsat=0, ngs=0, nss=0; float cold=0.f; double sh=0, smax=0;
                     for(int i=0;i<GRID_W*GRID_H;i++){ if(sea[i]) continue; nl++; cold=std::min(cold,storm_dT[i]);
                         sh+=gw_h[i]; if(gw_h[i]>=GW_DEPTH_M*0.999f) nsat++;

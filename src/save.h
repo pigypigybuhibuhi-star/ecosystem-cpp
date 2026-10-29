@@ -277,6 +277,9 @@ void save_state(const std::string& fn,int frame){
         f<<"WEATHER "<<storms.size()<<'\n'<<wx_rng<<'\n';
         for(auto& s:storms){ char b[160]; snprintf(b,sizeof b,"%a %a %a %a\n",s.x,s.y,s.age,s.ipeak); f<<b; }
         f<<"LIGHTNING\n"<<lt_rng<<'\n'<<lightning_events<<'\n';
+        // 地震の状態。余震は本震から長く続くので、本震の一覧と乱数を残す
+        f<<"QUAKE "<<mainshocks.size()<<'\n'<<qk_rng<<'\n'<<quake_events<<'\n';
+        for(auto& s:mainshocks){ char b[160]; snprintf(b,sizeof b,"%ld %a %a\n",s.tick,s.mag,s.x); f<<b; }
         f<<"HISTORY\n";
         io_hist(sw);
         f<<"END\n";
@@ -369,6 +372,13 @@ bool load_state(const std::string& fn,int& frame){
             f>>sec;
         }
         if(sec=="LIGHTNING"){ f>>lt_rng; f>>lightning_events; f>>sec; }
+        mainshocks.clear();
+        if(sec=="QUAKE"){
+            long n; f>>n; f>>qk_rng; f>>quake_events;
+            for(long i=0;i<n;i++){ long t; std::string a,b; f>>t>>a>>b;
+                mainshocks.push_back({t,std::strtof(a.c_str(),nullptr),std::strtof(b.c_str(),nullptr)}); }
+            f>>sec;
+        }
         if(sec=="HISTORY"){
             io_hist(sr);
             f>>sec;

@@ -210,6 +210,47 @@ const float SLIDE_RATE      = FRAC(UPLIFT_MM_YR*1e-3/SLIDE_DEPTH_M/YEAR_MIN);  /
 const float SLIDE_HL        = std::pow(10.f,-0.085f*std::log10(SLIDE_DEPTH_M*CELL_M*CELL_M)+0.047f);
 const int   SLIDE_RUN_MAX   = 200;     // 到達を追う歩数の安全の上限(計算のためだけ)
 
+// --- 地震の揺れ ---
+// 条件: 区画の外の断層。北の端(y=0)から 10 km 北を東西に走る長さ 60 km の断層で、区画の中央の北にある。
+// 北の端を頂にする傾動地塊(UPLIFT_MM_YR)を持ち上げる断層とみなし、すべりの速さは隆起の速さと同じとする。
+// 地震発生層の幅 15 km、剛性率 3e10 Pa(上部地殻の標準の値)
+const double QK_FAULT_DIST_KM = 10.0;
+const double QK_FAULT_LEN_KM  = 60.0;
+const double QK_SEIS_W_KM     = 15.0;
+const double QK_RIGIDITY      = 3.0e10;
+// 規模の分布: グーテンベルク・リヒター則 log10 N(≥M) = a − bM、b = 1(Gutenberg & Richter 1944)。
+// 記録する最小の規模は M4(これより小さい揺れは区画の斜面の限界加速度に届かない)。
+// 最大の規模は断層の長さから: M = 5.08 + 1.16 log10(地表の断層の長さ km)(Wells & Coppersmith 1994)で M7.14
+const double QK_B             = 1.0;
+const double QK_MMIN          = 4.0;
+const double QK_MMAX          = 5.08+1.16*std::log10(QK_FAULT_LEN_KM);
+// a はモーメントの釣り合いから決める: 断層が蓄えるモーメントの速さ μ L W s(Brune 1968)を、
+// 打ち切った G-R 則の地震が解放するモーメント b/(1.5−b) × 10^(a + 9.1 + (1.5−b) Mmax)(M0 = 10^(1.5M + 9.1) N·m、
+// Hanks & Kanamori 1979。Youngs & Coppersmith 1985)と等しく置く。a ≈ 2.94、M4 以上の本震は年 0.086 回
+const double QK_M0_RATE       = QK_RIGIDITY*QK_FAULT_LEN_KM*1e3*QK_SEIS_W_KM*1e3*UPLIFT_MM_YR*1e-3;   // N·m/年
+const double QK_A             = std::log10(QK_M0_RATE*(1.5-QK_B)/QK_B)-9.1-(1.5-QK_B)*QK_MMAX;
+const double QK_RATE          = std::pow(10.0,QK_A-QK_B*QK_MMIN)/YEAR_MIN;   // M4 以上の本震 [1分あたり 1.6e-07]
+// 余震: 本震の規模 Mm の後、時刻 t(日)に規模 M 以上が起きる率 10^(a' + b'(Mm − M)) (t + c)^−p(改良大森則、
+// Reasenberg & Jones 1989 の一般的な値 a' = −1.67、b' = 0.91、p = 1.08、c = 0.05 日)。余震はさらに余震を生まない
+// (この式は二次の余震を含めた列全体への当てはめなので)
+const double QK_RJ_A          = -1.67;
+const double QK_RJ_B          = 0.91;
+const double QK_RJ_P          = 1.08;
+const double QK_RJ_C          = 0.05;
+// 断層の破壊の長さ(地下): log10 L(km) = −2.44 + 0.59 M(Wells & Coppersmith 1994、全種類)
+// 揺れ: 最大加速度(g)log10 A = −1.02 + 0.249 M − log10 r − 0.00255 r、r = √(d² + 7.3²) km、
+// d は破壊の地表への投影までの距離(Joyner & Boore 1981)。ばらつきは入れず中央の値を使う
+// 斜面の限界加速度: 無限斜面の安全率 FS = c'/(γ z sinα cosα) + tanφ'/tanα、ac = (FS − 1) g sinα(Newmark 1965)。
+// 土は乾いているとする(地下水の飽和した厚さはまだ斜面の土層に入れていない)。z は崩れる厚さ SLIDE_DEPTH_M。
+// 内部摩擦角は地形を作るときの安息角 REPOSE_SLOPE(35°)と同じ値を使う(粘着の無い粒の安息角は内部摩擦角に等しい)。
+// 粘着力は土そのもの 2 kPa と根の補強 3 kPa の和 5 kPa(崩積土 0〜5 kPa、草地と低木の根 1〜5 kPa。
+// Montgomery & Dietrich 1994、Schmidt et al. 2001)。単位体積重量 17 kN/m³。
+// この値で区画の最も急な斜面(勾配の大きさ約 1)でも乾いた状態の FS は 1 を超え、揺れが無ければ崩れない
+const float QK_SOIL_C_KPA     = 5.0f;
+const float QK_SOIL_GAMMA     = 17.0f;
+// 崩れ: ニューマークの変位 log10 Dn(cm) = 0.215 + log10[(1 − ac/A)^2.341 (ac/A)^−1.438](Jibson 2007)、
+// 崩れる確率 P = 0.335 [1 − exp(−0.048 Dn^1.565)](Jibson et al. 2000、1994 年ノースリッジ地震の当てはめ)
+
 // --- 天気: 対流の雨雲 ---
 // 雨雲は日射で暖まった地表の空気が持ち上がって生じ、中層の風に流され、一生を終えて消える。
 // 区画は雨雲一つほどの広さしかないので、区画の外(風上)で生じて流れ込む雲も同じ規則で起こす

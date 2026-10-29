@@ -76,6 +76,9 @@ PM と PMF を通った値が **[未換算]** に当たる。1 回の更新に�
 ### 2.7 雨雲(Storm)
 位置(区画の外の風上を含む)、年齢、中心の降水強度。一生は約 60 分。
 
+### 2.7.1 本震(Mainshock)
+起きた tick、規模、震央の位置(区画の外の断層の上)。余震の率の計算のために残す(7.7.1)。
+
 ### 2.8 帳簿(Budget)
 水・炭素・窒素・塩の出入りを過程ごとに数える観察のための量。生き物と環境の規則の入力には使わない。
 
@@ -97,7 +100,7 @@ PM と PMF を通った値が **[未換算]** に当たる。1 回の更新に�
 7. 微生物(4 tick に分けて 1/4 ずつ)
 8. 火(update_fire)
 9. 匂い(4 tick ごと)
-10. 崖崩れ(update_slides)。再生のときは記録の出来事を置く
+10. 地震(update_quakes)と崖崩れ(update_slides)。再生のときは記録の出来事を置く
 11. 大気の移流と拡散(4 tick ごと)
 
 索引(植物・動物・死骸のマスごとの一覧)は使う直前に作り直す。動物と植物の配列は生まれた順に並び、子は tick の終わりに後ろへ足す。
@@ -148,7 +151,9 @@ PM と PMF を通った値が **[未換算]** に当たる。1 回の更新に�
 | 帯水層 | 厚さ 3 m、比産出率 0.2 | Heimsath et al. 1997、Johnson 1967 |
 | 海の水の塩分 | 35 g/kg(陸の帯水層へ入る海水も同じ) | Millero et al. 2008 |
 | 風上の端から入る浮く植物 | 最初に海に置いた株(200 株)の海の平均の密度 × 漂流の速さ | D-2026-10-26-1 の答え (b) |
-| 記録した環境の出来事(--replay) | 火・崖崩れ・雨雲・雷を、記録の tick・位置・強さで置く | 研究の比較のため |
+| 区画の外の断層 | 北の端から 10 km 北を東西に走る長さ 60 km、地震発生層の幅 15 km、すべりの速さ = 隆起の速さ 0.3 mm/年、剛性率 3e10 Pa | 傾動地塊を持ち上げる断層とみなす(作者の CLAUDE.md「震源の位置と規模は条件」) |
+| 強制の本震(--quake T M) | tick T に規模 M の本震を断層の中央(区画の中央の北)に置く | 研究の比較・試験のため |
+| 記録した環境の出来事(--replay) | 火・崖崩れ・雨雲・雷・地震を、記録の tick・位置・強さで置く | 研究の比較のため |
 
 ---
 
@@ -206,6 +211,20 @@ PM と PMF を通った値が **[未換算]** に当たる。1 回の更新に�
 - 厚さ 1 m(Larsen et al. 2010)。崩土は最も急な下りを伝い、出発点からの見通し角が H/L を下回る所で止まる。H/L は log10(H/L) = −0.085·log10(V) + 0.047(Corominas 1996)で、1 マスの崩壊で約 0.75
 - 崩れた跡は 1 m 低くなり傾斜が緩む。表土の窒素と土砂は到達点へ。植物は死骸として運ばれ、巻き込まれた動物は埋まって死ぬ
 - **注意**: 地下水と飽和した厚さを入れたあと、安全率(土の厚さ・粘着力・内部摩擦角)で起こす形に置き換える作業が残っている(D-2026-10-26-2 の答え (a))
+- 地震の揺れによる崩れは 7.7.1 の仕組みで起き、崩れそのもの(到達・運ばれる物・地形の変化)はこの節と同じ
+
+### 7.7.1 地震の揺れ [法則]+[条件]
+- **断層** [条件]: 区画の外、北の端から 10 km 北を東西に走る長さ 60 km の断層(区画の中央の北に中心)。北の端を頂にする傾動地塊を持ち上げる断層とみなし、すべりの速さは隆起の速さ 0.3 mm/年と同じ。地震発生層の幅 15 km、剛性率 3e10 Pa
+- **規模の分布** [法則]: グーテンベルク・リヒター則 log10 N(≥M) = a − bM、b = 1(Gutenberg & Richter 1944)。最小 M4(これより小さい揺れは区画の斜面の限界加速度に届かない)、最大は断層の長さから M = 5.08 + 1.16 log10(60) = 7.14(Wells & Coppersmith 1994)。a は断層に蓄えられるモーメントの速さ μLWs = 8.1e15 N·m/年(Brune 1968)と、打ち切った G-R 則が解放するモーメント b/(1.5−b)·10^(a+9.1+(1.5−b)Mmax)(M0 = 10^(1.5M+9.1) N·m、Hanks & Kanamori 1979、Youngs & Coppersmith 1985)を等しく置いて決める。a ≈ 2.94、M4 以上の本震は年 0.086 回、M6 以上は年 0.00086 回
+- **本震** [法則]: 1 分あたりの率 × DT の期待値で起こす(端数は確率)。震央は断層に沿って一様。規模は打ち切った G-R 則から引く
+- **余震** [法則]: 本震の規模 Mm の後、時刻 t(日)に規模 M 以上が起きる率 10^(a'+b'(Mm−M))(t+c)^−p(改良大森則、Reasenberg & Jones 1989 の一般的な値 a' = −1.67、b' = 0.91、p = 1.08、c = 0.05 日)。各 tick の期待値は、その tick の区間でこの式を積分した値。震央は本震の破壊の範囲に一様、規模は b' の G-R 則(M4〜7.14)から引く。余震はさらに余震を生まない(式が二次の余震を含めた列全体への当てはめのため)。M6.8 の後の 1 日に M4 以上はおよそ 26 回
+- **破壊の長さ** [経験式]: log10 L(km) = −2.44 + 0.59 M(Wells & Coppersmith 1994、地下の破壊の長さ、全種類)。震央を中心に断層に沿って置き、断層の端で切る
+- **揺れ** [経験式]: 最大加速度(g)log10 A = −1.02 + 0.249 M − log10 r − 0.00255 r、r = √(d² + 7.3²) km、d は破壊の地表への投影までの水平距離(Joyner & Boore 1981)。ばらつきは入れず中央の値。区画の最も近いマスで d = 10 km なので、M6.8 で 0.35 g、M4 で 0.07 g
+- **斜面の限界加速度** [法則]: 無限斜面の乾いた状態の安全率 FS = c'/(γ z sinα cosα) + tanφ'/tanα、限界加速度 ac = (FS − 1) g sinα(Newmark 1965)。z = 崩れる厚さ 1 m、γ = 17 kN/m³、φ' = 地形を作るときの安息角 35°(粘着の無い粒の安息角は内部摩擦角に等しい)、c' = 5 kPa(土 2 kPa と根の補強 3 kPa。Montgomery & Dietrich 1994、Schmidt et al. 2001)。この値で区画の最も急な斜面(勾配の大きさ約 1)でも FS > 1(ac ≈ 0.2 g)で、揺れが無ければ崩れない
+- **崩れ** [経験式]: A > ac のマスで、ニューマークの変位 log10 Dn(cm) = 0.215 + log10[(1 − ac/A)^2.341 (ac/A)^−1.438](Jibson 2007)を求め、崩れる確率 P = 0.335[1 − exp(−0.048 Dn^1.565)](Jibson et al. 2000)で崩す。A ≤ ac のマスでは乱数を引かない。崩れは 7.7 の slide_at と同じ
+- 乱数は地震だけの列を使う。地震が起きなければ、生き物と環境の結果は地震の無い版とバイト単位で同じ
+- 揺れは今は崩れを起こすだけで、生き物の感覚の入力にはなっていない(神経網の入力の変更は、明るさ・登る・潜る・前触れの感覚とまとめて一度に行う)
+- **注意**: 根の補強は植物の量によらない定数。地下水の飽和した厚さが斜面の土層に入れば、FS に水圧の項を足す。勾配に比例する背景の崩れ(7.7)は、隆起と釣り合う削られる速さから決めた率で、地震による崩れもその中に含まれうる(二重に数えている可能性がある)
 
 ### 7.8 大気の気体 [法則]+[未換算]
 - CO2 と O2 は 4 tick ごとに、風 3 m/s(1 分に 18 マス)のセミラグランジュ法で移流し、拡散する。風上の端からは基準の濃度の空気が入り、風下の端から出る **[条件]**。端の出入りは帳簿に付ける
@@ -296,7 +315,7 @@ PM と PMF を通った値が **[未換算]** に当たる。1 回の更新に�
 - **注意**: 量の増え方は宿主の数で決まり、宿主の体の大きさや接触の頻度は使っていない。濃さに単位が無いので、実際の感染率や致死率と比べられない(段階 5 の対象)
 
 ### 7.15 記録と再生
-- --record: 生き物と無関係に起きる環境の出来事(火の着火・崖崩れ・雨雲・雷)を tick・種類・位置・強さで書き出す
+- --record: 生き物と無関係に起きる環境の出来事(火の着火・崖崩れ・雨雲・雷・地震)を tick・種類・位置・強さで書き出す。地震の位置は区画の外の震央、強さは規模
 - --replay(--shuffle-seed で混ぜる): 記録の各件を、混ぜた時刻と場所で起こす。再生した種類の出来事は物理の仕組みからは起こさず、再生した出来事から連鎖を起こさない。生き物の仕組みと感覚の物理は通常通り動く
 - 記録を付けても付けなくても、シミュレーションの結果は変わらない
 
@@ -336,6 +355,7 @@ PM と PMF を通った値が **[未換算]** に当たる。1 回の更新に�
 - Austin, A. T., Vivanco, L. (2006) Plant litter decomposition in a semi-arid ecosystem controlled by photodegradation. Nature 442: 555–558
 - Benjamin, T. B. (1968) Gravity currents and related phenomena. Journal of Fluid Mechanics 31: 209–248
 - Blagodatsky, S. A., Heinemeyer, O., Richter, J. (2000) Estimating the active and total soil microbial biomass by kinetic respiration analysis. Biology and Fertility of Soils 32: 73–81. doi:10.1007/s003740000219
+- Brune, J. N. (1968) Seismic moment, seismicity, and rate of slip along major fault zones. Journal of Geophysical Research 73: 777–784
 - Bradley, T. J. (1987) Physiology of osmoregulation in mosquitoes. Annual Review of Entomology 32: 439–462
 - Byers, H. R., Braham, R. R. (1949) The Thunderstorm. U.S. Weather Bureau
 - Changnon, S. A. (1988) Climatography of thunder events in the conterminous United States. Part I: Temporal aspects. Journal of Climate 1: 389–398
@@ -351,11 +371,16 @@ PM と PMF を通った値が **[未換算]** に当たる。1 回の更新に�
 - Fuquay, D. M., Taylor, A. R., Hawe, R. G., Schmid, C. W. Jr. (1972) Lightning discharges that caused forest fires. Journal of Geophysical Research 77(12): 2156–2158
 - Gregory, P. H. (1973) The Microbiology of the Atmosphere, 2nd ed.
 - Grimm, V. et al. (2020) The ODD protocol for describing agent-based and other simulation models: a second update to improve clarity, replication, and structural realism. Journal of Artificial Societies and Social Simulation 23(2): 7
+- Gutenberg, B., Richter, C. F. (1944) Frequency of earthquakes in California. Bulletin of the Seismological Society of America 34: 185–188
 - Haldane, J. B. S. (1949) Disease and evolution. La Ricerca Scientifica 19 (Suppl.): 68–76
 - Hamilton, W. D. (1980) Sex versus non-sex versus parasite. Oikos 35: 282–290
+- Hanks, T. C., Kanamori, H. (1979) A moment magnitude scale. Journal of Geophysical Research 84: 2348–2350
 - Harel, M.-A., Mudd, S. M., Attal, M. (2016) Global analysis of the stream power law parameters based on worldwide 10Be denudation rates. Geomorphology 268: 184–196
 - Heimsath, A. M. et al. (1997) The soil production function and landscape equilibrium. Nature 388: 358–361
+- Jibson, R. W. (2007) Regression models for estimating coseismic landslide displacement. Engineering Geology 91: 209–218
+- Jibson, R. W., Harp, E. L., Michael, J. A. (2000) A method for producing digital probabilistic seismic landslide hazard maps. Engineering Geology 58: 271–289
 - Johnson, A. I. (1967) Specific yield — compilation of specific yields for various materials. U.S. Geological Survey Water-Supply Paper 1662-D
+- Joyner, W. B., Boore, D. M. (1981) Peak horizontal acceleration and velocity from strong-motion records including records from the 1979 Imperial Valley, California, earthquake. Bulletin of the Seismological Society of America 71: 2011–2038
 - Larsen, I. J., Montgomery, D. R., Korup, O. (2010) Landslide erosion controlled by hillslope material. Nature Geoscience 3: 247–251
 - Lenderink, G., van Meijgaard, E. (2008) Increase in hourly precipitation extremes beyond expectations from temperature changes. Nature Geoscience 1: 511–514
 - Manzoni, S. et al. (2012) Environmental and stoichiometric controls on microbial carbon-use efficiency in soils. New Phytologist 196: 79–91
@@ -363,18 +388,23 @@ PM と PMF を通った値が **[未換算]** に当たる。1 回の更新に�
 - Millero, F. J., Feistel, R., Wright, D. G., McDougall, T. J. (2008) The composition of Standard Seawater and the definition of the Reference-Composition Salinity Scale. Deep-Sea Research I 55: 50–72
 - Montgomery, D. R., Brandon, M. T. (2002) Topographic controls on erosion rates in tectonically active mountain ranges. Earth and Planetary Science Letters 201: 481–489
 - Montgomery, D. R., Dietrich, W. E. (1988) Where do channels begin? Nature 336: 232–234
+- Newmark, N. M. (1965) Effects of earthquakes on dams and embankments. Géotechnique 15: 139–160
 - Panikov, N. S. (1995) Microbial Growth Kinetics. Chapman & Hall, London
 - Penning de Vries, F. W. T. (1974) Substrate utilization and respiration in relation to growth and maintenance in higher plants. Netherlands Journal of Agricultural Science 22: 40–44
 - Petersen, W. A., Rutledge, S. A. (1998) On the relationship between cloud-to-ground lightning and convective rainfall. Journal of Geophysical Research 103: 14025–14040
 - Prinn, R. G. et al. (2005) Evidence for variability of atmospheric hydroxyl radicals over the past quarter century. Geophysical Research Letters 32: L07809
 - Rawls, W. J., Brakensiek, D. L., Saxton, K. E. (1982) Estimation of soil water properties. Transactions of the ASAE 25: 1316–1320
 - Roering, J. J., Kirchner, J. W., Dietrich, W. E. (1999) Evidence for nonlinear, diffusive sediment transport on hillslopes and implications for landscape morphology. Water Resources Research 35: 853–870
+- Reasenberg, P. A., Jones, L. M. (1989) Earthquake hazard after a mainshock in California. Science 243: 1173–1176
 - Rothermel, R. C. (1972) A mathematical model for predicting fire spread in wildland fuels. USDA Forest Service Research Paper INT-115
 - Rousk, J., Bååth, E. (2011) Growth of saprotrophic fungi and bacteria in soil. FEMS Microbiology Ecology 78: 17–30
 - Ryan, M. G. (1991) Effects of climate change on plant respiration. Ecological Applications 1: 157–167
+- Schmidt, K. M. et al. (2001) The variability of root cohesion as an influence on shallow landslide susceptibility in the Oregon Coast Range. Canadian Geotechnical Journal 38: 995–1024
 - Simard, A. J. (1968) The moisture content of forest fuels — I. A review of the basic concepts. Information Report FF-X-14, Forest Fire Research Institute, Department of Forestry and Rural Development, Ottawa
 - Sinsabaugh, R. L. et al. (2013) Carbon use efficiency of microbial communities: stoichiometry, methodology and modelling. Ecology Letters 16: 930–939
 - Stock, J. D., Montgomery, D. R. (1999) Geologic constraints on bedrock river incision using the stream power law. Journal of Geophysical Research 104: 4983–4993
 - Vautard, R. et al. (2010) Northern Hemisphere atmospheric stilling partly attributed to an increase in surface roughness. Nature Geoscience 3: 756–761
+- Wells, D. L., Coppersmith, K. J. (1994) New empirical relationships among magnitude, rupture length, rupture width, rupture area, and surface displacement. Bulletin of the Seismological Society of America 84: 974–1002
 - Wieringa, J. (1993) Representative roughness parameters for homogeneous terrain. Boundary-Layer Meteorology 63: 323–363
 - Wu, J. (1983) Sea-surface drift currents induced by wind and waves. Journal of Physical Oceanography 13: 1441–1451
+- Youngs, R. R., Coppersmith, K. J. (1985) Implications of fault slip rates and earthquake recurrence models to probabilistic seismic hazard estimates. Bulletin of the Seismological Society of America 75: 939–964

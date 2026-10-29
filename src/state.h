@@ -266,17 +266,17 @@ long slide_events=0;
 // 環境の出来事の記録と再生。生き物と無関係に起きる離散的な出来事を
 // 1件ずつ tick・位置・種類・強さで書き出し、時刻と場所を混ぜて再生できるようにする。
 // 書式: 1行1件 "tick 種類 x y 強さ"。'#' で始まる行は注記
-enum EvKind { EV_FIRE=0, EV_SLIDE=1, EV_STORM=2, EV_LIGHTNING=3, EV_N };
-const char* EV_NAME[EV_N]={"fire","slide","storm","lightning"};
+enum EvKind { EV_FIRE=0, EV_SLIDE=1, EV_STORM=2, EV_LIGHTNING=3, EV_QUAKE=4, EV_N };
+const char* EV_NAME[EV_N]={"fire","slide","storm","lightning","quake"};
 struct EnvEvent { long tick; int kind; int x,y; float strength; };
 FILE* g_rec=nullptr;                       // --record の出力先
 bool  g_replay=false;                      // --replay 中は該当種類を物理から起こさない
 std::vector<EnvEvent> g_replay_ev;         // 混ぜたあと tick 順に並べた出来事
 size_t g_replay_pos=0;
-long   g_replay_done[EV_N]={0,0,0,0};
+long   g_replay_done[EV_N]={0,0,0,0,0};
 
-long   g_cs_ev_n[EV_N]={0,0,0,0};        // 全体の記録(--census)用: 前の記録からの件数と強さの和
-double g_cs_ev_s[EV_N]={0,0,0,0};
+long   g_cs_ev_n[EV_N]={0,0,0,0,0};        // 全体の記録(--census)用: 前の記録からの件数と強さの和
+double g_cs_ev_s[EV_N]={0,0,0,0,0};
 void ev_record(int kind,int x,int y,float s){
     g_cs_ev_n[kind]++; g_cs_ev_s[kind]+=s;
     if(!g_rec) return;
