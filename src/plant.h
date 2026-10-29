@@ -20,7 +20,7 @@ void sea_plant_genes(Plant& p){
 void plant_inflow(){
     static double dens=-1.0;
     if(dens<0.0){ long ns=0; for(int i=0;i<GRID_W*GRID_H;i++) if(sea[i]) ns++;
-                  dens=ns?(double)PLANT_INIT_N/ns:0.0; }
+                  dens=ns?(double)(PLANT_INIT_N-PLANT_INIT_LAND)/ns:0.0; }
     static std::vector<int> edge; edge.clear();
     for(int y=0;y<GRID_H;y++){
         if(wind[y]==0.f) continue;

@@ -127,18 +127,31 @@ int main(int argc,char** argv){
                land?sw/land:0.0,land?gap/land:0.0,gmax);
     }
     classify_climate();
+    // 区画は惑星の一部で、まわりの陸と海から種が入ってくるのが始まりの条件(D-2026-10-24-1 の作者の答え (b))。
+    // 最初の PLANT_INIT_LAND 株は陸に、陸に合う遺伝子で置き、残りを浅い海に置く。
+    // 陸の株は、種子の発芽と同じく土の水が足りるマスにだけ置く
     int placed=0,guard=0;
-    while(placed<PLANT_INIT_N && guard++<200000){
+    while(placed<PLANT_INIT_N && guard++<400000){
         Plant p;
         p.x=frand(0.f,(float)GRID_W); p.y=frand(0.f,(float)GRID_H);
         int gx=(int)p.x, gy=(int)p.y;
         if(gx<0||gx>=GRID_W||gy<0||gy>=GRID_H) continue;
-        if(!sea[idx(gx,gy)]) continue;              // 生命は海から始まる
-        if(depthn(idx(gx,gy))>0.35f) continue;      // ただし浅い海に
+        bool on_land=placed<PLANT_INIT_LAND;
+        int ci0=idx(gx,gy);
+        if(on_land){
+            if(sea[ci0]) continue;
+            if(soil_water[ci0]<0.25f) continue;
+        } else {
+            if(!sea[ci0]) continue;
+            if(depthn(ci0)>0.35f) continue;         // 海の株は浅い海に
+        }
         sea_plant_genes(p);
+        // 陸の株は、まわりの陸の温帯の草本の性質で入る: 水に頼らず(aquatic 0)、根を張り(浮く強さ 0.3)、
+        // 生育の下限の気温を下回ると休眠に入る
+        if(on_land){ p.aquatic=0.0f; p.buoyancy=0.3f; p.dorm_temp=PLANT_LAND_DORM; }
         // 条件(D-2026-10-24-1 の作者の答え (c)): 最初の海の植物の半分は海底に根を張る(浮く強さ 0.3。水面の漂流を受けない)。
         // 浮く強さは遺伝子なので、どちらの生き方が残るかは進化に任せる。乱数は引かない
-        if(placed%2==1) p.buoyancy=0.3f;
+        else if(placed%2==1) p.buoyancy=0.3f;
         plants.push_back(p); placed++;
     }
     // 分解者を撒く。死骸だけを食い、炭素と窒素を還す第三の界
