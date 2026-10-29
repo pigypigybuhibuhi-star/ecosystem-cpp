@@ -172,6 +172,7 @@ struct Animal {
     float x,y,dir,energy;
     bool  alive;
     float speed,turn,reach,size,diet,jaw,cold_tol,body,aquatic,resp,detritus,sexual;
+    float salt_tol;         // 遺伝子: 塩への強さ(浸透圧を調節できる塩分。海水を 1 とする比)。aquatic は水中での呼吸と泳ぎ
     float arboreal;   // 遺伝子: 登攀に適した体
     float brood;      // 遺伝子: 一度に産む数。多産少投資か、少産多投資か
     float lifespan;   // 遺伝子: 寿命の長さ
@@ -235,6 +236,7 @@ inline void sg_vec_a(const Animal& a,double* v){
     v[0]=a.diet;  v[1]=a.detritus; v[2]=a.reach;    v[3]=a.size;
     v[4]=a.speed; v[5]=a.jaw;      v[6]=a.cold_tol; v[7]=a.aquatic;
     v[8]=a.resp;  v[9]=a.arboreal; v[10]=a.sexual;  v[11]=a.brood;
+    v[12]=a.salt_tol;
 }
 inline void sg_vec_p(const Plant& p,double* v){
     v[0]=p.max_height; v[1]=p.shade_tol; v[2]=p.tough;      v[3]=p.clonal;
@@ -333,10 +335,10 @@ void ev_replay_advance(){
 // 選択勾配。繁殖した個体と集団全体で遺伝子の平均を比べる。
 // 差がそのまま「その形質が今どちらへ押されているか」になる。
 // 収支を手計算せずに、効いているかどうかを測定で言えるようにする
-const int N_SG_A = 12;
+const int N_SG_A = 13;
 const char* SG_A_NAME[N_SG_A]={
     "diet","detr","reach","size","speed","jaw",
-    "cold","aqua","resp","arbor","sexual","brood"};
+    "cold","aqua","resp","arbor","sexual","brood","salt"};
 const int N_SG_P = 13;
 const char* SG_P_NAME[N_SG_P]={
     "maxH","shade","tough","clonal","disp","cold",
@@ -397,6 +399,7 @@ double dbg_light=0, dbg_tf=0, dbg_wf=0, dbg_co2=0;
 // 最後に生きていた動物の遺伝子を保存しておく(再投入用)
 struct AnimalGene {
     float speed,turn,reach,size,diet,jaw,cold_tol,aquatic,resp,detritus,sexual,arboreal;
+    float salt_tol;
     float brood,lifespan;
     float toxin,tox_resist,burrow,nocturnal,store_fat,repro_alloc,bite_size,digest;
     float im[N_IMMUNE];
@@ -426,6 +429,7 @@ void remember_animals(){
         g.speed=a.speed; g.turn=a.turn; g.reach=a.reach; g.size=a.size;
         g.diet=a.diet;   g.jaw=a.jaw;   g.cold_tol=a.cold_tol;
         g.aquatic=a.aquatic; g.resp=a.resp; g.detritus=a.detritus;
+        g.salt_tol=a.salt_tol;
         g.sexual=a.sexual;   g.arboreal=a.arboreal; g.lin=a.lin;
         g.brood=a.brood;     g.lifespan=a.lifespan;
         g.toxin=a.toxin;     g.tox_resist=a.tox_resist; g.burrow=a.burrow;

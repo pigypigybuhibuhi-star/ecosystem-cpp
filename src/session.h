@@ -15,7 +15,9 @@ void release_animals(int per_species,int frame){
                 // 生息環境の不適合
                 float hm = s ? (1.f-g.aquatic)*(SHALLOW_EASE+(1.f-SHALLOW_EASE)*depthn(ci))
                              : g.aquatic;
-                if(hm>0.55f) continue;
+                // 塩への不適合
+                float hs=soil_salinity(ci)/SEA_SALT-g.salt_tol;
+                if(hm>0.55f || std::fabs(hs)>0.55f) continue;
                 // 移動できない場所は除く
                 if( s && g.aquatic<0.20f) continue;
                 if(!s && g.aquatic>0.85f) continue;
@@ -30,7 +32,7 @@ void release_animals(int per_species,int frame){
                 for(int t=pgrid.b(ci);t<pgrid.e(ci);t++)
                     if(plants[pgrid.items[t]].height<=g.reach) food+=1.f;
                 float detr=(g.detritus>0.05f)? corpse_density[ci]*0.5f : 0.f;
-                float score = tfit*2.f + food + detr - hm*3.f;
+                float score = tfit*2.f + food + detr - hm*3.f - std::fabs(hs)*3.f;
                 if(score>bscore){ bscore=score; bx=gx; by=gy; }
             }
             if(bx<0) continue;
@@ -41,6 +43,7 @@ void release_animals(int per_species,int frame){
             a.speed=g.speed; a.turn=g.turn; a.reach=g.reach; a.size=g.size;
             a.diet=g.diet;   a.jaw=g.jaw;   a.cold_tol=g.cold_tol;
             a.aquatic=g.aquatic; a.resp=g.resp; a.detritus=g.detritus;
+            a.salt_tol=g.salt_tol;
             a.sexual=g.sexual;   a.arboreal=g.arboreal; a.perch=0.f; a.aerobic=1.f;
             a.mut_rate=0.3f;                    a.mother=-1; a.father=-1; a.gen=0; a.lesion=false;
             for(int k=0;k<N_REC;k++) a.rec[k]=0.f;

@@ -67,6 +67,7 @@ std::vector<Fld<Animal>> animal_schema(){
         F("size",&Animal::size,0.5), F("diet",&Animal::diet,0),
         F("jaw",&Animal::jaw,1), F("cold_tol",&Animal::cold_tol,0.3),
         F("body",&Animal::body,0.1), F("aquatic",&Animal::aquatic,0),
+        F("salt_tol",&Animal::salt_tol,0),
         F("resp",&Animal::resp,0.3), F("detritus",&Animal::detritus,0),
         F("sexual",&Animal::sexual,0.2), F("arboreal",&Animal::arboreal,0),
         F("perch",&Animal::perch,0), F("brood",&Animal::brood,0.1),

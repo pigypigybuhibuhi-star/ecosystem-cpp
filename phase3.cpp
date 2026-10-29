@@ -653,7 +653,7 @@ int main(int argc,char** argv){
                     a.age=0; a.eaten=0;
                     a.speed=0.5f; a.turn=0.2f; a.reach=0.7f;
                     a.size=0.5f; a.diet=0.0f; a.jaw=1.0f; a.cold_tol=0.3f;
-                    a.body=0.10f; a.aquatic=1.0f; a.resp=0.3f; a.detritus=0.0f;
+                    a.body=0.10f; a.aquatic=1.0f; a.salt_tol=1.0f; a.resp=0.3f; a.detritus=0.0f;
                     a.sexual=0.2f; a.arboreal=0.0f; a.perch=0.0f; a.aerobic=1.0f;
                     a.mut_rate=0.3f; a.bite_size=0.5f; a.digest=0.5f;                    a.mother=-1; a.father=-1; a.gen=0;
                     a.lesion=false;
@@ -939,8 +939,11 @@ int main(int argc,char** argv){
                         float ss=soil_salinity(i); if(ss>1.f) nss++; smax=std::max(smax,(double)ss); }
                     printf("      groundwater: saturated thickness land mean %.3f m | water table at surface %d cells\n",
                            nl?sh/nl:0.0, nsat);
-                    printf("      salt: brackish groundwater %d cells | saline root zone %d cells (max %.1f g/kg)\n",
-                           ngs, nss, smax);
+                    { double stp=0, sta=0;
+                      for(const auto& p:plants) stp+=p.salt_tol;
+                      for(const auto& a:animals) sta+=a.salt_tol;
+                      printf("      salt: brackish groundwater %d cells | saline root zone %d cells (max %.1f g/kg) | salt_tol P:%.3f A:%.3f\n",
+                           ngs, nss, smax, plants.empty()?0.0:stp/plants.size(), animals.empty()?0.0:sta/animals.size()); }
                     printf("      weather: storms %ld (active %zu) | lightning %ld | rain land mean %.2f mm since last | cold pool now %.1f C | gust max %.1f m/s since last\n",
                            storm_events, storms.size(), lightning_events, nl?storm_rain_mm/nl:0.0, cold, gust_max);
                     storm_rain_mm=0; gust_max=0.f; }
