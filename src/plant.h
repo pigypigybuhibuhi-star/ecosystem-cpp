@@ -4,7 +4,7 @@ void sea_plant_genes(Plant& p){
     p.energy=PLANT_INIT_E; p.height=0.05f; p.alive=true; p.age=0;
     p.absorb=0.92f; p.max_height=0.25f; p.shade_tol=0.10f;
     p.tough=0.0f; p.clonal=0.0f; p.disperse=0.2f; p.cold_tol=0.05f;
-    p.aquatic=1.0f; p.drought_tol=0.0f; p.dorm_temp=-15.0f; p.dormant=false;
+    p.aquatic=1.0f; p.salt_tol=1.0f; p.drought_tol=0.0f; p.dorm_temp=-15.0f; p.dormant=false;
     p.store_cap=0.0f; p.water_store=0.0f; p.eff_height=0.05f;
     p.fire_tol=0.0f; p.climb=0.0f; p.sexual=0.2f;
     for(int k=0;k<N_IMMUNE;k++) p.im[k]=frand(0.f,1.f);
@@ -282,9 +282,11 @@ void update_plants(){
             o2_add(ci,-std::min(need,o2[ci])); co2_add(ci,need);
         }
         float hm=habitat_p(p,ci);
+        float hs=salt_mismatch(p,ci);
         float upkeep = RESP_COEF*saturation(p)+HEIGHT_COST*p.height
                  +TOUGH_COST*p.defense+CLONAL_COST*p.clonal+COLD_COST_P*p.cold_tol
-                     +HABITAT_COST_P*hm*hm+DROUGHT_COST*p.drought_tol;
+                     +HABITAT_COST_P*hm*hm+DROUGHT_COST*p.drought_tol
+                     +HABITAT_COST_P*hs*hs;
         // 植物も呼吸する: 維持のために酸素を使い、二酸化炭素を出す。
         // 気体のやりとりは、実際に払った維持費に合わせて下でまとめて行う。ここでは酸欠かどうかだけを見る
         {
@@ -389,7 +391,7 @@ void update_plants(){
             if(mate){
                 #define PICK(F) c.F = (dist01(rng)<0.5f)? p.F : mate->F
                 PICK(absorb); PICK(max_height); PICK(shade_tol); PICK(tough);
-                PICK(clonal); PICK(disperse);   PICK(cold_tol);  PICK(aquatic);
+                PICK(clonal); PICK(disperse);   PICK(cold_tol);  PICK(aquatic); PICK(salt_tol);
                 PICK(drought_tol); PICK(dorm_temp); PICK(store_cap);
                 PICK(fire_tol); PICK(climb); PICK(sexual); PICK(brood);
                 PICK(n_fix); PICK(lifespan); PICK(parasite);
@@ -438,6 +440,7 @@ void update_plants(){
             c.disperse  =mutate(c.disperse,  0.0f,1.0f);
             c.cold_tol  =mutate(c.cold_tol,  0.0f,1.0f);
             c.aquatic     =mutate(c.aquatic,     0.0f,1.0f);
+            c.salt_tol    =mutate(c.salt_tol,    0.0f,1.0f);
             c.drought_tol =mutate(c.drought_tol, 0.0f,1.0f);
             c.dorm_temp   =mutate(c.dorm_temp,  -20.0f,20.0f);
             c.store_cap   =mutate(c.store_cap,   0.0f,STORE_MAX);

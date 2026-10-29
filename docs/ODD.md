@@ -44,6 +44,7 @@ PM と PMF を通った値が **[未換算]** に当たる。1 回の更新に�
 | river | 川のマスかどうか(上流の流量から決める) |
 | soil_water | 根の層の土の水(1.0 = 100 mm) |
 | 地下水の飽和した厚さ | 帯水層(厚さ 3 m)の中の水の厚さ |
+| salt_soil, salt_gw | 根の層の土の水と帯水層の水に溶けた塩の量(陸のマス。水の量で割ると塩分 g/kg。海は 35 g/kg で一定) |
 | soil_n | 土(海では有光層)の無機の窒素 |
 | temper | 気温(°C) |
 | solar, daylit | 日射、昼かどうか |
@@ -57,7 +58,7 @@ PM と PMF を通った値が **[未換算]** に当たる。1 回の更新に�
 ### 2.3 植物(Plant)
 状態: 位置、エネルギー(体の外の糖の貯え)、高さ(体)、体内の窒素、貯水、実効的な高さ(つるの分を含む)、今張っている防御、土の中で待つ残り時間(種子)、休眠しているか、年齢、系譜(母・父・世代)、ジェネット。
 
-遺伝子(すべて 0〜1 などの連続値。変異する): 光の吸収(absorb)、最大の高さ、耐陰性、防御の上限(tough)、地下茎(clonal)、散布(disperse)、耐寒性、水生(aquatic)、耐乾性、休眠の気温、貯水の容量、耐火性(厚い樹皮)、つる(climb)、有性生殖の度合い、一度に作る種子の数(brood)、窒素固定、寿命、寄生、食虫、火後発芽、繁殖に回す割合、土中で待つ傾向、浮く強さ(buoyancy)、変異率、免疫の型(3 座位)。
+遺伝子(すべて 0〜1 などの連続値。変異する): 光の吸収(absorb)、最大の高さ、耐陰性、防御の上限(tough)、地下茎(clonal)、散布(disperse)、耐寒性、水に浸かることへの強さ(aquatic。通気組織)、塩への強さ(salt_tol。適合溶質で浸透圧を合わせられる塩分、海水を 1 とする比)、耐乾性、休眠の気温、貯水の容量、耐火性(厚い樹皮)、つる(climb)、有性生殖の度合い、一度に作る種子の数(brood)、窒素固定、寿命、寄生、食虫、火後発芽、繁殖に回す割合、土中で待つ傾向、浮く強さ(buoyancy)、変異率、免疫の型(3 座位)。
 
 ### 2.4 動物(Animal)
 地面を歩く昆虫程度を想定する(歩く速さ 0.5〜10 cm/s、一世代およそ 2 週間。CLAUDE.md「世界の形」)。
@@ -76,7 +77,7 @@ PM と PMF を通った値が **[未換算]** に当たる。1 回の更新に�
 位置(区画の外の風上を含む)、年齢、中心の降水強度。一生は約 60 分。
 
 ### 2.8 帳簿(Budget)
-水・炭素・窒素の出入りを過程ごとに数える観察のための量。生き物と環境の規則の入力には使わない。
+水・炭素・窒素・塩の出入りを過程ごとに数える観察のための量。生き物と環境の規則の入力には使わない。
 
 ### 2.9 系統(lin)
 観察のための分類。形質の距離 SPECIES_THRESHOLD = 0.85 で分ける。**注意**: 今のコードでは、交配の相手を選ぶとき(動物・植物)と、仲間の感覚(動物の感覚器の帯 11)で lin を使っている。これは「観察の量を生き物の規則に使わない」に反し、「上の階層の書き込みを外す」の項目として作者が洗い出し済み(未修正)。
@@ -145,6 +146,7 @@ PM と PMF を通った値が **[未換算]** に当たる。1 回の更新に�
 | 隆起 | 北の端 0.3 mm/年、場所ごとのばらつき 40%、300 万年 | 中程度に活発な海岸の山地 |
 | 区画の南の端の海の深さ | 60 m、南から 25% の帯が沈降 | 作者の決定 |
 | 帯水層 | 厚さ 3 m、比産出率 0.2 | Heimsath et al. 1997、Johnson 1967 |
+| 海の水の塩分 | 35 g/kg(陸の帯水層へ入る海水も同じ) | Millero et al. 2008 |
 | 風上の端から入る浮く植物 | 最初に海に置いた株(200 株)の海の平均の密度 × 漂流の速さ | D-2026-10-26-1 の答え (b) |
 | 記録した環境の出来事(--replay) | 火・崖崩れ・雨雲・雷を、記録の tick・位置・強さで置く | 研究の比較のため |
 
@@ -176,8 +178,9 @@ PM と PMF を通った値が **[未換算]** に当たる。1 回の更新に�
 
 ### 7.4 地下水 [法則]
 - ダルシーの式とブシネスクの近似。水頭 = 岩盤の高さ + 飽和した厚さ。隣のマスとの流れ = K × 上流側の飽和した厚さ × 水頭の差、K = 1e-5 m/s(Freeze & Cherry 1979)。60 tick ごとに解く(陽解法の安定の限界は約 1100 分)
-- 海のマスは海面の水頭で一定。海の境界は出る向きだけで、陸の地下水は海へ流れ出るが、海から陸へは入らない(塩の場が入るまでの扱い。海水を淡水として作らないため。D-2026-10-28-1)**[条件]**。区画の端は、端の傾きがそのまま外へ続くとする **[条件]**
+- 海のマスは海面の水頭で一定で、帯水層は海につながり満ちているとする。海との間は両向きに流れ、海から陸へ入る水は塩分 35 g/kg の海水(海水の侵入。D-2026-10-28-1 の作者の答え (b))**[条件]**。区画の端は、端の傾きがそのまま外へ続き、端の外の水の塩分は端のマスと同じとする **[条件]**
 - 地下水面が地表に届いた分は湧き出し、まず根の層の土を満たし、残りは地表を流れ去る
+- **塩** [法則]: 塩は水に溶けて運ばれるだけで、生まれも消えもしない。帯水層の中では水と一緒に動く(移流。辺を通る塩 = 水の流量 × 上流側の塩分)。湧いた水は帯水層の塩分の塩を持って出て、根の層に入った分は土に残り、流れ去った分は帳簿の out に付ける。雨は塩を持たない。根の層の水が蒸発・蒸散・土の水の緩和で減っても塩は残り、濃くなる。雨雲の雨が根の層を満たして下へ染みるとき、染みる水は根の層の水と混ざり、その塩分の塩を帯水層へ運ぶ(洗い出し)。塩分が NaCl の飽和 264 g/kg を超えた分は結晶として土に残る(在庫には数え、濃さは 264 で頭打ち)。帯水層と根の層の間の拡散は、分子拡散(1e-9 m²/s)で数 m を渡るのに数十年かかるので入れていない(Freeze & Cherry 1979)。分散も入れていない。崖崩れは塩を運ばない(崩れたマスに残る)。海の塩(35 g/kg、Millero et al. 2008)は帳簿の外の溜め **[条件]**
 - 涵養: 雨雲の雨が根の層を満たした残りだけが下へ染みる。地表の浸透の上限 13 mm/h(ローム、Rawls et al. 1982)を超える雨は地表を流れ去る(ホートン型)
 
 ### 7.5 天気: 対流の雨雲・突風前線・雷 [法則]+[条件]
@@ -224,6 +227,7 @@ PM と PMF を通った値が **[未換算]** に当たる。1 回の更新に�
 - **成長**: 高さを最大の高さへ伸ばす(率 1.94e-4 /分 **[未換算]**)。建設に高さあたり 3.0 の炭素と、その半分の建設の呼吸(Penning de Vries 1974)。窒素が足りなければ成長が律速される(体を作るのに窒素 0.055/高さ)
 - **維持の呼吸**: 葉の暗呼吸(1.17e-3 /分 × 飽和 **[未換算]**)+ 茎と根(体の炭素あたり 1%/日、McCree 1974・Ryan 1991・Amthor 2000)+ 各形質の維持費 **[未換算]**。暗所では 0.35 倍、休眠中は 0.12 倍、酸欠では 1.3 倍。払った炭素は CO2 になる
 - **窒素**: 固定できる株は大気から(費用を払う)、できない株は土から吸う。同じマスの株で分け合う
+- **塩と水に浸かること** [法則]+[未換算]: 生息環境の不適合を二つに分ける。(1) 水に浸かることへの不適合 hm: 海では (1 − aquatic) × (0.30 + 0.70 × 水深の比)、陸では aquatic(通気組織と浮く体の代償)。(2) 塩への不適合 hs = 根の層の塩分 / 35 − salt_tol。まわりの水が塩への強さより塩辛ければ水を吸えず(生理的な乾燥)、薄ければ溜めた適合溶質と輸送の仕組みが無駄になる(塩生植物の多くは淡水で育ちが落ちる。Flowers & Colmer 2008)。維持費に 0.0034 /分 × (hm² + hs²) **[未換算]** を足す。最初の海の株は salt_tol 1、陸の株は 0。動物の aquatic はまだ一つのまま(水中での呼吸と泳ぎ・塩への強さに分けるのは次の段階)
 - **防御**: 食害の匂いを感じると、遺伝子 tough を上限に防御を立ち上げる。**注意**: 常に張る分と匂いで張る分の割合を遺伝子にする作業が「上の階層の書き込みを外す」に残っている
 - **休眠**: 気温が休眠の気温を下回ると休眠し、3 °C の余裕を超えて上がると覚める
 - **つる** [法則]+[未換算]: 遺伝子 climb(0〜1)。マスの中で最も高い株を支えにする。実効的な高さ = 自分の高さ × (1 − 0.45·climb) + 支えの余り × climb × 0.85(支えの余り = max(0, そのマスで最も高い株 − 自分の高さ))。自立する幹を作らないので、支えの無いマスでは自分の高さより低くなる。つるの実効的な高さも林冠になり、後に見る株の支えになる(マスの株を見る順に依存する)。維持費 2.14e-4 /分 × climb **[未換算]**(巻きひげと気根)
@@ -339,6 +343,7 @@ PM と PMF を通った値が **[未換算]** に当たる。1 回の更新に�
 - Corominas, J. (1996) The angle of reach as a mobility index for small and large landslides. Canadian Geotechnical Journal 33: 260–271
 - Dai, A. (2006) Recent climatology, variability, and trends in global surface humidity. Journal of Climate 19: 3589–3606
 - Engerer, N. A., Stensrud, D. J., Coniglio, M. C. (2008) Surface characteristics of observed cold pools. Monthly Weather Review 136: 4839–4849
+- Flowers, T. J., Colmer, T. D. (2008) Salinity tolerance in halophytes. New Phytologist 179: 945–963
 - Fosberg, M. A., Deeming, J. E. (1971) Derivation of the 1- and 10-hour timelag fuel moisture calculations for fire-danger rating. USDA Forest Service Research Note RM-207
 - Freeze, R. A., Cherry, J. A. (1979) Groundwater. Prentice-Hall
 - Fuquay, D. M., Taylor, A. R., Hawe, R. G., Schmid, C. W. Jr. (1972) Lightning discharges that caused forest fires. Journal of Geophysical Research 77(12): 2156–2158
@@ -353,6 +358,7 @@ PM と PMF を通った値が **[未換算]** に当たる。1 回の更新に�
 - Lenderink, G., van Meijgaard, E. (2008) Increase in hourly precipitation extremes beyond expectations from temperature changes. Nature Geoscience 1: 511–514
 - Manzoni, S. et al. (2012) Environmental and stoichiometric controls on microbial carbon-use efficiency in soils. New Phytologist 196: 79–91
 - McCree, K. J. (1974) Equations for the rate of dark respiration of white clover and grain sorghum, as functions of dry weight, photosynthetic rate, and temperature. Crop Science 14: 509–514
+- Millero, F. J., Feistel, R., Wright, D. G., McDougall, T. J. (2008) The composition of Standard Seawater and the definition of the Reference-Composition Salinity Scale. Deep-Sea Research I 55: 50–72
 - Montgomery, D. R., Brandon, M. T. (2002) Topographic controls on erosion rates in tectonically active mountain ranges. Earth and Planetary Science Letters 201: 481–489
 - Montgomery, D. R., Dietrich, W. E. (1988) Where do channels begin? Nature 336: 232–234
 - Panikov, N. S. (1995) Microbial Growth Kinetics. Chapman & Hall, London

@@ -54,9 +54,24 @@ inline float vdist(const float* a,const float* b,int n){
     float s=0.f; for(int i=0;i<n;i++){ float d=a[i]-b[i]; s+=d*d; } return std::sqrt(s);
 }
 inline float depthn(int i){ return std::max(0.f,(SEA_LEVEL-elev[i])/SEA_LEVEL); }
+// 水に浸かることへの不適合(植物)。aquatic は水に浸かることへの強さ(通気組織)。塩は別に salt_mismatch で測る
 inline float habitat_p(const Plant& p,int ci){
     if(sea[ci]) return (1.f-p.aquatic)*(SHALLOW_EASE+(1.f-SHALLOW_EASE)*depthn(ci));
     return p.aquatic;
+}
+// 根の層の水の塩分(g/kg)。海は SEA_SALT。土の水が無いところに塩があれば、結晶の塩の上で飽和の濃さとみなす
+inline float soil_salinity(int ci){
+    if(sea[ci]) return SEA_SALT;
+    float w=soil_water[ci], s=salt_soil[ci];
+    if(s<=0.f) return 0.f;
+    if(w<=1e-6f) return HALITE_SAT;
+    return std::min(HALITE_SAT,s/w);
+}
+// 塩への不適合。塩への強さ salt_tol は、適合溶質を作り浸透圧を合わせられる塩分(海水を 1 とする比)。
+// まわりの水がそれより塩辛ければ水を吸えず(生理的な乾燥)、薄ければ溜めた溶質と輸送の仕組みが無駄になる
+// (塩生植物の多くは淡水で育ちが落ちる。Flowers & Colmer 2008)。生息環境の不適合と同じく差の二乗で費用にする
+inline float salt_mismatch(const Plant& p,int ci){
+    return soil_salinity(ci)/SEA_SALT-p.salt_tol;
 }
 inline float habitat_a(const Animal& a,int ci){
     if(sea[ci]) return (1.f-a.aquatic)*(SHALLOW_EASE+(1.f-SHALLOW_EASE)*depthn(ci));
