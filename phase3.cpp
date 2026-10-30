@@ -665,6 +665,7 @@ int main(int argc,char** argv){
                     a.brood=0.1f; a.lifespan=0.2f;
                     a.toxin=0.f; a.tox_resist=0.f; a.burrow=0.f;
                     a.nocturnal=0.f; a.store_fat=0.2f; a.repro_alloc=0.5f;
+                    a.estrus=0.2f;   // 始まりの条件: 前の規則で sexual 0.2 の個体が出していた量と同じ
                     a.fat=0.f; a.depth=0.f;
                     a.id=next_animal_id++; a.lin=-1;
                     for(int k=0;k<N_W;k++) a.w[k]=0.f;

@@ -347,6 +347,12 @@ const int   PLANT_MAX       = 260000;  // これを超えると繁殖を止め�
 const int   ANIMAL_MAX      = 60000;
 const float SEX_COST        = LIN(PM(0.015f,ANIMAL_STRIDE),ANIMAL_STRIDE);  // 生殖器官の維持費 [1分あたり 7.29e-05]
 const float SEX_SEARCH      = 3.0f;    // 相手を探す範囲(マス)
+// 性フェロモンの合成の費用。遺伝子 estrus = 1 で、体 1(生重 100 mg)が ESTRUS_NG_H ng/時を出す。
+// 蛾の雌の放出は 1〜100 ng/時の桁(Cardé & Baker 1984)。その上端を置く [条件に近い推定]。
+// フェロモンは脂肪酸から作る。脂質 1 g の合成にブドウ糖 3.03 g(Penning de Vries et al. 1974)、ブドウ糖の炭素は 40%。
+// エネルギーの 1 単位 = 6 mg C。出したフェロモンの炭素は大気で酸化されるので、費用の全量を CO2 として出す
+const double ESTRUS_NG_H    = 100.0;
+const float ESTRUS_COST     = LIN(ESTRUS_NG_H*1e-6*3.03*0.40/6.0/60.0,ANIMAL_STRIDE);  // 体 1 あたり [1分あたり 3.37e-07]
 
 // --- 病原体 ---
 // 病原体はその土地で最も多い免疫型に適応する。
