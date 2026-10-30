@@ -336,7 +336,7 @@ const float COLD_COST_P     = LIN(PM(0.060f));  // [1分あたり 0.000583]
 const float DORM_UPKEEP     = 0.12f;   // 休眠中の維持費の割合
 const float DORM_HARDEN     = 30.0f;   // 休眠がもたらす耐凍性
 const float DORM_HYST       = 3.0f;    // 覚醒に要する余裕(ばたつき防止)
-const float GENET_SHARE     = FRAC(PMF(0.20f));  // [率 0.00217 /分]
+const float GENET_SHARE_K   = (float)PMF(0.20f);  // 地下茎で同じ株の平均へ近づく 1 分あたりの率の基準(clonal を掛ける)[率 0.00217 /分]
 const float SEED_FAR        = 12.0f;
 const float PLANT_DIVIDE_TH = 8.0f;
 const float PLANT_INIT_E    = 6.0f;    // 立ち上がりの緩衝
@@ -528,14 +528,14 @@ const float DIURNAL_SEA     = 1.2f;    // 海は熱容量が大きく、ほと�
 
 // --- 植物の新しい戦略 ---
 const float PARASITE_COST   = LIN(PM(0.030f));  // 吸器の維持費 [1分あたり 0.000292]
-const float PARASITE_DRAIN  = FRAC(PMF(0.055f));  // 宿主から奪う割合 [率 0.00055 /分]
+const float PARASITE_DRAIN_K = (float)PMF(0.055f);  // 宿主から奪う 1 分あたりの率の基準(貫く強さを掛ける)[率 0.00055 /分]
 const float CARNIVORY_COST  = LIN(PM(0.045f));  // 捕虫器の維持費 [1分あたり 0.000437]
 const float CARNIVORY_CATCH = FRAC(PMF(0.14f,ANIMAL_STRIDE),ANIMAL_STRIDE);  // 捕獲率 [率 0.000733 /分]
 const float CARNIVORY_N     = 0.09f;   // 獲物から得る窒素
 const float FIRE_SEED_COST  = LIN(PM(0.012f));  // 休眠種子の維持費 [1分あたり 0.000117]
 const int   BURN_WINDOW     = (int)TICKS(900*DT0);  // [64.3 日]
 const float BANK_COST       = LIN(PM(0.0035f));  // 土中でも呼吸し、食われ、朽ちる [1分あたり 3.4e-05]
-const float BANK_PREDATION  = FRAC(PMF(0.0012f));  // 種子食者に見つかる率/tick [率 1.17e-05 /分]
+const float BANK_PREDATION  = FRAC(PMF(0.0012f),SEED_STRIDE);  // 種子食者に見つかる確率(SEED_STRIDE tick ごとの 1 回の判定あたり)[率 1.17e-05 /分]
 const int   BANK_MAX        = (int)TICKS(1400*DT0);  // 待てる上限 [100 日]
 
 // --- 動物の新しい戦略 ---

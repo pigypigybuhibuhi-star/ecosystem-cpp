@@ -164,7 +164,7 @@ void update_plants(){
             Plant& q=plants[pi];
             if(q.parasite<0.10f) continue;
             float pierce=q.parasite/(q.parasite+plants[host].defense);
-            float drain=plants[host].energy*PARASITE_DRAIN*pierce*PARA_INTERVAL;
+            float drain=plants[host].energy*-std::expm1(-PARASITE_DRAIN_K*pierce*(float)(PARA_INTERVAL*DT));
             plants[host].energy-=drain;
             q.energy+=drain*0.85f;
             a_burn(co2.data(),o2.data(),ci,drain*0.15f);   // 同化しなかった 15% は寄生者の呼吸で CO2 に(O2 を 1:1)
@@ -186,7 +186,7 @@ void update_plants(){
             auto it=genet.find(p.genet);
             if(it==genet.end()||it->second.second<2) continue;
             float mean=(float)(it->second.first/it->second.second);
-            p.energy+=(mean-p.energy)*std::min(1.f,GENET_SHARE*GENET_INTERVAL)*p.clonal;
+            p.energy+=(mean-p.energy)*-std::expm1(-GENET_SHARE_K*p.clonal*(float)(GENET_INTERVAL*DT));
         }
     }
     static int pphase=0;
@@ -207,7 +207,7 @@ void update_plants(){
                   a_burn(co2.data(),o2.data(),idx(sx,sy),std::min(BANK_COST*SEED_STRIDE,std::max(0.f,p.energy))); }
             p.energy-=BANK_COST*SEED_STRIDE;
             // 死んだ種子は朽ちる。体の炭素と窒素は死骸に
-            if(dist01(rng)<BANK_PREDATION*SEED_STRIDE || p.energy<=0.f){
+            if(dist01(rng)<BANK_PREDATION || p.energy<=0.f){
                 p.alive=false;
                 corpses.push_back({p.x,p.y,std::max(0.f,p.energy)+p.height*GROW_COST,0,p.n_store+p.height*N_PER_GROWTH});
                 continue;
