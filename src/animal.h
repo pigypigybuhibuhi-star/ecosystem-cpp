@@ -92,11 +92,16 @@ void update_animals(){
                 case 4: sig=std::min(1.f,fire[ri]); break;           // 炎
                 case 5: sig=clamp01(canopy_h[ri]/3.f); break;        // 林冠の高さ
                 case 6: sig=clamp01(aload[ri]/PATH_LOAD_MAX); break; // 病原体
-                case 11:                                             // 同種。群れの前提
-                    { int c=0, e=std::min(agrid.e(ri),agrid.b(ri)+6);
+                case 11:                                             // 似た体。群れの前提
+                    // 相手の体の表面の化学的な手がかり(免疫の型 im)が自分とどれだけ似ているかを、
+                    // 自分の型と比べて感じ取る(表現型の照合。Lacy & Sherman 1983)。系統 lin は使わない
+                    { float c=0.f; int e=std::min(agrid.e(ri),agrid.b(ri)+6);
                       for(int t=agrid.b(ri);t<e;t++){
                           int j=agrid.items[t];
-                          if(j!=i && animals[j].lin==a.lin) c++;
+                          if(j==i) continue;
+                          float dm=0.f;
+                          for(int m=0;m<N_IMMUNE;m++) dm+=std::fabs(animals[j].im[m]-a.im[m]);
+                          c+=1.f-dm/N_IMMUNE;
                       }
                       sig=std::min(1.f,c*0.45f); }
                     break;
