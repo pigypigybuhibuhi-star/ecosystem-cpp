@@ -78,7 +78,7 @@ void update_quakes(){
     double e=0.0;
     for(size_t i=0;i<mainshocks.size();i++){
         const Mainshock& s=mainshocks[i];
-        double t1=(g_frame-s.tick)/DAY_MIN, t0=t1-DT/DAY_MIN;
+        double t1=(g_frame-s.tick)*DT/DAY_MIN, t0=t1-DT/DAY_MIN;   // tick の差 × DT で分に直してから日に
         if(t0<0.0) continue;           // 本震と同じ tick には余震を置かない
         double I=(std::pow(t0+QK_RJ_C,1.0-QK_RJ_P)-std::pow(t1+QK_RJ_C,1.0-QK_RJ_P))/(QK_RJ_P-1.0);
         w[i]=std::pow(10.0,QK_RJ_A+QK_RJ_B*(s.mag-QK_MMIN))*I;

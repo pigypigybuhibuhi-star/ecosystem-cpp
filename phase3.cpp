@@ -1573,7 +1573,7 @@ int main(int argc,char** argv){
                              temper[ci],opt_temp_p(*sp2),kill_temp_p(*sp2));
                     { sf::Text t(font,jp(b),12); t.setPosition({PX+10.f,by});
                       t.setFillColor(sf::Color(180,220,255)); window.draw(t); by+=lh; }
-                    snprintf(b,120,"標高 %.2f  CO2 %.2f",elev[ci],co2[ci]);
+                    snprintf(b,120,"標高 %.2f  CO2 柱からのずれ %.2f",elev[ci],co2[ci]);
                     { sf::Text t(font,jp(b),12); t.setPosition({PX+10.f,by});
                       t.setFillColor(sf::Color(170,170,170)); window.draw(t); }
                 }
