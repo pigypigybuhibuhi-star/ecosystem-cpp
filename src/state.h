@@ -186,6 +186,7 @@ struct Animal {
     float nocturnal;  // 遺伝子: 夜に活動する
     float store_fat;  // 遺伝子: 脂肪の目標(体の維持費の store_fat × FAT_DAYS_MAX 日分)
     float repro_alloc;// 遺伝子: 余剰を繁殖に回す割合
+    float estrus;     // 遺伝子: 繁殖できる状態のときに出す性フェロモンの量(0〜1。1 で ESTRUS_NG_H)
     float fat;        // 状態: 蓄えた脂肪
     float depth;      // 状態: 今の潜り具合(0=地表)
     float perch;      // 状態: 今いる高さ(0=地上)
@@ -236,11 +237,15 @@ void life_note(int id,int tick,const char* kind,float v=0.f){
 }
 // 選択勾配を測るための遺伝子ベクトル。
 // 繁殖した親と集団全体で平均を比べれば、どちらへ押されているかが分かる
+// 性フェロモンを出す状態か。体が成熟し、繁殖に回せる貯えがあるとき(匂いの放出と、その合成の費用で同じ判定を使う)
+inline bool estrus_ready(const Animal& a){
+    return a.body>=a.size*MATURE_FRAC && a.energy>A_DIVIDE_TH*0.7f;
+}
 inline void sg_vec_a(const Animal& a,double* v){
     v[0]=a.diet;  v[1]=a.detritus; v[2]=a.reach;    v[3]=a.size;
     v[4]=a.speed; v[5]=a.jaw;      v[6]=a.cold_tol; v[7]=a.aquatic;
     v[8]=a.resp;  v[9]=a.arboreal; v[10]=a.sexual;  v[11]=a.brood;
-    v[12]=a.salt_tol;
+    v[12]=a.salt_tol; v[13]=a.estrus;
 }
 inline void sg_vec_p(const Plant& p,double* v){
     v[0]=p.max_height; v[1]=p.shade_tol; v[2]=p.tough;      v[3]=p.clonal;
@@ -339,10 +344,10 @@ void ev_replay_advance(){
 // 選択勾配。繁殖した個体と集団全体で遺伝子の平均を比べる。
 // 差がそのまま「その形質が今どちらへ押されているか」になる。
 // 収支を手計算せずに、効いているかどうかを測定で言えるようにする
-const int N_SG_A = 13;
+const int N_SG_A = 14;
 const char* SG_A_NAME[N_SG_A]={
     "diet","detr","reach","size","speed","jaw",
-    "cold","aqua","resp","arbor","sexual","brood","salt"};
+    "cold","aqua","resp","arbor","sexual","brood","salt","estr"};
 const int N_SG_P = 14;
 const char* SG_P_NAME[N_SG_P]={
     "maxH","shade","tough","clonal","disp","cold",
@@ -406,6 +411,7 @@ struct AnimalGene {
     float salt_tol;
     float brood,lifespan;
     float toxin,tox_resist,burrow,nocturnal,store_fat,repro_alloc,bite_size,digest;
+    float estrus;
     float im[N_IMMUNE];
     Animal::Sensor sen[N_SENSOR];
     float w[N_W];
@@ -438,6 +444,7 @@ void remember_animals(){
         g.brood=a.brood;     g.lifespan=a.lifespan;
         g.toxin=a.toxin;     g.tox_resist=a.tox_resist; g.burrow=a.burrow;
         g.nocturnal=a.nocturnal; g.store_fat=a.store_fat; g.repro_alloc=a.repro_alloc;
+        g.estrus=a.estrus;
         g.bite_size=a.bite_size; g.digest=a.digest;
         for(int k=0;k<N_IMMUNE;k++) g.im[k]=a.im[k];
         for(int k=0;k<N_W;k++) g.w[k]=a.w[k];

@@ -65,7 +65,7 @@ PM と PMF を通った値が **[未換算]** に当たる。1 回の更新に�
 
 状態: 位置、向き、エネルギー、体(body、成長して size に近づく)、脂肪、潜り具合、今いる高さ(perch)、酸素の充足度、再帰の値 2 つ、年齢、食べた回数、系譜。
 
-遺伝子: 速さ、旋回、届く高さ(reach)、成体の大きさ(size)、肉食(diet)、顎、耐寒性、水中での呼吸と泳ぎ(aquatic)、塩への強さ(salt_tol。体液の浸透圧を保てる外の塩分、海水を 1 とする比)、呼吸の効率、分解物食(detritus)、有性生殖の度合い、登攀(arboreal)、一度に産む数(brood)、寿命、毒、解毒、穴掘り(burrow)、夜目(nocturnal)、脂肪を貯める日数(store_fat × 60 日)、繁殖に回す割合、変異率、一口の大きさ、消化効率、免疫の型(3 座位)、感覚器 5 つ(向き・射程・何に反応するか)、神経網の重み(N_W 個)とニューロンの有効・無効の値(24 個)。
+遺伝子: 速さ、旋回、届く高さ(reach)、成体の大きさ(size)、肉食(diet)、顎、耐寒性、水中での呼吸と泳ぎ(aquatic)、塩への強さ(salt_tol。体液の浸透圧を保てる外の塩分、海水を 1 とする比)、呼吸の効率、分解物食(detritus)、有性生殖の度合い、登攀(arboreal)、一度に産む数(brood)、寿命、毒、解毒、穴掘り(burrow)、夜目(nocturnal)、脂肪を貯める日数(store_fat × 60 日)、繁殖に回す割合、性フェロモンを出す量(estrus)、変異率、一口の大きさ、消化効率、免疫の型(3 座位)、感覚器 5 つ(向き・射程・何に反応するか)、神経網の重み(N_W 個)とニューロンの有効・無効の値(24 個)。
 
 ### 2.5 微生物(Microbe)
 動かない分解者。状態: 位置、体の炭素、年齢。遺伝子: 分解の速さ(rate)、耐寒性。
@@ -236,7 +236,7 @@ PM と PMF を通った値が **[未換算]** に当たる。1 回の更新に�
 - 標高による空気の薄まり: スケールハイト 8.4 km
 
 ### 7.9 匂い [法則]
-- 4 本: 生体(植物の体臭は高さと毒に比例、動物は体格に比例)、腐敗(死骸)、食害(齧られた植物)、災害(煙)
+- 4 本: 生体(植物の体臭は高さと毒に比例、動物は体格に比例。繁殖できる状態の動物の性フェロモンも 0 番に入る)、腐敗(死骸)、食害(齧られた植物)、災害(煙)
 - 生体・腐敗・食害の匂いは OH ラジカルとオゾンに酸化されて消える。率 = (k_OH·[OH] + k_O3·[O3])·60 /分。代表の物質 α-ピネン・二硫化ジメチル・(Z)-3-ヘキセノールの 298 K の速度定数(Atkinson & Arey 2003)。[OH] は太陽高度の正弦に比例し真上で 4e6 個/cm³(Prinn et al. 2005)、[O3] は 30 ppb で一定 **[条件]**
 - 煙は粒子で、沈着で消える(率 1.37e-4 /分 **[未換算]**)
 - 運ぶ風: 地表から 0.1 m までの層の平均の速さ。対数分布 u(z) = u*/κ·ln(z/z0)、z0 = 0.01 m(Wieringa 1993)から約 0.68 m/s。突風前線の風を重ねる
@@ -286,6 +286,7 @@ PM と PMF を通った値が **[未換算]** に当たる。1 回の更新に�
 - **呼吸**: 必要な O2 = 代謝 × 0.02 × (1 − 0.6·呼吸の効率)。マスの O2 で足りない分は発酵で、炭素は有機物のまま糞に出る
 - **脂肪** [法則]+[条件の幅]: 体の維持費(基礎代謝と形質の維持費。歩く費用は含まない)の 1 日分を day_cost とする。エネルギーが糖の貯え GLYCO_DAYS = 1 日分(絶食した昆虫は先に糖を約 1 日で使い切る。Arrese & Soulages 2010)を超えれば、超えた分 × 6.21e-4 /分(を更新の間隔に換算)を、脂肪が目標 store_fat × 60 日分(FAT_DAYS_MAX。昆虫の絶食に耐える日数は数日〜数か月。Rion & Kawecki 2007、Hahn & Denlinger 2011)に届くまで脂肪へ回す(合成で 15% を呼吸)。エネルギーが 1 日分を下回れば、脂肪を 1 回の更新で最大 FAT_DRAW 取り崩す。繁殖の閾値は使わない(D-2026-10-24-3 の作者の答え)。何日分貯めるかは遺伝子 store_fat で進化する
 - **繁殖**: エネルギーが A_DIVIDE_TH × (1.4 − 0.6·繁殖に回す割合)(A_DIVIDE_TH = 6.0)を超え、体が size の 80% 以上なら判定する。有性なら半径 3 マスで同じ lin の成熟した相手を探す(2.9 の注意)。産む数 = 1 + brood·11、投資 = エネルギー × (0.20 + 0.55·繁殖に回す割合)、一匹の取り分 = 1/(数 × (1 + (数 − 1)·0.22))。子の体は 0.10(作る費用 0.4)で、取り分がそれに届かなければ死骸になる。**注意**: 繁殖の閾値を組織の炭素に比例させ、子の体を「投資 ÷ 産む数」から決める作業(移行の段階 5 の作者の判断)は、優先順位 1 で試験中
+- **性フェロモン** [法則]+[条件に近い推定]: 体が size の 80% 以上で、エネルギーが A_DIVIDE_TH × 0.7 を超える個体は、匂いの場の 0 番に 1.34e-4 /分 × estrus **[未換算]** を出す。遺伝子 estrus(0〜1)が出す量を決め、出している間は合成の費用 3.37e-7 /分 × estrus × 体 を代謝に足す(費用の炭素は CO2 として出す)。費用は、estrus = 1 で体 1(生重 100 mg)が 100 ng/時を出すとして(蛾の雌の放出は 1〜100 ng/時の桁、Cardé & Baker 1984。その上端)、脂質 1 g の合成にブドウ糖 3.03 g(Penning de Vries et al. 1974)から決めた。基礎代謝の約 0.75%。匂いは捕食者にも届くので、多く出すほど相手にも捕食者にも見つかりやすい。出す量は決め打ちせず進化に任せる。最初に放す動物は 0.2 **[条件]**(前の規則で sexual 0.2 の個体が出していた量)。古いセーブも 0.2 で読む。前の規則の「sexual が 0.15 を超える個体だけが sexual に比例して出す」は外した。相手の探し方は今のまま(半径 3 マスの探索)で、匂いは神経網の入力を通してだけ働く
 - **遺伝**: 有性なら各形質・各重み・各感覚器・各免疫の座位をどちらかの親から受け取る。そのあと変異(7.13)を、選んだ値に掛ける(一口・消化・変異率は母から受け取る)
 - 上限 ANIMAL_MAX = 60000(計算の安全のため)。上限に達したときに配列の前(古く生まれた個体)から枠が埋まる偏りは D-2026-10-28-3 で作者の判断を待っている
 
@@ -362,6 +363,7 @@ PM と PMF を通った値が **[未換算]** に当たる。1 回の更新に�
 - Brune, J. N. (1968) Seismic moment, seismicity, and rate of slip along major fault zones. Journal of Geophysical Research 73: 777–784
 - Bradley, T. J. (1987) Physiology of osmoregulation in mosquitoes. Annual Review of Entomology 32: 439–462
 - Byers, H. R., Braham, R. R. (1949) The Thunderstorm. U.S. Weather Bureau
+- Cardé, R. T., Baker, T. C. (1984) Sexual communication with pheromones. In: Bell, W. J., Cardé, R. T. (eds.) Chemical Ecology of Insects. Chapman and Hall, pp. 355–383
 - Changnon, S. A. (1988) Climatography of thunder events in the conterminous United States. Part I: Temporal aspects. Journal of Climate 1: 389–398
 - Charba, J. (1974) Application of gravity current model to analysis of squall-line gust front. Monthly Weather Review 102: 140–156
 - Chown, S. L., Nicolson, S. W. (2004) Insect Physiological Ecology. Oxford University Press
@@ -396,6 +398,7 @@ PM と PMF を通った値が **[未換算]** に当たる。1 回の更新に�
 - Montgomery, D. R., Dietrich, W. E. (1994) A physically based model for the topographic control on shallow landsliding. Water Resources Research 30: 1153–1171
 - Newmark, N. M. (1965) Effects of earthquakes on dams and embankments. Géotechnique 15: 139–160
 - Panikov, N. S. (1995) Microbial Growth Kinetics. Chapman & Hall, London
+- Penning de Vries, F. W. T., Brunsting, A. H. M., van Laar, H. H. (1974) Products, requirements and efficiency of biosynthesis: a quantitative approach. Journal of Theoretical Biology 45: 339–377
 - Penning de Vries, F. W. T. (1974) Substrate utilization and respiration in relation to growth and maintenance in higher plants. Netherlands Journal of Agricultural Science 22: 40–44
 - Petersen, W. A., Rutledge, S. A. (1998) On the relationship between cloud-to-ground lightning and convective rainfall. Journal of Geophysical Research 103: 14025–14040
 - Prinn, R. G. et al. (2005) Evidence for variability of atmospheric hydroxyl radicals over the past quarter century. Geophysical Research Letters 32: L07809

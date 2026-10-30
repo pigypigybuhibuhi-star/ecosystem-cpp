@@ -24,3 +24,4 @@ CLAUDE.md の作業の項目のうち、main に取り込んだもの。
 ## 上の階層の書き込みを外す
 - 2026-10-30 / ac3e573(取り込み: claude/kin-im、aa443f5)/ 「仲間の感覚: 同じ lin を数えるのではなく、体の特徴(免疫の型 im など)の似ている度合いを感じ取る形にする」。帯 11 を、同じ lin の数から免疫の型の似ている度合いの和に(表現型の照合、Lacy & Sherman 1983)。取り込みの時に移し忘れたので、2026-10-31 の取り込みで移した。
 - 2026-10-31 / 7ec0fff(取り込み: claude/def-const)/ 「植物の防御: 常に張る分と、食害の匂いで張る分の割合を遺伝子にする」。遺伝子 def_const を足し、防御の目標を tough×(def_const+(1−def_const)×食害の匂い)に(最適防御の理論、Karban & Baldwin 1997)。t=70000 を完走、nan 0、fps 12.47、def-const2 と一致。
+- 2026-10-31 / e210554(取り込み: claude/estrus-gene)/ 「戦略の幅を狭めない / 発情の匂い: 出す量を遺伝子にし、出す代償を付ける」。遺伝子 estrus を足し、繁殖できる状態の個体が匂いの 0 番に ODOR_ESTRUS × estrus を出す。合成の費用 ESTRUS_COST(3.37e-7 /分・体 1、Cardé & Baker 1984、Penning de Vries et al. 1974)を呼吸の経路で払う。sexual>0.15 の閾値を外した。t=70000 を完走、nan 0、fps 13.17、estrus-gene2 と一致。

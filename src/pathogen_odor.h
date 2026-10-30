@@ -98,10 +98,9 @@ void update_odor(){
         int i=idx(gx,gy);
         float hide=(a.depth>0.5f)?0.25f:1.f;      // 潜れば漏れにくい
         odor[0][i]+=ODOR_ANIMAL*(a.body+a.toxin*1.2f)*hide;
-        // 発情。繁殖できる状態の個体が出す
-        if(a.sexual>0.15f && a.body>=a.size*MATURE_FRAC
-           && a.energy>A_DIVIDE_TH*0.7f)
-            odor[0][i]+=ODOR_ESTRUS*a.sexual;
+        // 発情。繁殖できる状態の個体が、遺伝子 estrus の量だけ出す(出す量と費用の釣り合いは進化に任せる)
+        if(estrus_ready(a))
+            odor[0][i]+=ODOR_ESTRUS*a.estrus;
         if(aload[i]>0.3f) odor[0][i]+=ODOR_SICK;
     }
     for(const auto& cp:corpses){

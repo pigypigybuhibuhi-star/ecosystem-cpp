@@ -386,6 +386,7 @@ void update_animals(){
         float sen=senesce(a.age,a.lifespan,LIFE_MIN_A,LIFE_MAX_A);
         metab *= (1.f+sen);
         metab += LIFESPAN_COST*a.lifespan;
+        if(estrus_ready(a)) metab += ESTRUS_COST*a.estrus*a.body;   // 性フェロモンの合成
         // 発病
         if(aload[ci]>0.02f){
             float inf=aload[ci]*immune_match(a.im,ci,astrain);
@@ -479,6 +480,7 @@ void update_animals(){
                 PICK(detritus); PICK(sexual); PICK(arboreal); PICK(brood);
                 PICK(lifespan); PICK(toxin); PICK(tox_resist);
                 PICK(burrow); PICK(nocturnal); PICK(store_fat); PICK(repro_alloc);
+                PICK(estrus);
                 #undef PICK
                 for(int k=0;k<N_W;k++)
                     c.w[k]=(dist01(rng)<0.5f)? a.w[k] : mate->w[k];
@@ -529,6 +531,7 @@ void update_animals(){
             c.nocturnal  =mutate(c.nocturnal,  0.0f,1.0f);
             c.store_fat  =mutate(c.store_fat,  0.0f,1.0f);
             c.repro_alloc=mutate(c.repro_alloc,0.0f,1.0f);
+            c.estrus     =mutate(c.estrus,     0.0f,1.0f);
             c.fat=0.f; c.depth=0.f;
             for(int k=0;k<N_W;k++) c.w[k]=mutate(c.w[k],-3.0f,3.0f);
             // ニューロンの有効・無効。稀に大きく飛んで、層の追加や削除が起きる
