@@ -184,9 +184,9 @@ void update_fuel_moisture(){
 
 void update_fire(int frame){
     update_fuel_moisture();
-    // 酸素の分圧で判定する。窒素のない世界なので、他のガスとの比で見る
-    float o2m=0.f, tot=0.f;
-    for(int i=0;i<GRID_W*GRID_H;i++){ o2m+=o2[i]; tot+=o2[i]+co2[i]+N2_BASE; }
+    // 酸素の分圧で判定する。柱の気体の全量との比で見る
+    double o2m=0.0, tot=0.0;
+    for(int i=0;i<GRID_W*GRID_H;i++){ o2m+=o2_at(i); tot+=o2_at(i)+co2_at(i)+N2_COL; }
     float frac = (tot>1e-6f) ? o2m/tot : 0.f;    // 0..1
     // 地球の21%を基準に、火の窓(17%〜35%)へ写す
     float o2r = frac/0.21f;
@@ -262,7 +262,7 @@ void update_fire(int frame){
         cp.energy-=burn;
         { float bn=cp.n*FIRE_BURN*std::min(1.f,fire[i]); cp.n-=bn; g_bud.n_fire-=bn; }   // 燃えた分の窒素は揮発する
         co2_add(i,burn*CO2_PER_ENERGY);
-        o2_add(i,-std::min(burn*FIRE_O2_USE,o2[i]));
+        o2_add(i,-std::min(burn*FIRE_O2_USE,o2_at(i)));
     }
     for(int i=0;i<GRID_W*GRID_H;i++) if(fire[i]>=0.05f) area+=1;
     for(int i=0;i<GRID_W*GRID_H;i++){

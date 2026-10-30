@@ -72,7 +72,7 @@ void update_gases(){
         if(std::fabs(u)<1e-4f) continue;
         for(int pass=0;pass<2;pass++){
             std::vector<float>& g=(pass==0)?co2:o2;
-            float base=(pass==0)?CO2_BASE:O2_BASE;
+            const float base=0.f;   // 区画の外の空気は柱の量のまま(ずれ 0)
             // セミラグランジュ法: 各マスの空気は、GAS_SHIFT マス風上にあった空気が運ばれてきたもの。
             // 出発点が区画の外なら、区画の外の空気(基準の濃度)が入る。間は線形に補う
             int d=(u>0)?1:-1;
@@ -91,7 +91,8 @@ void update_gases(){
     }
     for(int pass=0;pass<2;pass++){
         std::vector<float>& g=(pass==0)?co2:o2;
-        float base=(pass==0)?CO2_BASE:O2_BASE;
+        const float base=0.f;
+        float floor_=(pass==0)?-CO2_COL:-O2_COL;   // 全量が 0 を下回らない
         double s1=grid_sum(g), relax=0;
         for(int y=0;y<GRID_H;y++) for(int x=0;x<GRID_W;x++){
             float s=0.f; int c=0;
@@ -104,7 +105,7 @@ void update_gases(){
             float mean=s/c; int i=idx(x,y);
             gbuf[i]=g[i]+(mean-g[i])*GAS_DIFFUSE+(base-g[i])*GAS_RELAX;
             relax+=(base-g[i])*GAS_RELAX;
-            if(gbuf[i]<0.f) gbuf[i]=0.f;
+            if(gbuf[i]<floor_) gbuf[i]=floor_;
         }
         g.swap(gbuf);
         // 移流・拡散は、端の交換を除けば総量を保つ。ずれた分は数値誤差として別に数える

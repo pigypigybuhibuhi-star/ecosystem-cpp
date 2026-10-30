@@ -7,9 +7,10 @@ std::vector<float> elev(GRID_W*GRID_H, 0.f);
 std::vector<char>  sea (GRID_W*GRID_H, 0);
 std::vector<float> solar(GRID_W*GRID_H, 0.f);
 std::vector<float> temper(GRID_W*GRID_H, 0.f);
-std::vector<float> co2(GRID_W*GRID_H, CO2_BASE);
-std::vector<float> o2 (GRID_W*GRID_H, O2_BASE);
-// 気体の場は float で、1 マスに約 8 ある。その刻み(約 1e-6)より小さい出入り(死骸1つの1分ぶんの分解など)を
+// 大気の CO2 と O2 は、柱の量 CO2_COL・O2_COL からのずれ(単位は気体の単位)。マスにある量は CO2_COL + co2[i]
+std::vector<float> co2(GRID_W*GRID_H, 0.f);
+std::vector<float> o2 (GRID_W*GRID_H, 0.f);
+// ずれの場は float なので、その刻みより小さい出入り(死骸1つの1分ぶんの分解など)を
 // そのまま足すと丸めで消え、質量が保存されない。足しきれなかった端数をマスごとに持ち越し、次に足す
 std::vector<float> co2_res(GRID_W*GRID_H, 0.f);
 std::vector<float> o2_res (GRID_W*GRID_H, 0.f);
@@ -19,6 +20,8 @@ inline void gas_add(std::vector<float>& g,std::vector<float>& r,int c,float d){
 }
 inline void co2_add(int c,float d){ gas_add(co2,co2_res,c,d); }
 inline void o2_add (int c,float d){ gas_add(o2, o2_res, c,d); }
+inline float co2_at(int c){ return CO2_COL+co2[c]; }   // マスの柱にある CO2 の全量
+inline float o2_at (int c){ return O2_COL+o2[c]; }
 std::vector<float> gbuf(GRID_W*GRID_H, 0.f);
 std::vector<float> wind(GRID_H, 0.f);
 std::vector<float> slope(GRID_W*GRID_H, 0.f);

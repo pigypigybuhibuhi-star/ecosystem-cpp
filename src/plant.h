@@ -125,7 +125,7 @@ void update_plants(){
               if(!sea[ci]) w_transp_cell[ci]+=soil_water[ci]-w0; }
             // 炭素(リービッヒの最小律)
             float need=gain*CO2_PER_ENERGY;
-            float avail=std::min(need,co2[ci]);
+            float avail=std::min(need,co2_at(ci));
             if(need>1e-9f) gain*=avail/need;
             co2_add(ci,-avail); o2_add(ci,avail*O2_PER_CO2);   // マスごとに一つのスレッドだけが触るので、端数の持ち越しも決定的
             p.energy+=gain;
@@ -254,7 +254,7 @@ void update_plants(){
                 burnt+=p.height*(GROW_COST-0.25f);              // 残りの体は燃える
             }
             co2_add(ci,burnt*CO2_PER_ENERGY);
-            o2_add(ci,-std::min(burnt*FIRE_O2_USE,o2[ci]));
+            o2_add(ci,-std::min(burnt*FIRE_O2_USE,o2_at(ci)));
             if(!p.alive) continue;
         }
         // 窒素を取り込む。固定できる個体は大気から、できない個体は土壌から
@@ -279,7 +279,7 @@ void update_plants(){
             float r=std::min(g*GROW_COST*GROW_RESP,std::max(0.f,p.energy));
             p.energy-=r;
             float need=r*CO2_PER_ENERGY;
-            o2_add(ci,-std::min(need,o2[ci])); co2_add(ci,need);
+            o2_add(ci,-std::min(need,o2_at(ci))); co2_add(ci,need);
         }
         float hm=habitat_p(p,ci);
         float hs=salt_mismatch(p,ci);
@@ -292,7 +292,7 @@ void update_plants(){
         {
             float need = upkeep*PLANT_RESP_CO2*CO2_PER_ENERGY*PLANT_STRIDE
                        * (p.dormant?DORM_UPKEEP:1.f);
-            if(need>1e-9f && o2[ci]<need*0.5f) upkeep *= 1.3f;   // 酸欠は割高になる
+            if(need>1e-9f && o2_at(ci)<need*0.5f) upkeep *= 1.3f;   // 酸欠は割高になる
         }
         // 余裕があるとき、組織に水を貯める
         if(!p.dormant && p.water_store<p.store_cap && soil_water[ci]>0.5f){
@@ -345,7 +345,7 @@ void update_plants(){
         }
         // 払った維持費の炭素は呼吸で CO2 になる(体に無いぶんは出せない)
         { float c=std::min(upkeep*PLANT_STRIDE,std::max(0.f,p.energy))*PLANT_RESP_CO2*CO2_PER_ENERGY;
-          o2_add(ci,-std::min(c,o2[ci])); co2_add(ci,c); }
+          o2_add(ci,-std::min(c,o2_at(ci))); co2_add(ci,c); }
         p.energy-=upkeep*PLANT_STRIDE;
         dbg_cost+=upkeep;      // 更新を飛ばしたぶんをまとめて払う
         if(p.energy<=0.f){
@@ -383,7 +383,7 @@ void update_plants(){
             float invest=p.energy*(0.20f+0.55f*p.repro_alloc);
             p.energy-=invest;
             { float c=invest*(1.f-nb*share)*CO2_PER_ENERGY;
-              o2_add(ci,-std::min(c,o2[ci])); co2_add(ci,c); }
+              o2_add(ci,-std::min(c,o2_at(ci))); co2_add(ci,c); }
             for(int bi=0;bi<nb;bi++){
             Plant c=p;
             c.energy=invest*share;
