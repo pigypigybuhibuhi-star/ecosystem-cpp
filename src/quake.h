@@ -23,8 +23,6 @@ inline void qk_rupture(float mag,float ex,double& xa,double& xb){
 // 区画の各マスの揺れを求め、限界加速度を超えた斜面をニューマーク法の確率で崩す。区画の中の最大加速度(g)を返す
 float quake_shake(float mag,float ex){
     double xa,xb; qk_rupture(mag,ex,xa,xb);
-    const double cz=QK_SOIL_C_KPA/(QK_SOIL_GAMMA*SLIDE_DEPTH_M);
-    const double tphi=REPOSE_SLOPE;
     float amax=0.f;
     for(int ci=0;ci<GRID_W*GRID_H;ci++){
         double x=ci%GRID_W+0.5, y=ci/GRID_W+0.5;
@@ -34,8 +32,8 @@ float quake_shake(float mag,float ex){
         if(A>amax) amax=(float)A;
         double s=slope[ci];
         if(sea[ci]||s<=0.0) continue;
-        double h=std::sqrt(1.0+s*s), sa=s/h, ca=1.0/h;
-        double fs=cz/(sa*ca)+tphi/s, ac=(fs-1.0)*sa;
+        double sa=s/std::sqrt(1.0+s*s);
+        double fs=slope_fs(ci), ac=(fs-1.0)*sa;
         if(A<=ac) continue;                         // 限界加速度に届かない斜面は動かない(乱数を引かない)
         double P=0.335;
         if(ac>0.0){

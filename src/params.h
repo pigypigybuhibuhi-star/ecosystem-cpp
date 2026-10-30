@@ -207,11 +207,16 @@ const float FIRE_FUEL_MIN   = 1.5f;
 const float SLIDE_SLOPE     = 0.58f;   // これ以上の勾配(30°)で崩れうる。表層崩壊の多くは 30° を超える斜面で起きる
 // 崩れる厚さ。表層崩壊は土層と基盤の境で滑り、厚さは 0.5〜2 m(小さな崩壊の中央値はおよそ 1 m、Larsen et al. 2010)
 const float SLIDE_DEPTH_M   = 1.0f;
-// 崩落率/マス/分(勾配が SLIDE_SLOPE のとき。急なほど比例して増える)。崩れが削る速さから決める。
-// 急な斜面が安息の限りにある土地では、地表が削られる速さは岩盤の隆起の速さに揃う(Montgomery & Brandon 2002)。
-// 隆起は条件の UPLIFT_MM_YR(北の端 0.3 mm/年)なので、1 回の崩れで SLIDE_DEPTH_M 削るなら 0.3e-3/1.0 回/年 = 5.7e-10 /分。
-// 以前は 1.17e-07 /分(急な斜面が 1 年に約 6 cm 削られる)で、この約 200 倍だった
-const float SLIDE_RATE      = FRAC(UPLIFT_MM_YR*1e-3/SLIDE_DEPTH_M/YEAR_MIN);  // [率 5.71e-10 /分]
+// 崩れの起こり方: 無限斜面の安全率 FS = c'/(γ z sinα cosα) + (1 − m γw/γ) tanφ'/tanα が 1 を下回ったマスが崩れる
+// (Skempton & DeLory 1957、Montgomery & Dietrich 1994)。m は崩れる厚さ z のうち地下水で飽和した割合で、
+// 地下水面が地表から z より浅く上がると間隙水圧が摩擦を減らす。z は SLIDE_DEPTH_M、内部摩擦角は安息角 REPOSE_SLOPE(35°)
+// (粘着の無い粒の安息角は内部摩擦角に等しい)。粘着力は土そのもの 2 kPa と根の補強 3 kPa の和 5 kPa
+// (崩積土 0〜5 kPa、草地と低木の根 1〜5 kPa。Montgomery & Dietrich 1994、Schmidt et al. 2001)。単位体積重量 17 kN/m³。
+// この値で区画の最も急な斜面(勾配の大きさ約 1)でも乾いた状態の FS は 1 を超え、飽和すると勾配約 0.76(37°)より急な斜面が崩れる。
+// 以前は勾配に比例する一定の率(5.71e-10 /分、隆起と釣り合う削られる速さから)で、雨や地下水と無関係だった(D-2026-10-26-2 の答え (a))
+const float SLOPE_C_KPA     = 5.0f;
+const float SLOPE_GAMMA     = 17.0f;   // kN/m³
+const float WATER_GAMMA     = 9.81f;   // kN/m³
 // 崩土の到達。見通し角 H/L は体積で決まる: log10(H/L) = −0.085 log10(V) + 0.047(Corominas 1996、全種類の当てはめ)。
 // 1 マスの崩壊 V = 厚さ × 10 m × 10 m で H/L ≈ 0.75
 const float SLIDE_HL        = std::pow(10.f,-0.085f*std::log10(SLIDE_DEPTH_M*CELL_M*CELL_M)+0.047f);
@@ -247,14 +252,7 @@ const double QK_RJ_C          = 0.05;
 // 断層の破壊の長さ(地下): log10 L(km) = −2.44 + 0.59 M(Wells & Coppersmith 1994、全種類)
 // 揺れ: 最大加速度(g)log10 A = −1.02 + 0.249 M − log10 r − 0.00255 r、r = √(d² + 7.3²) km、
 // d は破壊の地表への投影までの距離(Joyner & Boore 1981)。ばらつきは入れず中央の値を使う
-// 斜面の限界加速度: 無限斜面の安全率 FS = c'/(γ z sinα cosα) + tanφ'/tanα、ac = (FS − 1) g sinα(Newmark 1965)。
-// 土は乾いているとする(地下水の飽和した厚さはまだ斜面の土層に入れていない)。z は崩れる厚さ SLIDE_DEPTH_M。
-// 内部摩擦角は地形を作るときの安息角 REPOSE_SLOPE(35°)と同じ値を使う(粘着の無い粒の安息角は内部摩擦角に等しい)。
-// 粘着力は土そのもの 2 kPa と根の補強 3 kPa の和 5 kPa(崩積土 0〜5 kPa、草地と低木の根 1〜5 kPa。
-// Montgomery & Dietrich 1994、Schmidt et al. 2001)。単位体積重量 17 kN/m³。
-// この値で区画の最も急な斜面(勾配の大きさ約 1)でも乾いた状態の FS は 1 を超え、揺れが無ければ崩れない
-const float QK_SOIL_C_KPA     = 5.0f;
-const float QK_SOIL_GAMMA     = 17.0f;
+// 斜面の限界加速度: ac = (FS − 1) g sinα(Newmark 1965)。FS は崩れの節の無限斜面の安全率(地下水の間隙水圧を含む)を使う
 // 崩れ: ニューマークの変位 log10 Dn(cm) = 0.215 + log10[(1 − ac/A)^2.341 (ac/A)^−1.438](Jibson 2007)、
 // 崩れる確率 P = 0.335 [1 − exp(−0.048 Dn^1.565)](Jibson et al. 2000、1994 年ノースリッジ地震の当てはめ)
 

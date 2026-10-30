@@ -207,10 +207,11 @@ PM と PMF を通った値が **[未換算]** に当たる。1 回の更新に�
 - 再生のときは落雷と燃え広がりを止め、記録の各件だけを置く。置いた火は隣へ移らない
 
 ### 7.7 崖崩れ [法則]
-- 勾配 0.58(30°)以上の斜面で起きうる。起きる率は勾配に比例し、勾配 0.58 で 5.71e-10 /マス/分。急な斜面が安息の限りにある土地では、削られる速さが隆起の速さ(0.3 mm/年)に揃う(Montgomery & Brandon 2002)ことから決めた
+- 起こり方: 無限斜面の安全率 FS = c'/(γ z sinα cosα) + (1 − m γw/γ) tanφ'/tanα が 1 を下回ったマスが、その tick に崩れる(Skempton & DeLory 1957、Montgomery & Dietrich 1994)。z = 崩れる厚さ 1 m、γ = 17 kN/m³、γw = 9.81 kN/m³、φ' = 安息角 35°、c' = 5 kPa(土 2 kPa と根の補強 3 kPa。Schmidt et al. 2001)。m は崩れる層のうち地下水で飽和した割合で、帯水層(地表から 3 m、7.4)の飽和した厚さが 2 m を超えた分。乾いた斜面は最も急な所(勾配約 1)でも FS > 1 で崩れず、飽和すると勾配約 0.76(37°)より急な斜面が崩れる。雨雲の雨が帯水層を満たすこと(7.4 の涵養)が引き金になる。乱数は引かない
+- 以前は勾配 0.58 以上の斜面に勾配に比例する一定の率(隆起と釣り合う削られる速さ 5.71e-10 /マス/分)で起こしていた。雨や地下水と無関係だったので、D-2026-10-26-2 の答え (a) のとおり安全率に置き換えた
 - 厚さ 1 m(Larsen et al. 2010)。崩土は最も急な下りを伝い、出発点からの見通し角が H/L を下回る所で止まる。H/L は log10(H/L) = −0.085·log10(V) + 0.047(Corominas 1996)で、1 マスの崩壊で約 0.75
 - 崩れた跡は 1 m 低くなり傾斜が緩む。表土の窒素と土砂は到達点へ。植物は死骸として運ばれ、巻き込まれた動物は埋まって死ぬ
-- **注意**: 地下水と飽和した厚さを入れたあと、安全率(土の厚さ・粘着力・内部摩擦角)で起こす形に置き換える作業が残っている(D-2026-10-26-2 の答え (a))
+- **注意**: 今は雨からの涵養がほぼ 0 で(7.3 の注意、D-2026-10-28-2)、陸の帯水層はほとんど空なので、崩れはほぼ起きない。土の厚さは区画のどこでも 1 m で、根の補強は植物の量によらない
 - 地震の揺れによる崩れは 7.7.1 の仕組みで起き、崩れそのもの(到達・運ばれる物・地形の変化)はこの節と同じ
 
 ### 7.7.1 地震の揺れ [法則]+[条件]
@@ -220,11 +221,11 @@ PM と PMF を通った値が **[未換算]** に当たる。1 回の更新に�
 - **余震** [法則]: 本震の規模 Mm の後、時刻 t(日)に規模 M 以上が起きる率 10^(a'+b'(Mm−M))(t+c)^−p(改良大森則、Reasenberg & Jones 1989 の一般的な値 a' = −1.67、b' = 0.91、p = 1.08、c = 0.05 日)。各 tick の期待値は、その tick の区間でこの式を積分した値。震央は本震の破壊の範囲に一様、規模は b' の G-R 則(M4〜7.14)から引く。余震はさらに余震を生まない(式が二次の余震を含めた列全体への当てはめのため)。M6.8 の後の 1 日に M4 以上はおよそ 26 回
 - **破壊の長さ** [経験式]: log10 L(km) = −2.44 + 0.59 M(Wells & Coppersmith 1994、地下の破壊の長さ、全種類)。震央を中心に断層に沿って置き、断層の端で切る
 - **揺れ** [経験式]: 最大加速度(g)log10 A = −1.02 + 0.249 M − log10 r − 0.00255 r、r = √(d² + 7.3²) km、d は破壊の地表への投影までの水平距離(Joyner & Boore 1981)。ばらつきは入れず中央の値。区画の最も近いマスで d = 10 km なので、M6.8 で 0.35 g、M4 で 0.07 g
-- **斜面の限界加速度** [法則]: 無限斜面の乾いた状態の安全率 FS = c'/(γ z sinα cosα) + tanφ'/tanα、限界加速度 ac = (FS − 1) g sinα(Newmark 1965)。z = 崩れる厚さ 1 m、γ = 17 kN/m³、φ' = 地形を作るときの安息角 35°(粘着の無い粒の安息角は内部摩擦角に等しい)、c' = 5 kPa(土 2 kPa と根の補強 3 kPa。Montgomery & Dietrich 1994、Schmidt et al. 2001)。この値で区画の最も急な斜面(勾配の大きさ約 1)でも FS > 1(ac ≈ 0.2 g)で、揺れが無ければ崩れない
+- **斜面の限界加速度** [法則]: 7.7 の無限斜面の安全率 FS(地下水の間隙水圧を含む)から、限界加速度 ac = (FS − 1) g sinα(Newmark 1965)。z = 崩れる厚さ 1 m、γ = 17 kN/m³、φ' = 地形を作るときの安息角 35°(粘着の無い粒の安息角は内部摩擦角に等しい)、c' = 5 kPa(土 2 kPa と根の補強 3 kPa。Montgomery & Dietrich 1994、Schmidt et al. 2001)。この値で、乾いた斜面は区画の最も急な所(勾配の大きさ約 1)でも FS > 1(ac ≈ 0.2 g)で、揺れが無ければ崩れない
 - **崩れ** [経験式]: A > ac のマスで、ニューマークの変位 log10 Dn(cm) = 0.215 + log10[(1 − ac/A)^2.341 (ac/A)^−1.438](Jibson 2007)を求め、崩れる確率 P = 0.335[1 − exp(−0.048 Dn^1.565)](Jibson et al. 2000)で崩す。A ≤ ac のマスでは乱数を引かない。崩れは 7.7 の slide_at と同じ
 - 乱数は地震だけの列を使う。地震が起きなければ、生き物と環境の結果は地震の無い版とバイト単位で同じ
 - 揺れは今は崩れを起こすだけで、生き物の感覚の入力にはなっていない(神経網の入力の変更は、明るさ・登る・潜る・前触れの感覚とまとめて一度に行う)
-- **注意**: 根の補強は植物の量によらない定数。地下水の飽和した厚さが斜面の土層に入れば、FS に水圧の項を足す。勾配に比例する背景の崩れ(7.7)は、隆起と釣り合う削られる速さから決めた率で、地震による崩れもその中に含まれうる(二重に数えている可能性がある)
+- **注意**: 根の補強は植物の量によらない定数。地下水で湿った斜面ほど限界加速度が下がり、小さな揺れで崩れる
 
 ### 7.8 大気の気体 [法則]+[未換算]
 - 量 **[条件]**: 各マスの上の空気の柱の全量 = 地上の気圧 101325 Pa ÷ 重力 9.81 m/s² ÷ 空気のモル質量 0.028965 kg/mol = 3.57e5 mol/m²。体積の割合は CO2 420 ppm、O2 20.95%、N2 と Ar 79.01%(地球の今の値。惑星規模の条件)。気体の単位はエネルギー 1(= 6 mg C)を酸化して出る CO2 の量 × 1/0.02 = 0.3 g C = 0.025 mol。1 マス(100 m²)の柱は CO2 6.0e5、O2 3.0e8、N2 と Ar 1.13e9 単位
@@ -391,6 +392,7 @@ PM と PMF を通った値が **[未換算]** に当たる。1 回の更新に�
 - Millero, F. J., Feistel, R., Wright, D. G., McDougall, T. J. (2008) The composition of Standard Seawater and the definition of the Reference-Composition Salinity Scale. Deep-Sea Research I 55: 50–72
 - Montgomery, D. R., Brandon, M. T. (2002) Topographic controls on erosion rates in tectonically active mountain ranges. Earth and Planetary Science Letters 201: 481–489
 - Montgomery, D. R., Dietrich, W. E. (1988) Where do channels begin? Nature 336: 232–234
+- Montgomery, D. R., Dietrich, W. E. (1994) A physically based model for the topographic control on shallow landsliding. Water Resources Research 30: 1153–1171
 - Newmark, N. M. (1965) Effects of earthquakes on dams and embankments. Géotechnique 15: 139–160
 - Panikov, N. S. (1995) Microbial Growth Kinetics. Chapman & Hall, London
 - Penning de Vries, F. W. T. (1974) Substrate utilization and respiration in relation to growth and maintenance in higher plants. Netherlands Journal of Agricultural Science 22: 40–44
@@ -403,6 +405,7 @@ PM と PMF を通った値が **[未換算]** に当たる。1 回の更新に�
 - Rousk, J., Bååth, E. (2011) Growth of saprotrophic fungi and bacteria in soil. FEMS Microbiology Ecology 78: 17–30
 - Ryan, M. G. (1991) Effects of climate change on plant respiration. Ecological Applications 1: 157–167
 - Schmidt, K. M. et al. (2001) The variability of root cohesion as an influence on shallow landslide susceptibility in the Oregon Coast Range. Canadian Geotechnical Journal 38: 995–1024
+- Skempton, A. W., DeLory, F. A. (1957) Stability of natural slopes in London Clay. Proc. 4th Int. Conf. Soil Mechanics and Foundation Engineering 2: 378–381
 - Simard, A. J. (1968) The moisture content of forest fuels — I. A review of the basic concepts. Information Report FF-X-14, Forest Fire Research Institute, Department of Forestry and Rural Development, Ottawa
 - Sinsabaugh, R. L. et al. (2013) Carbon use efficiency of microbial communities: stoichiometry, methodology and modelling. Ecology Letters 16: 930–939
 - Stock, J. D., Montgomery, D. R. (1999) Geologic constraints on bedrock river incision using the stream power law. Journal of Geophysical Research 104: 4983–4993
