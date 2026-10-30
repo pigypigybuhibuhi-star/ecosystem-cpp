@@ -444,7 +444,7 @@ void update_animals(){
                     int ni=idx(nx,ny);
                     for(int t=agrid.b(ni);t<agrid.e(ni);t++){
                         const Animal& q=animals[agrid.items[t]];
-                        if(!q.alive||&q==&a||q.lin!=a.lin) continue;
+                        if(!q.alive||&q==&a) continue;   // 相手を観察の分類 lin で選ばない
                         if(q.body<q.size*MATURE_FRAC) continue;
                         mate=&q; break;
                     }

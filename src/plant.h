@@ -374,7 +374,7 @@ void update_plants(){
                     int ni=idx(nx,ny);
                     for(int t=pgrid.b(ni);t<pgrid.e(ni);t++){
                         const Plant& q=plants[pgrid.items[t]];
-                        if(!q.alive||&q==&p||q.lin!=p.lin) continue;
+                        if(!q.alive||&q==&p) continue;   // 相手を観察の分類 lin で選ばない
                         mate=&q; break;
                     }
                 }
