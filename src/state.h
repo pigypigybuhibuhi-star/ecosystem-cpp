@@ -180,7 +180,7 @@ struct Animal {
     float tox_resist; // 遺伝子: 毒に耐える
     float burrow;     // 遺伝子: 穴を掘る
     float nocturnal;  // 遺伝子: 夜に活動する
-    float store_fat;  // 遺伝子: 余剰を脂肪に回す傾向
+    float store_fat;  // 遺伝子: 脂肪の目標(体の維持費の store_fat × FAT_DAYS_MAX 日分)
     float repro_alloc;// 遺伝子: 余剰を繁殖に回す割合
     float fat;        // 状態: 蓄えた脂肪
     float depth;      // 状態: 今の潜り具合(0=地表)

@@ -540,7 +540,15 @@ const float TOXRES_COST     = LIN(PM(0.022f,ANIMAL_STRIDE),ANIMAL_STRIDE);  // �
 const float BURROW_COST     = LIN(PM(0.020f,ANIMAL_STRIDE),ANIMAL_STRIDE);  // 掘る体の維持費 [1分あたり 9.72e-05]
 const float BURROW_BUFFER   = 0.75f;   // 地中が和らげる気温の割合
 const float FAT_COST        = LIN(PM(0.012f,ANIMAL_STRIDE),ANIMAL_STRIDE);  // 脂肪を担ぐ維持費 [1分あたり 5.83e-05]
-const float FAT_MAX         = 8.0f;
+// 脂肪の目標は体の維持費の何日分か(D-2026-10-24-3 の作者の答え)。日数は遺伝子 store_fat(0〜1)× FAT_DAYS_MAX。
+// 昆虫の絶食に耐える日数は数日(Drosophila、Rion & Kawecki 2007)から数か月(休眠する種、Hahn & Denlinger 2011)まで幅があるので、
+// 上限を 60 日に置き、どこを選ぶかは進化に任せる [条件の幅]
+constexpr double FAT_DAYS_MAX = 60.0;
+// 糖(グリコーゲンとトレハロース)の短い貯え。絶食した昆虫は先に糖を約 1 日で使い切り、そのあと脂肪を使う
+// (Arrese & Soulages 2010)。エネルギーがこの日数分を超えた余りを脂肪に回し、下回れば脂肪を取り崩す [法則]
+constexpr double GLYCO_DAYS   = 1.0;
+// 1 回の更新の維持費を 1 日分に直す倍率(動物は ANIMAL_STRIDE tick ごとに更新する)
+const float UPD_PER_DAY     = (float)(DAY_MIN/(ANIMAL_STRIDE*DT));
 const float FAT_RATE        = FRAC(PMF(0.12f,ANIMAL_STRIDE),ANIMAL_STRIDE);  // 余剰を脂肪に回す速さ [率 0.000621 /分]
 const float NOCTURNAL_COST  = LIN(PM(0.014f,ANIMAL_STRIDE),ANIMAL_STRIDE);  // 夜目の維持費 [1分あたり 6.81e-05]
 
