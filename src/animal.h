@@ -376,7 +376,8 @@ void update_animals(){
                    +a.burrow*BURROW_COST+a.nocturnal*NOCTURNAL_COST
                    +a.fat*FAT_COST;
         // 基礎代謝と形質の維持費は組織の炭素に比例する。歩く費用は別に足す
-        float metab=A_SMR*a.body*CORPSE_RETURN*(1.f+upkeep/A_TRAIT_REF)+sp*A_MOVE_COST;
+        float maint=A_SMR*a.body*CORPSE_RETURN*(1.f+upkeep/A_TRAIT_REF);   // 体の維持費(1 回の更新)
+        float metab=maint+sp*A_MOVE_COST;
         float sen=senesce(a.age,a.lifespan,LIFE_MIN_A,LIFE_MAX_A);
         metab *= (1.f+sen);
         metab += LIFESPAN_COST*a.lifespan;
@@ -400,13 +401,17 @@ void update_animals(){
           o2_add(ci,-ox); co2_add(ci,ox);
           egest(ci,(fc-ox)/CO2_PER_ENERGY);
           a.energy -= spent; }
-        // 余剰を脂肪に回す。飢えれば取り崩す
-        if(a.energy>A_DIVIDE_TH*0.6f && a.fat<a.store_fat*FAT_MAX){
-            float put=std::min((a.energy-A_DIVIDE_TH*0.6f)*FAT_RATE,
-                               a.store_fat*FAT_MAX-a.fat);
+        // 余剰を脂肪に回す。飢えれば取り崩す。どちらも繁殖の閾値ではなく体の維持費の日数で測る(D-2026-10-24-3)。
+        // 糖の貯え GLYCO_DAYS 日分を超えた余りを、脂肪が store_fat × FAT_DAYS_MAX 日分になるまで回す
+        float day_cost=maint*UPD_PER_DAY;
+        float glyco=(float)GLYCO_DAYS*day_cost;
+        float fat_goal=a.store_fat*(float)FAT_DAYS_MAX*day_cost;
+        if(a.energy>glyco && a.fat<fat_goal){
+            float put=std::min((a.energy-glyco)*FAT_RATE,
+                               fat_goal-a.fat);
             a.energy-=put; a.fat+=put*0.85f;
             a_burn(co2.data(),o2.data(),ci,put*0.15f);   // 脂肪の合成の呼吸
-        } else if(a.energy<A_DIVIDE_TH*0.25f && a.fat>0.f){
+        } else if(a.energy<glyco && a.fat>0.f){
             float take=std::min(a.fat,FAT_DRAW);
             // 代謝の借りを脂肪で返す。借りの分は O2 をまだ使っていないので、O2 を 1:1 で使って CO2 に出す
             a_burn(co2.data(),o2.data(),ci,a_repay(a.energy,take));
