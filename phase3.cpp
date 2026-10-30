@@ -380,7 +380,7 @@ int main(int argc,char** argv){
                             p.brood=0.5f; p.n_fix=0.3f; p.n_store=1.0f;
                             p.lifespan=0.05f; p.parasite=0.f; p.carnivory=0.f;
                             p.fire_seed=0.f; p.repro_alloc=0.6f; p.seed_bank=0.f;
-                            p.defense=0.f; p.seed_wait=0; p.buoyancy=1.0f;
+                            p.def_const=0.5f; p.defense=0.f; p.seed_wait=0; p.buoyancy=1.0f;
                             p.mut_rate=0.3f;        p.mother=-1; p.father=-1; p.gen=0;
                             for(int k2=0;k2<N_IMMUNE;k2++) p.im[k2]=frand(0.f,1.f);
                             p.id=next_plant_id++; p.genet=p.id; p.lin=-1;
@@ -928,12 +928,12 @@ int main(int argc,char** argv){
                   }
                   dbg_gain=dbg_cost=0; dbg_n=0;
                   dbg_light=dbg_tf=dbg_wf=dbg_co2=0;
-                  { double sdf=0,sbk=0; int nseed=0, nice=0;
-                    for(const auto& p:plants){ sdf+=p.defense; sbk+=p.seed_bank;
+                  { double sdf=0,sdc=0,sbk=0; int nseed=0, nice=0;
+                    for(const auto& p:plants){ sdf+=p.defense; sdc+=p.def_const; sbk+=p.seed_bank;
                                                if(p.seed_wait>0) nseed++; }
                     for(int i=0;i<GRID_W*GRID_H;i++) if(ice[i]) nice++;
-                    printf("      defense %.3f (tough %.3f) | seedBank %.3f waiting %d | ice %d cells | slides %ld | quakes %ld\n",
-                           n?sdf/n:0.0, n?stg/n:0.0, n?sbk/n:0.0, nseed, nice,
+                    printf("      defense %.3f (tough %.3f, constitutive share %.3f) | seedBank %.3f waiting %d | ice %d cells | slides %ld | quakes %ld\n",
+                           n?sdf/n:0.0, n?stg/n:0.0, n?sdc/n:0.0, n?sbk/n:0.0, nseed, nice,
                            slide_events, quake_events); }
                   { int nl=0, nsat=0, ngs=0, nss=0; float cold=0.f; double sh=0, smax=0;
                     for(int i=0;i<GRID_W*GRID_H;i++){ if(sea[i]) continue; nl++; cold=std::min(cold,storm_dT[i]);

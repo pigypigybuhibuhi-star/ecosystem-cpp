@@ -10,7 +10,7 @@ void sea_plant_genes(Plant& p){
     for(int k=0;k<N_IMMUNE;k++) p.im[k]=frand(0.f,1.f);
     p.brood=0.1f; p.n_fix=0.0f; p.n_store=1.0f; p.lifespan=0.05f;
     p.parasite=0.f; p.carnivory=0.f; p.fire_seed=0.f; p.repro_alloc=0.5f;
-    p.seed_bank=0.f; p.defense=0.f; p.seed_wait=0; p.buoyancy=0.6f;
+    p.seed_bank=0.f; p.def_const=0.5f; p.defense=0.f; p.seed_wait=0; p.buoyancy=0.6f;
     p.mut_rate=0.3f;        p.mother=-1; p.father=-1; p.gen=0;
     p.id=next_plant_id++; p.genet=p.id; p.lin=-1;
 }
@@ -306,9 +306,11 @@ void update_plants(){
             // 貯めた水は土から来る。貯めたぶんだけ土の水が減る(海のマスでは海から入る)
             if(f>0.f){ p.water_store+=f; soil_water[ci]-=f; if(sea[ci]) g_bud.w_sea+=f; }
         }
-        // 誘導防御。食害の匂いを感じて初めて武装する。常時ではコストが高い
+        // 防御。常に張る分(構成的防御)と、食害の匂いを感じて張る分(誘導防御)の割合は遺伝子 def_const が決める。
+        // 常に張れば食われ始めから守れるが費用が続き、匂いで張れば費用は食害のあるときだけだが立ち上がりが遅れる
         float threat=clamp01(odor[2][ci]/1.5f);
-        p.defense += (p.tough*threat - p.defense)*INDUCE_RATE;
+        float dtarget=p.tough*(p.def_const+(1.f-p.def_const)*threat);
+        p.defense += (dtarget - p.defense)*INDUCE_RATE;
         p.defense -= p.defense*INDUCE_DECAY;
         if(p.defense<0.f) p.defense=0.f;
         if(p.defense>p.tough) p.defense=p.tough;
@@ -401,7 +403,7 @@ void update_plants(){
                 PICK(fire_tol); PICK(climb); PICK(sexual); PICK(brood);
                 PICK(n_fix); PICK(lifespan); PICK(parasite);
                 PICK(carnivory); PICK(fire_seed); PICK(repro_alloc); PICK(seed_bank);
-                PICK(buoyancy);
+                PICK(buoyancy); PICK(def_const);
                 #undef PICK
                 // 免疫は座位ごとに独立に受け継ぐ。組み合わせで新しい型が生まれる
                 for(int k=0;k<N_IMMUNE;k++)
@@ -446,6 +448,7 @@ void update_plants(){
             c.cold_tol  =mutate(c.cold_tol,  0.0f,1.0f);
             c.aquatic     =mutate(c.aquatic,     0.0f,1.0f);
             c.salt_tol    =mutate(c.salt_tol,    0.0f,1.0f);
+            c.def_const   =mutate(c.def_const,   0.0f,1.0f);
             c.drought_tol =mutate(c.drought_tol, 0.0f,1.0f);
             c.dorm_temp   =mutate(c.dorm_temp,  -20.0f,20.0f);
             c.store_cap   =mutate(c.store_cap,   0.0f,STORE_MAX);
