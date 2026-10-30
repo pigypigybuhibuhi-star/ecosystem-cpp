@@ -175,18 +175,23 @@ void update_plants(){
     }
     static int genet_tick=0;
     if(++genet_tick%GENET_INTERVAL==0){   // 地下茎の融通は10tickに一度で足りる
-        static std::unordered_map<int,std::pair<double,int>> genet;
+        // 各株は地下茎の通りやすさ a = 1−exp(−k·clonal·n) で共通の節につながる。節は蓄えを持たないので、
+        // その値は a で重みを付けた平均になり(キルヒホッフの電流則)、Σ a·(節 − E) = 0 で genet の合計が保たれる
+        struct GenetSum{ double aE=0, a=0; int n=0; };
+        static std::unordered_map<int,GenetSum> genet;
         genet.clear();
         for(const auto& p:plants){
             if(!p.alive||p.clonal<0.05f) continue;
-            auto& e=genet[p.genet]; e.first+=p.energy; e.second++;
+            double a=-std::expm1(-GENET_SHARE_K*p.clonal*(float)(GENET_INTERVAL*DT));
+            auto& e=genet[p.genet]; e.aE+=a*p.energy; e.a+=a; e.n++;
         }
         for(auto& p:plants){
             if(!p.alive||p.clonal<0.05f) continue;
             auto it=genet.find(p.genet);
-            if(it==genet.end()||it->second.second<2) continue;
-            float mean=(float)(it->second.first/it->second.second);
-            p.energy+=(mean-p.energy)*-std::expm1(-GENET_SHARE_K*p.clonal*(float)(GENET_INTERVAL*DT));
+            if(it==genet.end()||it->second.n<2) continue;
+            double a=-std::expm1(-GENET_SHARE_K*p.clonal*(float)(GENET_INTERVAL*DT));
+            double node=it->second.aE/it->second.a;
+            p.energy=(float)(p.energy+a*(node-p.energy));
         }
     }
     static int pphase=0;
