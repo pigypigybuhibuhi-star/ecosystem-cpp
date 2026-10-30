@@ -45,6 +45,7 @@ std::vector<Fld<Plant>> plant_schema(){
         F("lifespan",&Plant::lifespan,0.05), F("parasite",&Plant::parasite,0),
         F("carnivory",&Plant::carnivory,0), F("fire_seed",&Plant::fire_seed,0),
         F("repro_alloc",&Plant::repro_alloc,0.5), F("seed_bank",&Plant::seed_bank,0),
+        F("def_const",&Plant::def_const,0),
         F("defense",&Plant::defense,0), F("seed_wait",&Plant::seed_wait,0),
         F("id",&Plant::id,0), F("genet",&Plant::genet,0),
         F("age",&Plant::age,0), F("lin",&Plant::lin,-1),

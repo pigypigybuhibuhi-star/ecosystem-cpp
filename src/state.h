@@ -144,6 +144,7 @@ struct Plant {
     float im[N_IMMUNE];
     float water_store;      // 状態: 実際に貯めている水
     float eff_height;       // 状態: つるで得た分を含む実効的な高さ
+    float def_const;        // 遺伝子: 防御の目標のうち、食害の匂いによらず常に張る分の割合(残りは匂いで張る)
     float defense;          // 状態: 今張っている防御(0〜tough)
     int   seed_wait;        // 状態: 土中で発芽を待つ残り時間
     bool  dormant;          // 状態: 休眠しているか
@@ -245,7 +246,7 @@ inline void sg_vec_p(const Plant& p,double* v){
     v[0]=p.max_height; v[1]=p.shade_tol; v[2]=p.tough;      v[3]=p.clonal;
     v[4]=p.disperse;   v[5]=p.cold_tol;  v[6]=p.aquatic;    v[7]=p.drought_tol;
     v[8]=p.climb;      v[9]=p.parasite;  v[10]=p.carnivory; v[11]=p.brood;
-    v[12]=p.salt_tol;
+    v[12]=p.salt_tol;  v[13]=p.def_const;
 }
 std::vector<std::vector<int>> animal_grid(GRID_W*GRID_H);
 int next_animal_id = 0;
@@ -342,10 +343,10 @@ const int N_SG_A = 13;
 const char* SG_A_NAME[N_SG_A]={
     "diet","detr","reach","size","speed","jaw",
     "cold","aqua","resp","arbor","sexual","brood","salt"};
-const int N_SG_P = 13;
+const int N_SG_P = 14;
 const char* SG_P_NAME[N_SG_P]={
     "maxH","shade","tough","clonal","disp","cold",
-    "aqua","dry","climb","paras","carni","brood","salt"};
+    "aqua","dry","climb","paras","carni","brood","salt","defc"};
 double sg_a_pop[N_SG_A]={0}, sg_a_rep[N_SG_A]={0};
 double sg_p_pop[N_SG_P]={0}, sg_p_rep[N_SG_P]={0};
 long   sg_a_np=0, sg_a_nr=0, sg_p_np=0, sg_p_nr=0;
