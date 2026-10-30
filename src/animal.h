@@ -178,8 +178,8 @@ void update_animals(){
                           / (1.f + SLOPE_COEF*slope[hci]);             // 急坂は遅い
         if(terr<0.05f) terr=0.05f;
 
-        // 酸素の分圧。窒素がないので、他のガスとの比で見る
-        float o2f = o2[hci]/std::max(1e-6f,o2[hci]+co2[hci]+N2_BASE);
+        // 酸素の分圧。柱の気体の全量との比で見る
+        float o2f = o2_at(hci)/std::max(1e-6f,o2_at(hci)+co2_at(hci)+N2_COL);
         if(sea[hci]) o2f *= DISSOLVED_O2;              // 水に溶ける酸素は僅か
         o2f *= std::exp(-altitude(hci)*ALT_O2_DECAY);  // 高所は空気が薄い
         float o2rel = o2f/0.21f;                       // 地球の21%を1.0とする
@@ -389,7 +389,7 @@ void update_animals(){
         }
         // 呼吸: 酸素の分圧で効率が決まる。水中と高所は薄い
         float o2_need = metab*O2_PER_METAB*(1.f-RESP_EFFICIENCY*a.resp);
-        float avail   = std::min(o2_need,o2[ci]);
+        float avail   = std::min(o2_need,o2_at(ci));
         float eff=(o2_need>1e-9f)?avail/o2_need:1.f;
         if(eff<0.15f) eff=0.15f;
         // 使ったエネルギーは糖の酸化(または発酵)でまかなう。体にある分だけが燃料になる。
@@ -397,7 +397,7 @@ void update_animals(){
         // マスの O2 で足りない分は発酵で、炭素は乳酸などの有機物のまま体の外(糞)に出る
         { float spent=metab/eff + a.resp*RESP_COST;
           float fc=std::min(spent,std::max(0.f,a.energy))*CO2_PER_ENERGY;
-          float ox=std::min(fc,std::max(0.f,o2[ci]));
+          float ox=std::min(fc,std::max(0.f,o2_at(ci)));
           o2_add(ci,-ox); co2_add(ci,ox);
           egest(ci,(fc-ox)/CO2_PER_ENERGY);
           a.energy -= spent; }
@@ -457,7 +457,7 @@ void update_animals(){
             { int bx=(int)a.x, by=(int)a.y;
               int bi0=(bx>=0&&bx<GRID_W&&by>=0&&by<GRID_H)?idx(bx,by):0;
               float c=invest*(1.f-nb*share)*CO2_PER_ENERGY;
-              o2_add(bi0,-std::min(c,o2[bi0])); co2_add(bi0,c); }
+              o2_add(bi0,-std::min(c,o2_at(bi0))); co2_add(bi0,c); }
             for(int bi=0;bi<nb;bi++){
             // 子の体 0.10 を作る費用は子の取り分から払う。足りない卵は育たずに死骸になる
             float cE=invest*share, body0=0.10f*BODY_GROW_COST;
@@ -579,7 +579,7 @@ void update_animals(){
             soil_n[ri]+=cp.n;                                         // 残りの窒素も無機化する(炭素の無い糞の窒素も)
             if(cp.energy<=0.f) continue;
             co2_add(ri,cp.energy*CO2_PER_ENERGY);
-            o2_add(ri,-std::min(cp.energy*CO2_PER_ENERGY,o2[ri]));   // 好気的な分解は O2 を 1:1 で使う
+            o2_add(ri,-std::min(cp.energy*CO2_PER_ENERGY,o2_at(ri)));   // 好気的な分解は O2 を 1:1 で使う
         }
     }
     corpses.erase(std::remove_if(corpses.begin(),corpses.end(),

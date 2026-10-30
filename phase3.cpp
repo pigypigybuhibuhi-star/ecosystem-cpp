@@ -855,14 +855,14 @@ int main(int argc,char** argv){
                     if(have){
                         double cext=g_bud.c_relax+g_bud.c_edge+g_bud.c_trans+g_bud.c_immig;
                         double next=g_bud.n_sink+g_bud.n_runoff+g_bud.n_upwell+g_bud.n_clamp+g_bud.n_fix+g_bud.n_fire+g_bud.n_carn+g_bud.n_immig;
-                        printf("      budget C: atm %.1f bio %.1f (P %.1f A %.1f dead %.1f mic %.1f) | dC %+.2f = ext %+.2f (relax %+.2f edge %+.2f trans %+.3f immig %+.2f) + internal %+.2f\n",
+                        printf("      budget C: atm(dev) %.1f bio %.1f (P %.1f A %.1f dead %.1f mic %.1f) | dC %+.2f = ext %+.2f (relax %+.2f edge %+.2f trans %+.3f immig %+.2f) + internal %+.2f\n",
                                catm,cbio,ep*CO2_PER_ENERGY,ea*CO2_PER_ENERGY,ec*CO2_PER_ENERGY,em*CO2_PER_ENERGY,
                                ctot-pc,cext,g_bud.c_relax,g_bud.c_edge,g_bud.c_trans,g_bud.c_immig,ctot-pc-cext);
                         // O2 は単独では保存しない。光合成で有機物の炭素 1 につき O2 を 1 出し、呼吸・分解・燃焼で 1:1 で使う。
                         // 内部の O2 の増減は生体の炭素の増減と等しいはずで、その差(redox)が破れ。
                         // 外から入った生き物の炭素は、この土地の光合成で作ったものではないので除く
                         double oint=oatm-po-g_bud.o_relax-g_bud.o_edge-g_bud.o_trans;
-                        printf("      budget O2: atm %.1f | dO2 %+.2f = relax %+.2f edge %+.2f trans %+.3f + internal %+.2f (dCbio %+.2f, redox %+.2f)\n",
+                        printf("      budget O2: atm(dev) %.1f | dO2 %+.2f = relax %+.2f edge %+.2f trans %+.3f + internal %+.2f (dCbio %+.2f, redox %+.2f)\n",
                                oatm,oatm-po,g_bud.o_relax,g_bud.o_edge,g_bud.o_trans,oint,cbio-pcb-g_bud.c_immig,oint-(cbio-pcb-g_bud.c_immig));
                         printf("      budget N: soil land %.1f sea %.1f plant %.1f dead %.1f | dN %+.2f = sink %+.2f runoff %+.2f upwell %+.2f clamp %+.3f fix %+.2f fire %+.3f carn %+.3f immig %+.3f + internal %+.2f\n",
                                nl,ns,np,nc,ntot-pn,g_bud.n_sink,g_bud.n_runoff,g_bud.n_upwell,g_bud.n_clamp,g_bud.n_fix,g_bud.n_fire,g_bud.n_carn,g_bud.n_immig,ntot-pn-next);
@@ -899,7 +899,7 @@ int main(int argc,char** argv){
                   for(const auto& a:animals){ srs+=a.resp; sae+=a.aerobic; }
                   int na3=(int)animals.size();
                   double o2m2=0,tot2=0;
-                  for(int i=0;i<GRID_W*GRID_H;i++){ o2m2+=o2[i]; tot2+=o2[i]+co2[i]+N2_BASE; }
+                  for(int i=0;i<GRID_W*GRID_H;i++){ o2m2+=o2_at(i); tot2+=o2_at(i)+co2_at(i)+N2_COL; }
                   printf("      O2 partial:%.1f%% (Earth 21%%) | resp:%.3f  aerobic:%.0f%%\n",
                          tot2>0?100.0*o2m2/tot2:0.0, na3?srs/na3:0.0,
                          na3?100.0*sae/na3:0.0); }
@@ -1065,7 +1065,7 @@ int main(int argc,char** argv){
                 for(int i=0;i<GRID_W*GRID_H;i++){ c1+=co2[i]; c2+=o2[i]; }
                 int alp=0,ala=0;
                 for(const auto& L:lineages) if(L.alive){ if(L.kind==0) alp++; else ala++; }
-                printf("      A:%d speed:%.3f reach:%.3f body:%.3f diet:%.3f detr:%.3f jaw:%.3f cold:%.3f aq:%.3f | CO2:%.3f O2:%.3f corpse:%d(plant %d) | sp P%d A%d\n",
+                printf("      A:%d speed:%.3f reach:%.3f body:%.3f diet:%.3f detr:%.3f jaw:%.3f cold:%.3f aq:%.3f | CO2dev:%.4f O2dev:%.4f corpse:%d(plant %d) | sp P%d A%d\n",
                        an,an?p1/an:0,an?p2/an:0,an?p3/an:0,an?p4/an:0,an?adt/an:0,
                        an?p5/an:0,an?p6/an:0,an?aaq/an:0,
                        c1/(GRID_W*GRID_H),c2/(GRID_W*GRID_H),
@@ -1140,8 +1140,8 @@ int main(int argc,char** argv){
                 if(sea[i]) c=sf::Color((std::uint8_t)(c.r*0.55f),(std::uint8_t)(c.g*0.55f),
                                        (std::uint8_t)(c.b*0.55f));
             } else if(view_mode==2){
-                float ca=clamp01(co2[i]/(CO2_BASE*1.5f));
-                float cb=clamp01(o2[i]/(O2_BASE*1.5f));
+                float ca=clamp01(co2_at(i)/(CO2_COL*1.5f));
+                float cb=clamp01(o2_at(i)/(O2_COL*1.5f));
                 c=sf::Color((std::uint8_t)(40+215*ca),(std::uint8_t)(40+215*cb),
                             (std::uint8_t)(50+50*std::min(ca,cb)));
             } else if(view_mode==3){
@@ -1677,8 +1677,8 @@ int main(int argc,char** argv){
                 legend(b,sf::Color(200,220,200));
             } else {
                 float py=panel("大気",5);
-                lineF(py,h_co2,0.f,CO2_BASE*1.5f,sf::Color(230,90,200));
-                lineF(py,h_o2 ,0.f,O2_BASE*1.5f ,sf::Color(70,180,240));
+                lineF(py,h_co2,-1.f,1.f,sf::Color(230,90,200));   // 柱の量からのずれのマスの平均(気体の単位)
+                lineF(py,h_o2 ,-1.f,1.f,sf::Color(70,180,240));
                 // 今見ている地図に対応するグラフを重ねる
                 switch(view_mode){
                 case 4: lineF(py,h_soil,0.f,1.f,sf::Color(90,190,255));  break;

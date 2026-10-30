@@ -145,11 +145,18 @@ const float STORE_FILL      = LIN(PM(0.020f,PLANT_STRIDE),PLANT_STRIDE);  // 湿
 const float STORE_MAX       = 3.00f;   // 遺伝子が届く貯水量の上限
 
 // --- 大気 ---
-const float CO2_BASE        = 8.00f;   // 大気は巨大な貯蔵庫
-const float O2_BASE         = 8.00f;
-const float CO2_PER_ENERGY  = 0.020f;
+const float CO2_PER_ENERGY  = 0.020f;  // エネルギー 1 を酸化して出る CO2 の量(気体の単位)
 const float O2_PER_METAB    = 0.020f;
-const float N2_BASE         = 24.0f;   // O2分圧を地球並み(約21%)にする
+// 大気の柱 [条件]: 各マスの上の空気の全量を、地上の気圧 101325 Pa ÷ 重力 9.81 m/s² ÷ 空気のモル質量 0.028965 kg/mol
+// = 3.57e5 mol/m² とし、体積の割合 CO2 420 ppm・O2 20.95%・N2 と Ar 79.01%(地球の今の値。惑星規模の条件)で分ける。
+// 気体の単位はエネルギー 1(= 6 mg C、D-2026-10-24-2)× CO2_PER_ENERGY なので、1 単位 = 0.3 g C = 0.025 mol。
+// co2 と o2 の場は、この柱の量からのずれだけを持つ(柱は約 6e5 と 3e8 単位で、float では生き物の小さな出入りが消えるため)
+const double AIR_MOL_M2     = 101325.0/9.81/0.028965;            // [3.57e5 mol/m²]
+const double GAS_UNIT_MOL   = 6e-3/12.011/CO2_PER_ENERGY;        // 気体の 1 単位のモル数 [0.025 mol]
+const double AIR_COL_UNITS  = AIR_MOL_M2*CELL_M*CELL_M/GAS_UNIT_MOL;   // 1 マスの柱の空気の全量 [1.43e9 単位]
+const float CO2_COL         = (float)(AIR_COL_UNITS*420e-6);    // [6.0e5 単位]
+const float O2_COL          = (float)(AIR_COL_UNITS*0.2095);    // [3.0e8 単位]
+const float N2_COL          = (float)(AIR_COL_UNITS*0.7901);    // N2 と Ar [1.13e9 単位]。生き物は出し入れしない
 const float SOIL_N_BASE     = 0.35f;   // 土壌の窒素
 const float N_PER_GROWTH    = 0.055f;  // 体を作るのに要する窒素
 const float N_FIX_COST      = LIN(PM(0.006f));  // 純益0.048に対して現実的な負担に [1分あたり 5.83e-05]
@@ -418,7 +425,7 @@ inline void co2_add(int c,float d);
 inline void o2_add (int c,float d);
 inline void a_burn(float* co2g,float* o2g,int cell,float e){
     if(e<=0.f) return;
-    float c=e*CO2_PER_ENERGY; o2_add(cell,-std::min(c,o2g[cell])); co2_add(cell,c);
+    float c=e*CO2_PER_ENERGY; o2_add(cell,-std::min(c,O2_COL+o2g[cell])); co2_add(cell,c);
 }
 // 負のエネルギーは、体に無い燃料で払った借り(その炭素はまだ CO2 に出ていない)。
 // 後から体に入った燃料(食べ物・脂肪)は、借りの分だけ酸化されて CO2 になる。返す量を返す

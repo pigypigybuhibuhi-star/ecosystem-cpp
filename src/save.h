@@ -137,7 +137,7 @@ std::vector<Fld<int>> cell_schema(){
     auto iv=[&](const std::string& n,std::vector<int>& v,double d){
         s.push_back({n,[&v](const int& i){return (double)v[i];},
                        [&v](int& i,double x){v[i]=(int)x;},d}); };
-    fv("elev",elev,0.4); fv("co2",co2,CO2_BASE); fv("o2",o2,O2_BASE);
+    fv("elev",elev,0.4); fv("co2_dev",co2,0); fv("o2_dev",o2,0);
     fv("co2_res",co2_res,0); fv("o2_res",o2_res,0);
     fv("soil_n",soil_n,SOIL_N_BASE); fv("soil_water",soil_water,0.4);
     fv("gw_h",gw_h,0); fv("salt_soil",salt_soil,0); fv("salt_gw",salt_gw,0);
