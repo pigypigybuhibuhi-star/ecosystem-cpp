@@ -49,15 +49,24 @@ void slide_at(int ci){
     if(!sea[ci] && elev[ci]<SEA_LEVEL) elev[ci]=SEA_LEVEL;           // 陸のまま(海の判定は起動時の地形で決まる)
     slope_around(ci); slope_around(cur);
 }
+// 無限斜面の安全率 FS = c'/(γ z sinα cosα) + (1 − m γw/γ) tanφ'/tanα。m は崩れる厚さのうち地下水で飽和した割合
+// (帯水層は地表から GW_DEPTH_M の厚さで、飽和した厚さ gw_h が GW_DEPTH_M − SLIDE_DEPTH_M を超えた分が崩れる層に入る)
+inline double slope_fs(int ci){
+    double s=slope[ci];
+    double h=std::sqrt(1.0+s*s), sa=s/h, ca=1.0/h;
+    double m=std::min(1.0,std::max(0.0,(double)(gw_h[ci]-(GW_DEPTH_M-SLIDE_DEPTH_M))/SLIDE_DEPTH_M));
+    return SLOPE_C_KPA/(SLOPE_GAMMA*SLIDE_DEPTH_M)/(sa*ca)+(1.0-m*WATER_GAMMA/SLOPE_GAMMA)*REPOSE_SLOPE/s;
+}
 void update_slides(){
-    // 崖崩れ。急斜面が滑り、その場の生物を押し流す
+    // 崖崩れ。地下水が崩れる層に上がり、安全率が 1 を下回った斜面が滑り、その場の生物を押し流す
     if(g_replay){                      // 再生中は記録の各件だけを起こす
         ev_replay_due(EV_SLIDE,[](const EnvEvent& e){ slide_at(idx(e.x,e.y)); });
         return;
     }
+    const float wet=GW_DEPTH_M-SLIDE_DEPTH_M;
     for(int ci=0;ci<GRID_W*GRID_H;ci++){
-        if(sea[ci]||slope[ci]<SLIDE_SLOPE) continue;
-        if(dist01(rng)>=SLIDE_RATE*(slope[ci]/SLIDE_SLOPE)) continue;
+        if(sea[ci]||gw_h[ci]<=wet||slope[ci]<=0.f) continue;   // 乾いた斜面は FS > 1(粘着力と摩擦だけで立つ)
+        if(slope_fs(ci)>=1.0) continue;
         slide_at(ci);
     }
 }
