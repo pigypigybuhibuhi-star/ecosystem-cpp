@@ -145,7 +145,8 @@ void update_plants(){
       acc+=std::chrono::duration<double,std::milli>(t_b-t_a).count();
       if(++cnt>=60){ printf("  [prof] 光合成ループ %.1f ms\n",acc/cnt); acc=0; cnt=0; } }
     // 寄生: 吸器を同じマスの最も大きな株に刺し、エネルギーを直接奪う。
-    // 宿主の tough が防御として働く
+    // 宿主の tough が防御として働く。吸器が宿主の維管束とつながる面の広さは吸器への投資 parasite に
+    // 比例するので、奪う率は parasite × 刺さり具合。閾値は置かず、寄生者も宿主になりうる
     static int para_tick=0;
     if(++para_tick%PARA_INTERVAL==0)
     for(int ci=0;ci<GRID_W*GRID_H;ci++){
@@ -154,7 +155,6 @@ void update_plants(){
         int host=-1; float best=-1.f;
         for(int t=b0;t<e0;t++){
             const Plant& q=plants[pgrid.items[t]];
-            if(q.parasite>0.30f) continue;          // 寄生者は宿主にしない
             if(q.energy>best){ best=q.energy; host=pgrid.items[t]; }
         }
         if(host<0) continue;
@@ -162,9 +162,9 @@ void update_plants(){
             int pi=pgrid.items[t];
             if(pi==host) continue;
             Plant& q=plants[pi];
-            if(q.parasite<0.10f) continue;
+            if(q.parasite<=0.f) continue;
             float pierce=q.parasite/(q.parasite+plants[host].defense);
-            float drain=plants[host].energy*-std::expm1(-PARASITE_DRAIN_K*pierce*(float)(PARA_INTERVAL*DT));
+            float drain=plants[host].energy*-std::expm1(-PARASITE_DRAIN_K*q.parasite*pierce*(float)(PARA_INTERVAL*DT));
             plants[host].energy-=drain;
             q.energy+=drain*0.85f;
             a_burn(co2.data(),o2.data(),ci,drain*0.15f);   // 同化しなかった 15% は寄生者の呼吸で CO2 に(O2 を 1:1)
