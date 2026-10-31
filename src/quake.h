@@ -21,15 +21,21 @@ inline void qk_rupture(float mag,float ex,double& xa,double& xb){
     xa=std::max((double)QK_FAULT_X0,ex-0.5*L); xb=std::min((double)QK_FAULT_X1,ex+0.5*L);
 }
 // 区画の各マスの揺れを求め、限界加速度を超えた斜面をニューマーク法の確率で崩す。区画の中の最大加速度(g)を返す
-float quake_shake(float mag,float ex){
+// 揺れはその tick の地面の加速度(g)として shake_g に残し、動物の感覚器(揺れの帯)が読む。次の tick の初めに消す
+std::vector<float> shake_g(GRID_W*GRID_H,0.f);
+bool shake_on=false;
+float quake_shake(float mag,float ex,bool slides=true){
     double xa,xb; qk_rupture(mag,ex,xa,xb);
     float amax=0.f;
+    shake_on=true;
     for(int ci=0;ci<GRID_W*GRID_H;ci++){
         double x=ci%GRID_W+0.5, y=ci/GRID_W+0.5;
         double dx= x<xa? xa-x : (x>xb? x-xb : 0.0), dy=y-QK_FAULT_Y;
         double d=std::sqrt(dx*dx+dy*dy)*CELL_M*1e-3, r=std::sqrt(d*d+7.3*7.3);
         double A=std::pow(10.0,-1.02+0.249*mag-std::log10(r)-0.00255*r);
         if(A>amax) amax=(float)A;
+        if((float)A>shake_g[ci]) shake_g[ci]=(float)A;
+        if(!slides) continue;
         double s=slope[ci];
         if(sea[ci]||s<=0.0) continue;
         double sa=s/std::sqrt(1.0+s*s);
@@ -54,8 +60,10 @@ void quake_at(float mag,float ex,bool main){
            g_frame,mag,main?"main":"after",ex,a,slide_events-s0);
 }
 void update_quakes(){
+    if(shake_on){ std::fill(shake_g.begin(),shake_g.end(),0.f); shake_on=false; }
     if(g_replay){                      // 再生中は記録の各件だけ。再生した揺れからは崩れを起こさない(崩れは記録の各件で再生する)
-        ev_replay_due(EV_QUAKE,[](const EnvEvent&){ quake_events++; },false);
+        // 揺れそのもの(感覚の物理)は通常通り起こし、動物が感じ取れるようにする
+        ev_replay_due(EV_QUAKE,[](const EnvEvent& e){ quake_events++; quake_shake(e.strength,e.x+0.5f,false); },false);
         return;
     }
     if(g_frame==g_quake_force_t) quake_at(g_quake_force_m,GRID_W*0.5f,true);

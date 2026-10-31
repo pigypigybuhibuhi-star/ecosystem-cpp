@@ -88,7 +88,7 @@ void draw_nn(sf::RenderWindow& win,const sf::Font& font,const Animal& a,
                         static const char* TN[N_TUNE]={
                             "植物","小型","大型","死骸","炎","林冠","病原",
                             "匂:生体","匂:腐敗","匂:食害","匂:煙",
-                            "同種","水"};
+                            "同種","水","湿度","揺れ"};
                         int bd=(int)(S.tune*N_TUNE); if(bd>N_TUNE-1) bd=N_TUNE-1;
                         snprintf(buf,32,"%s %+.0f r%.1f",TN[bd],S.angle*57.3f,S.range);
                         nc = (bd>=7) ? sf::Color(220,170,255)
@@ -98,7 +98,8 @@ void draw_nn(sf::RenderWindow& win,const sf::Font& font,const Animal& a,
             } else snprintf(buf,32,"(none)");
             nm=buf;
         } else {
-            static const char* IN[5]={"体力","気温","水分","体格","常時"};
+            static const char* IN[N_IN-N_SENSOR]={"体力","気温","水分","体格","常時","明るさ","再帰1","再帰2"};
+            static_assert(N_IN-N_SENSOR==8,"入力の名前の数");
             nm=IN[k-N_SENSOR]; nc=sf::Color(190,190,200);
         }
         sf::CircleShape d(active?5.f:3.f); d.setOrigin({active?5.f:3.f,active?5.f:3.f});

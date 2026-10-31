@@ -59,20 +59,31 @@ void update_animals(){
         // それぞれの感覚器が、自分の向いた方角に、自分の射程だけ探る
         float in[N_IN];
         float sensor_span=0.f;
+        int sci=idx(std::max(0,std::min(GRID_W-1,(int)a.x)),
+                    std::max(0,std::min(GRID_H-1,(int)a.y)));
+        // 目に届く光。昼の目は暗くなると見えなくなり、夜目(nocturnal)が利くほど暗くても見える。
+        // 夜目は能力で、いつ動くかは神経網が明るさの入力から決める
+        float vis=daylit[sci]+(1.f-daylit[sci])*a.nocturnal;
         for(int k=0;k<N_SENSOR;k++){
             in[k]=0.f;
             const Animal::Sensor& S=a.sen[k];
             if(S.range<SENSOR_MIN) continue;      // 器官として成立していない
             sensor_span+=S.range;
+            int band=(int)(S.tune*N_TUNE); if(band>N_TUNE-1) band=N_TUNE-1;
+            // 視覚の帯(植物・動物・死骸・炎・林冠・病原・水際)の射程は光に縛られる。
+            // 炎は自ら光るので縛らない。匂い・体表の手がかり・湿度・揺れは光によらない
+            float range=S.range;
+            if(band<=6 && band!=4) range*=vis;
+            if(band==12) range*=vis;
+            if(range<=0.f) continue;
             float ang=a.dir+S.angle;
             float cs=std::cos(ang), sn=std::sin(ang);
             for(int s=1;s<=RAY_STEPS;s++){
-                float d=S.range*s/(float)RAY_STEPS;
+                float d=range*s/(float)RAY_STEPS;
                 int rx=(int)(a.x+cs*d), ry=(int)(a.y+sn*d);
                 if(rx<0||rx>=GRID_W) continue;
                 if(ry<0||ry>=GRID_H) continue;
                 int ri=idx(rx,ry);
-                int band=(int)(S.tune*N_TUNE); if(band>N_TUNE-1) band=N_TUNE-1;
                 float sig=0.f;
                 switch(band){
                 case 0: if(!pgrid.empty_at(ri)) sig=1.f; break;      // 植物
@@ -106,24 +117,25 @@ void update_animals(){
                       sig=std::min(1.f,c*0.45f); }
                     break;
                 case 12: sig=sea[ri]?1.f:0.f; break;                 // 水際
+                case 13: sig=rel_humidity(ri); break;                // 湿度。触角の湿度受容器(雨雲の前触れ)
+                case 14: sig=clamp01(shake_g[ri]); break;            // 地面の揺れ。重力の加速度(1 g)で振り切れる
                 // 嗅覚。濃さそのものを読む。遮蔽を越え、時間に残った跡も追える
                 default: sig=clamp01(odor[band-7][ri]/ODOR_SCALE); break;
                 }
-                if(sig>0.02f){ in[k]=sig*(1.f-d/S.range); break; }
+                if(sig>0.02f){ in[k]=sig*(1.f-d/range); break; }
             }
         }
-        int sci=idx(std::max(0,std::min(GRID_W-1,(int)a.x)),
-                    std::max(0,std::min(GRID_H-1,(int)a.y)));
         in[N_SENSOR+0]=std::min(1.f,a.energy/A_DIVIDE_TH);
         in[N_SENSOR+1]=clamp01((temper[sci]+30.f)/70.f);
         in[N_SENSOR+2]=soil_water[sci];
         in[N_SENSOR+3]=std::min(1.f,a.body/3.f);   // 自分の体格。戦うか逃げるかを分ける
         in[N_SENSOR+4]=1.f;                        // バイアス
+        in[IN_LIGHT]=daylit[sci];                  // 明るさ。昼に動くか夜に動くかは神経網が決める
         // 再帰入力。tanh を通しているので本来は有界だが、念のため縛る
         for(int k=0;k<N_REC;k++){
             float r=a.lesion?0.f:a.rec[k];   // 陰性対照は再帰の入力を切る(試験器の lesion と同じ)
             if(!(r>-1.5f&&r<1.5f)) r=0.f;   // NaN もここで潰れる
-            in[N_SENSOR+5+k]=r;
+            in[IN_REC+k]=r;
         }
         // 神経網。計算は brain_forward(試験器と同じもの)
         float out[N_OUT];
@@ -132,7 +144,9 @@ void update_animals(){
         float o0=out[0], o1=out[1];
         float want_eat   =out[2];   // 採食するか
         float want_attack=out[3];   // 襲うか
-        for(int k=0;k<N_REC;k++) a.rec[k]=out[4+k];   // 次のtickへ持ち越す
+        float want_climb =out[4];   // 登る(+)/降りる(−)
+        float want_dig   =out[5];   // 潜る(+)/出る(−)
+        for(int k=0;k<N_REC;k++) a.rec[k]=out[N_ACT+k];   // 次のtickへ持ち越す
         if(g_track_f||g_trig_f) field_record(a,g_frame,in,out);
         // 神経組織は高くつく。ニューロンと結線の数に比例する
         float brain_use=n_node*(NODE_COST/SYN_COST)+n_syn;
@@ -151,10 +165,11 @@ void update_animals(){
         float bearable = canopy_h[hci]*BRANCH_SUPPORT/std::max(0.15f,a.body);
         float reachable = std::min(canopy_h[hci],bearable);
 
-        // 登り降り。登攀が巧いほど安く登れる
-        float want = reachable*a.arboreal;
-        if(want>a.perch+0.02f){
-            float up=std::min(want-a.perch,CLIMB_RATE0+CLIMB_RATE1*a.arboreal);
+        // 登り降り。登るか降りるかは神経網の出力(want_climb)が決める。
+        // 登攀の能力 arboreal は、届く高さのうちどこまで登れるかと、登る速さと費用を決める
+        float ceil_h = reachable*a.arboreal;
+        if(want_climb>ACT_THRESH && ceil_h>a.perch){
+            float up=std::min(ceil_h-a.perch,CLIMB_RATE0+CLIMB_RATE1*a.arboreal);
             a.perch+=up;
             float e=up*CLIMB_UP_COST/(0.25f+a.arboreal);
             a_burn(co2.data(),o2.data(),hci,std::min(e,a.energy));
@@ -169,8 +184,8 @@ void update_animals(){
                 a_burn(co2.data(),o2.data(),hci,std::min(e,a.energy));
                 a.energy-=e;
             }
-        } else if(a.perch>want){
-            a.perch=std::max(want,a.perch-DESCEND_RATE);    // 降りるのは安い
+        } else if(want_climb<-ACT_THRESH && a.perch>0.f){
+            a.perch=std::max(0.f,a.perch-DESCEND_RATE);    // 降りるのは安い
         }
         if(a.perch<0.f) a.perch=0.f;
 
@@ -222,8 +237,9 @@ void update_animals(){
         else { a.x=nx; a.y=ny; }
         int gx=(int)a.x, gy=(int)a.y;
         int ci=(gx>=0&&gx<GRID_W&&gy>=0&&gy<GRID_H)?idx(gx,gy):0;
-        // 潜り具合。地中は気温が和らぐ
-        a.depth += (a.burrow - a.depth)*BURROW_RATE;
+        // 潜り具合。潜るか出るかは神経網の出力(want_dig)が決め、潜る能力 burrow がどこまで潜れるかを決める。地中は気温が和らぐ
+        if(want_dig>ACT_THRESH)       a.depth += (a.burrow - a.depth)*BURROW_RATE;
+        else if(want_dig<-ACT_THRESH) a.depth -= a.depth*BURROW_RATE;
         float felt = temper[ci];
         if(a.depth>0.05f){
             float year_mean=TEMP_EQUATOR
@@ -237,9 +253,6 @@ void update_animals(){
         }
         float dT=(felt-opt_temp_a(a))/25.f;
         float act=std::exp(-dT*dT)*o2fit;   // 酸素が薄ければ動きも鈍る
-        // 昼夜。夜行性なら夜に本領を発揮する
-        float night=1.f-daylit[ci];      // その土地が今、昼か夜か
-        act *= (0.35f + 0.65f*(a.nocturnal*night + (1.f-a.nocturnal)*daylit[ci]));
         // 潜っていれば地表のものを食えない
         if(a.depth>0.5f) act*=0.15f;
 
