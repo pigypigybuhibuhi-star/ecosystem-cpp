@@ -250,7 +250,9 @@ void update_animals(){
             float plant_dig = 1.f - cap_sum*cap_sum;
             float detr_dig  = a.detritus;
             float meat_dig  = a.diet;
-            if(plant_dig>0.01f && want_eat>ACT_THRESH){
+            // 食べるかどうかは神経網の出力(want_eat)が決める。消化の能力は一口から得る量と費用だけを決め、
+            // 能力の値で行動を打ち切る閾値は置かない(能力が 0 なら得るものも 0)
+            if(plant_dig>0.f && want_eat>ACT_THRESH){
                 // 摂食量は体格に比例する。大きい体は多く処理できる
                 int max_bites0=1+(int)(a.body*2.0f);   // 段階 3 より前の 1 回の更新あたり
                 if(max_bites0>6) max_bites0=6;
@@ -292,7 +294,7 @@ void update_animals(){
                         bool is_plant=(corpses[pk].origin==0);
                         float cap =is_plant?detr_dig:meat_dig;
                         float loss=is_plant?DETRITUS_LOSS:MEAT_LOSS;
-                        if(cap<=0.005f) continue;
+                        if(cap<=0.f) continue;
                         float bite=corpses[pk].energy*SCAV_EFF*cap;
                         float bn=corpses[pk].n*std::min(1.f,SCAV_EFF*cap);
                         corpses[pk].energy-=bite; corpses[pk].n-=bn;
@@ -303,7 +305,7 @@ void update_animals(){
                 }
             }
             // 生きた動物を襲う
-            if(meat_dig>0.02f && want_attack>ACT_THRESH){
+            if(meat_dig>0.f && want_attack>ACT_THRESH){
                 int bx=(int)a.x, by=(int)a.y, pk=-1;
                 for(int dy=-1;dy<=1&&pk<0;dy++) for(int dx=-1;dx<=1&&pk<0;dx++){
                     int nx=bx+dx, ny=by+dy;
