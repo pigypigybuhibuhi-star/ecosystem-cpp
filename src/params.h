@@ -371,6 +371,7 @@ const float CLIMB_UP_COST   = 0.55f;   // 高さ1を登るのに要するエネ�
 const float PERCH_GAP       = 0.45f;   // 枝から枝へ渡れる高さの差
 const float BRANCH_SUPPORT  = 1.20f;   // 枝が支えられる体重の目安
 const float FALL_DAMAGE     = 0.9f;    // 落下で失うエネルギー(高さあたり)
+const float FALL_MIN        = 0.5f;    // これより低い落下では怪我をしない
 const float TEMP_WIDTH_P    = 18.0f;
 
 // --- 動物 ---
