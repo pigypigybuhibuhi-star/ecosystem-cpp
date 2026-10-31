@@ -328,7 +328,6 @@ void update_animals(){
                     for(int t=agrid.b(ni);t<agrid.e(ni);t++){
                         int j=agrid.items[t];
                         if(j==i||!animals[j].alive) continue;
-                        if(a.body<=animals[j].body*PRED_RATIO) continue;
                         if(std::fabs(a.perch-animals[j].perch)>=0.6f) continue;
                         if(animals[j].depth>0.5f) continue;      // 穴に逃げ込まれた
                         pk=j; break;
@@ -336,8 +335,14 @@ void update_animals(){
                 }
                 if(pk>=0){
                     Animal& v=animals[pk];
+                    // 取っ組み合い。相手の大きさで襲えるかどうかを打ち切らず、力の比で取り分を分ける。
+                    // 力は筋の断面積に比例する(体重^(2/3))。襲う側は自分の力の割合 fs で相手の組織を取り、
+                    // 相手は残りの 1−fs で襲う側を傷つける(同じ率の対称な取っ組み合い)。
+                    // 襲うか離れるかは神経網の出力だけが決め、勝ち負けや退く規則は書かない
+                    float fa=std::pow(a.body,FORCE_EXP), fv=std::pow(v.body,FORCE_EXP);
+                    float fs=fa/std::max(1e-6f,fa+fv);
                     // わずかな肉食性でも噛めるようにする。線形だと谷を渡れない
-                    float bite=v.energy*PRED_EFF*std::sqrt(meat_dig)*act;
+                    float bite=v.energy*PRED_EFF*std::sqrt(meat_dig)*act*fs;
                     v.energy-=bite;
                     // 毒。解毒できなければ、食っても損をする
                     float tox=v.toxin*(1.f-a.tox_resist);
@@ -349,6 +354,10 @@ void update_animals(){
                     { float e=v.toxin*TOXIN_HARM*(1.f-a.tox_resist);   // 解毒に使うエネルギー
                       a_burn(co2.data(),o2.data(),ci,std::min(e,a.energy));
                       a.energy-=e; }
+                    // 相手に噛み返された傷。失った組織は地面に落ちて分解物になる
+                    { float hurt=std::max(0.f,a.energy)*PRED_EFF*(1.f-fs);
+                      a.energy-=hurt;
+                      egest(ci,hurt); }
                     a.eaten++;
                     if(v.energy<=0.f){
                         v.alive=false; d_preyed++;
