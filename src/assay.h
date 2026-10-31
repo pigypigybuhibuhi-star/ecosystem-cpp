@@ -49,7 +49,7 @@ const float ASSAY_EPS=0.02f;      // これより小さい再帰回路の変化�
 const int   ASSAY_PERSIST_MIN=3;  // 持続とみなす段数(刺激が去った後も変化が 10% より大きく残る段)
 const float ASSAY_FANOUT_MIN=0.05f;
 
-struct AssayRun { float r0[N_REC], ron[N_REC], o0[4], post_out[4]; int persist; float dev; };
+struct AssayRun { float r0[N_REC], ron[N_REC], o0[N_ACT], post_out[N_ACT]; int persist; float dev; };
 
 static inline int assay_band(float tune){ int b=(int)(tune*N_TUNE); if(b>N_TUNE-1) b=N_TUNE-1; if(b<0) b=0; return b; }
 
@@ -66,10 +66,11 @@ static void assay_inputs(const Animal& a,int band,float s,const float* rec,bool 
     in[N_SENSOR+2]=0.4f;                       // 土の水
     in[N_SENSOR+3]=std::min(1.f,a.body/3.f);
     in[N_SENSOR+4]=1.f;                        // バイアス
+    in[IN_LIGHT]=1.f;                          // 明るさ: 昼
     for(int k=0;k<N_REC;k++){                  // 陰性対照(lesion)は再帰の入力を 0 に切る
         float r=lesion?0.f:rec[k];
         if(!(r>-1.5f&&r<1.5f)) r=0.f;
-        in[N_SENSOR+5+k]=r;
+        in[IN_REC+k]=r;
     }
 }
 
@@ -79,11 +80,11 @@ static AssayRun assay_run(const Animal& a,int band,float s,bool lesion){
     auto step=[&](int b,float sv){
         assay_inputs(a,b,sv,rec,lesion,in);
         brain_forward(a,in,out,nn,ns);
-        for(int k=0;k<N_REC;k++) rec[k]=out[4+k];
+        for(int k=0;k<N_REC;k++) rec[k]=out[N_ACT+k];
     };
     for(int t=0;t<ASSAY_PRE;t++) step(-1,0.f);          // 刺激なしで落ち着かせる
     for(int k=0;k<N_REC;k++) R.r0[k]=rec[k];
-    for(int o=0;o<4;o++) R.o0[o]=out[o];
+    for(int o=0;o<N_ACT;o++) R.o0[o]=out[o];
     for(int t=0;t<ASSAY_ON;t++) step(band,s);           // 刺激を与える
     float d2=0.f;
     for(int k=0;k<N_REC;k++){ R.ron[k]=rec[k]; d2+=(rec[k]-R.r0[k])*(rec[k]-R.r0[k]); }
@@ -96,7 +97,7 @@ static AssayRun assay_run(const Animal& a,int band,float s,bool lesion){
         if(!back){ if(R.dev>ASSAY_EPS && std::sqrt(e2)>0.1f*R.dev) R.persist++; else back=true; }
         // 刺激が去った直後の 1 段を除き、続く 10 段の行動の出力のずれ。
         // 感覚の入力はもう 0 なので、ずれは再帰回路(内部の状態)を通してしか起きない
-        if(t>=1 && t<11) for(int o=0;o<4;o++) R.post_out[o]+=std::fabs(out[o]-R.o0[o])/10.f;
+        if(t>=1 && t<11) for(int o=0;o<N_ACT;o++) R.post_out[o]+=std::fabs(out[o]-R.o0[o])/10.f;
     }
     return R;
 }
@@ -165,7 +166,7 @@ static AssayResult assay_brain(const Animal& a,bool lesion){
     }
     if(np) X.fanin/=np;
     X.fanout=0;
-    if(strongest>=0) for(int o=0;o<4;o++) if(R[strongest].post_out[o]>ASSAY_FANOUT_MIN) X.fanout++;
+    if(strongest>=0) for(int o=0;o<N_ACT;o++) if(R[strongest].post_out[o]>ASSAY_FANOUT_MIN) X.fanout++;
     X.g = np>0 && X.fanin>0.5f && X.fanout>=2;
     return X;
 }
@@ -181,10 +182,11 @@ static Animal assay_positive_control(){
     for(int k=0;k<N_NODE;k++) a.ngain[k]=0.f;    // 隠れ層なし。直結だけで組む
     for(int k=0;k<N_W;k++) a.w[k]=0.f;
     float* wd=&a.w[W_L0+W_LL+W_OUT];
-    const int R0=N_SENSOR+5;                      // 再帰回路 0 の入力の位置
-    wd[4*N_IN+0]= 3.0f; wd[4*N_IN+1]= 3.0f; wd[4*N_IN+2]= 3.0f;   // 脅威 → 上がる
-    wd[4*N_IN+3]=-3.0f; wd[4*N_IN+4]=-3.0f;                        // 餌 → 下がる
-    wd[4*N_IN+R0]=0.9f;                                            // ゆっくり戻る
+    const int R0=IN_REC;                          // 再帰回路 0 の入力の位置
+    const int RO=N_ACT;                           // 再帰回路 0 の出力の位置
+    wd[RO*N_IN+0]= 3.0f; wd[RO*N_IN+1]= 3.0f; wd[RO*N_IN+2]= 3.0f;   // 脅威 → 上がる
+    wd[RO*N_IN+3]=-3.0f; wd[RO*N_IN+4]=-3.0f;                        // 餌 → 下がる
+    wd[RO*N_IN+R0]=0.9f;                                            // ゆっくり戻る
     wd[0*N_IN+R0]= 1.0f;    // 旋回
     wd[1*N_IN+R0]= 2.0f;    // 前進(逃げる)
     wd[2*N_IN+R0]=-2.0f;    // 採食をやめる

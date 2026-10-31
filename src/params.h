@@ -445,12 +445,15 @@ const int   N_SENSOR        = 5;       // 感覚器の枠。使うかどうか�
 const int   RAY_STEPS       = 3;       // レイの段数。多いほど重い
 const float SENSOR_MAX      = 14.0f;   // 射程の上限
 const float SENSOR_MIN      = 0.8f;
-const int   N_TUNE          = 13;      // 視覚7 + 嗅覚4 + 同種 + 水
+const int   N_TUNE          = 15;      // 視覚7 + 嗅覚4 + 同種 + 水 + 湿度 + 揺れ
 const float SENSOR_COST     = LIN(PM(0.0010f,ANIMAL_STRIDE),ANIMAL_STRIDE);  // 射程あたりの維持費 [1分あたり 4.86e-06]
-// 入力: 感覚器 + エネルギー・気温・水・体格・バイアス
+// 入力: 感覚器 + エネルギー・気温・水・体格・バイアス・明るさ + 再帰
 const int   N_REC           = 2;       // 再帰結合。何を覚えるかは進化が決める
-const int   N_IN            = N_SENSOR+5+N_REC;
-const int   N_OUT           = 4+N_REC; // 旋回・前進・採食・攻撃 + 再帰
+const int   IN_LIGHT        = N_SENSOR+5;   // 明るさの入力の位置
+const int   IN_REC          = N_SENSOR+6;   // 再帰の入力の位置
+const int   N_IN            = IN_REC+N_REC;
+const int   N_ACT           = 6;       // 行動の出力: 旋回・前進・採食・攻撃・登る/降りる・潜る/出る
+const int   N_OUT           = N_ACT+N_REC; // 行動 + 再帰
 const float ACT_THRESH      = 0.15f;   // これを超えた出力だけが実行される
 // 神経網の形も進化する。枠を固定し、各ニューロンに有効・無効の遺伝子を持たせる。
 // 無効なニューロンは何も通さず、維持費もかからない。
@@ -607,7 +610,7 @@ const float SAT_FLUX        = LIN(PM(1.0f));      // 光合成の飽和(saturati
 const float CLIMB_RATE0     = LIN(PM(0.08f,ANIMAL_STRIDE),ANIMAL_STRIDE);  // 登る速さ(高さ/更新)
 const float CLIMB_RATE1     = LIN(PM(0.25f,ANIMAL_STRIDE),ANIMAL_STRIDE);  // 登攀の巧さで足される速さ
 const float DESCEND_RATE    = LIN(PM(0.15f,ANIMAL_STRIDE),ANIMAL_STRIDE);  // 降りる速さ
-const float BURROW_RATE     = FRAC(PMF(0.15f,ANIMAL_STRIDE),ANIMAL_STRIDE);  // 潜り具合が遺伝子の値へ近づく割合
+const float BURROW_RATE     = FRAC(PMF(0.15f,ANIMAL_STRIDE),ANIMAL_STRIDE);  // 潜る・出るときに、潜り具合が目標(潜る能力 burrow か地表 0)へ近づく割合
 const float DIGEST_COST     = LIN(PM(0.018f,ANIMAL_STRIDE),ANIMAL_STRIDE);  // 長い腸の維持費
 const float FAT_DRAW        = LIN(PM(0.05f,ANIMAL_STRIDE),ANIMAL_STRIDE);  // 飢えたとき脂肪を取り崩す速さ
 const int   BANK_MIN        = (int)TICKS(40*DT0);     // 土中で待つ最短

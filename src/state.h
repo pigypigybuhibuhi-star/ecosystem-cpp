@@ -177,13 +177,13 @@ struct Animal {
     bool  alive;
     float speed,turn,reach,size,diet,jaw,cold_tol,body,aquatic,resp,detritus,sexual;
     float salt_tol;         // 遺伝子: 塩への強さ(浸透圧を調節できる塩分。海水を 1 とする比)。aquatic は水中での呼吸と泳ぎ
-    float arboreal;   // 遺伝子: 登攀に適した体
+    float arboreal;   // 遺伝子: 登攀の能力(届く高さのうち登れる割合・速さ・費用)。登るかどうかは神経網
     float brood;      // 遺伝子: 一度に産む数。多産少投資か、少産多投資か
     float lifespan;   // 遺伝子: 寿命の長さ
     float toxin;      // 遺伝子: 毒を持つ
     float tox_resist; // 遺伝子: 毒に耐える
-    float burrow;     // 遺伝子: 穴を掘る
-    float nocturnal;  // 遺伝子: 夜に活動する
+    float burrow;     // 遺伝子: 潜る能力(潜れる深さ)。潜るかどうかは神経網
+    float nocturnal;  // 遺伝子: 夜目(暗いときの視覚の射程)。いつ動くかは神経網
     float store_fat;  // 遺伝子: 脂肪の目標(体の維持費の store_fat × FAT_DAYS_MAX 日分)
     float repro_alloc;// 遺伝子: 余剰を繁殖に回す割合
     float estrus;     // 遺伝子: 繁殖できる状態のときに出す性フェロモンの量(0〜1。1 で ESTRUS_NG_H)

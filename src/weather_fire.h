@@ -163,6 +163,16 @@ void update_storms(){
     if(g_frame%ODOR_INTERVAL==0) update_gust();
 }
 
+// 地表の空気の相対湿度。水蒸気圧は日平均の気温と条件の相対湿度で決まり、一日の中では変わらない。
+// 日平均の気温からは、雨雲の冷気で下がった分を除く(空気の水蒸気圧を変えないので、冷えた分だけ相対湿度が上がる)。
+// 燃料の湿りと、動物の湿度の感覚(触角の湿度受容器)が同じ値を読む
+inline float rel_humidity(int i){
+    float tn=temper[i];
+    float tm=tn-storm_dT[i]-DIURNAL_LAND*(daylit[i]-0.5f);
+    float rh=LAND_RH_MEAN*std::exp(17.62f*tm/(243.12f+tm)-17.62f*tn/(243.12f+tn));
+    if(rh>1.f) rh=1.f;
+    return rh;
+}
 // 燃料の湿りを大気に追従させる。水蒸気圧は日平均の気温と条件の相対湿度で決まり、一日の中では変わらない。
 // 昼に気温が上がれば相対湿度が下がり(飽和水蒸気圧はマグヌスの式)、燃料は時定数で乾く
 void update_fuel_moisture(){
@@ -171,10 +181,7 @@ void update_fuel_moisture(){
             int i=idx(x,y);
             if(sea[i]) continue;
             float tn=temper[i];
-            // 日平均の気温。雨雲の冷気で下がった分は空気の水蒸気圧を変えないので除く(冷えた分だけ相対湿度が上がる)
-            float tm=tn-storm_dT[i]-DIURNAL_LAND*(daylit[i]-0.5f);
-            float rh=LAND_RH_MEAN*std::exp(17.62f*tm/(243.12f+tm)-17.62f*tn/(243.12f+tn));
-            if(rh>1.f) rh=1.f;
+            float rh=rel_humidity(i);
             float emc=emc_simard(rh,tn);
             if(fuel_moist[i]<0.f) fuel_moist[i]=emc;          // 起動時と、古いセーブの読み込みの後は平衡の値から
             else fuel_moist[i]+=(emc-fuel_moist[i])*FUEL_M_LAG;
