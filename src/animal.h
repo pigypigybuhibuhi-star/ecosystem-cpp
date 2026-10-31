@@ -204,11 +204,8 @@ void update_animals(){
         bool blocked=false;
         if(ngx>=0&&ngx<GRID_W&&ngy>=0&&ngy<GRID_H){
             int ni=idx(ngx,ngy);
-            // 氷の上は陸として歩ける。冬に大陸が繋がる
-            bool passable_land = !sea[ni] || ice[ni];
-            if(!passable_land && a.aquatic<0.20f) blocked=true;   // 泳げない
-            if( passable_land && a.aquatic>0.85f && !sea[ni]) blocked=true;
-            if(sea[ni] && ice[ni] && a.aquatic>0.85f) blocked=true;  // 氷に蓋をされた
+            // 水と陸の境で止める閾値は置かない。泳ぐ・這う速さ(terr)と浸かることへの不適合の費用(habitat_a)が
+            // aquatic に連続に従うので、入るかどうかは神経網の向きと、その場の速さと費用の結果で決まる
             // 樹上を渡る: 隣の林冠が近い高さでないと渡れず、降りるしかない
             if(a.perch>0.25f && canopy_h[ni] < a.perch-PERCH_GAP){
                 a.perch=std::max(0.f,canopy_h[ni]);         // 木が途切れた。降りる
