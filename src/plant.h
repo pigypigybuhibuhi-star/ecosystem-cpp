@@ -417,8 +417,10 @@ void update_plants(){
             if(c.y<0.f) c.y=0.f;     if(c.y>=GRID_H) c.y=GRID_H-1.f;
             int cgx=(int)c.x, cgy=(int)c.y;
             if(cgx<0||cgx>=GRID_W||cgy<0||cgy>=GRID_H) continue;   // この子は失われる
-            // 火後発芽: 焼け跡にしか芽吹かない代わり、競争相手がいない
-            if(p.fire_seed>0.35f && burn_age[idx(cgx,cgy)]>BURN_WINDOW){
+            // 火後発芽: 種子ごとに確率 fire_seed で、焼け跡でしか芽吹かない種子になる
+            // (球果の閉じ方の度合いは連続で、部分的な閉鎖が多い。Lamont et al. 1991)。
+            // 焼け跡にしか芽吹かない代わり、競争相手がいない。焼けて間もないマスでは乱数を引かない
+            if(burn_age[idx(cgx,cgy)]>BURN_WINDOW && p.fire_seed>0.f && dist01(rng)<p.fire_seed){
                 corpses.push_back({c.x,c.y,c.energy,0});   // 芽吹かない種子は朽ちる
                 continue;
             }
