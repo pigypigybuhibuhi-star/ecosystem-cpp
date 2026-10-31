@@ -163,7 +163,7 @@ void update_animals(){
             // 支えが失われた。滑り落ちる
             float drop=a.perch-reachable;
             a.perch=reachable;
-            if(drop>0.5f){
+            if(drop>FALL_MIN){
                 // 傷を治すのに使うエネルギー。これも呼吸で CO2 になる
                 float e=drop*FALL_DAMAGE*(1.f-a.arboreal*0.7f);
                 a_burn(co2.data(),o2.data(),hci,std::min(e,a.energy));
@@ -208,10 +208,14 @@ void update_animals(){
             // aquatic に連続に従うので、入るかどうかは神経網の向きと、その場の速さと費用の結果で決まる
             // 樹上を渡る: 隣の林冠が近い高さでないと渡れず、降りるしかない
             if(a.perch>0.25f && canopy_h[ni] < a.perch-PERCH_GAP){
-                a.perch=std::max(0.f,canopy_h[ni]);         // 木が途切れた。降りる
-                float e=0.04f*(1.f-a.arboreal*0.6f);
-                a_burn(co2.data(),o2.data(),ni,std::min(e,a.energy));
-                a.energy-=e;
+                // 木が途切れた。下の林冠(無ければ地面)まで落ちる。支えを失って滑り落ちるときと同じ落下の怪我
+                float drop=a.perch-std::max(0.f,canopy_h[ni]);
+                a.perch=std::max(0.f,canopy_h[ni]);
+                if(drop>FALL_MIN){
+                    float e=drop*FALL_DAMAGE*(1.f-a.arboreal*0.7f);
+                    a_burn(co2.data(),o2.data(),ni,std::min(e,a.energy));
+                    a.energy-=e;
+                }
             }
         }
         if(blocked) a.dir+=3.14159f;
