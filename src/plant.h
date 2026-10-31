@@ -180,15 +180,16 @@ void update_plants(){
         struct GenetSum{ double aE=0, a=0; int n=0; };
         static std::unordered_map<int,GenetSum> genet;
         genet.clear();
+        // 閾値は置かない。地下茎への投資 clonal が小さければ通りやすさ a も小さく、融通は連続に小さくなる
         for(const auto& p:plants){
-            if(!p.alive||p.clonal<0.05f) continue;
+            if(!p.alive||p.clonal<=0.f) continue;
             double a=-std::expm1(-GENET_SHARE_K*p.clonal*(float)(GENET_INTERVAL*DT));
             auto& e=genet[p.genet]; e.aE+=a*p.energy; e.a+=a; e.n++;
         }
         for(auto& p:plants){
-            if(!p.alive||p.clonal<0.05f) continue;
+            if(!p.alive||p.clonal<=0.f) continue;
             auto it=genet.find(p.genet);
-            if(it==genet.end()||it->second.n<2) continue;
+            if(it==genet.end()||it->second.n<2||it->second.a<=0.0) continue;
             double a=-std::expm1(-GENET_SHARE_K*p.clonal*(float)(GENET_INTERVAL*DT));
             double node=it->second.aE/it->second.a;
             p.energy=(float)(p.energy+a*(node-p.energy));

@@ -255,13 +255,13 @@ PM と PMF を通った値が **[未換算]** に当たる。1 回の更新に�
 - **休眠**: 気温が休眠の気温を下回ると休眠し、3 °C の余裕を超えて上がると覚める
 - **つる** [法則]+[未換算]: 遺伝子 climb(0〜1)。マスの中で最も高い株を支えにする。実効的な高さ = 自分の高さ × (1 − 0.45·climb) + 支えの余り × climb × 0.85(支えの余り = max(0, そのマスで最も高い株 − 自分の高さ))。自立する幹を作らないので、支えの無いマスでは自分の高さより低くなる。つるの実効的な高さも林冠になり、後に見る株の支えになる(マスの株を見る順に依存する)。維持費 2.14e-4 /分 × climb **[未換算]**(巻きひげと気根)
 - **寄生** [法則]+[未換算]: 遺伝子 parasite(0〜1)。4 分に一度、2 株以上いるマスで、最もエネルギーの多い株を宿主に選ぶ(寄生者も宿主になりうる)。parasite > 0 の他の株はすべて吸器を刺し、宿主のエネルギー × (1 − exp(−5.5e-4 /分 × parasite × 刺さり具合 × 4 分)) を奪う。吸器が宿主の維管束とつながる面の広さは吸器への投資に比例するので、奪う率に parasite が掛かる(Press & Phoenix 2005)。刺さり具合は宿主の防御との競り合いで、比なので投資の大きさを表さない。前の規則の「parasite ≥ 0.10 の株だけが刺す」「0.30 を超える株は宿主にしない」の閾値は外した。刺さり具合 = parasite / (parasite + 宿主の防御)。奪った量の 85% を自分のエネルギーにし、15% は呼吸で CO2 になる(O2 を 1:1 で使う)。窒素も、宿主の貯え・奪った量の 2%・自分の空き の最も小さい分を移す。同じ宿主に複数の寄生者がいれば、順に奪う。維持費 2.92e-4 /分 × parasite **[未換算]**
-- **地下茎(クローン)** [法則]+[未換算]: 遺伝子 clonal(0〜1)。子を産むとき、確率 clonal で親の近く(1.5 マス)に置き、親と同じ株(genet)の一員にする。それ以外は 1.5 + 12·disperse マス先に散らし、新しい株にする。10 分に一度、clonal ≥ 0.05 の株は地下茎を通してエネルギーを融通する。各株は通りやすさ a = 1 − exp(−2.17e-3 /分 × clonal × 10 分) で共通の節につながり(clonal が率に掛かる)、節の値は a で重みを付けた平均 Σa·E / Σa になる(節は蓄えを持たない。キルヒホッフの電流則)。各株は E += a·(節 − E) だけ節へ寄る。Σ a·(節 − E) = 0 なので、同じ genet の中で clonal が違っても(子は変異する)融通の前後で genet のエネルギーの合計が保たれる。維持費 9.72e-5 /分 × clonal **[未換算]**。土中で待つ種子も同じ genet に数えられる
+- **地下茎(クローン)** [法則]+[未換算]: 遺伝子 clonal(0〜1)。子を産むとき、確率 clonal で親の近く(1.5 マス)に置き、親と同じ株(genet)の一員にする。それ以外は 1.5 + 12·disperse マス先に散らし、新しい株にする。10 分に一度、clonal > 0 の株は地下茎を通してエネルギーを融通する(閾値は置かない。clonal が小さければ通りやすさ a も小さく、融通は連続に小さくなる。地下茎の師管の断面が投資に比例するため。Pitelka & Ashmun 1985、Alpert 1996)。各株は通りやすさ a = 1 − exp(−2.17e-3 /分 × clonal × 10 分) で共通の節につながり(clonal が率に掛かる)、節の値は a で重みを付けた平均 Σa·E / Σa になる(節は蓄えを持たない。キルヒホッフの電流則)。各株は E += a·(節 − E) だけ節へ寄る。Σ a·(節 − E) = 0 なので、同じ genet の中で clonal が違っても(子は変異する)融通の前後で genet のエネルギーの合計が保たれる。維持費 9.72e-5 /分 × clonal **[未換算]**。土中で待つ種子も同じ genet に数えられる
 - **火後発芽** [法則]: 遺伝子 fire_seed(0〜1)。種子ごとに確率 fire_seed で、焼け跡でしか芽吹かない種子になる(球果や果実の閉じ方の度合い、serotiny は連続で、部分的に閉じる株が多い。Lamont et al. 1991)。そういう種子は、落ちたマスが焼けてから 64.3 日(BURN_WINDOW)より後なら芽吹かずに朽ちる(炭素は死骸へ)。焼けて間もないマスにだけ芽生える。残りの種子は普通に芽吹く。どちらに賭けるかの割合は決め打ちせず進化に任せる(前の規則の「0.35 を超える株はすべての種子が焼け跡を待ち、以下はすべて普通に芽吹く」は外した)。維持費 1.17e-4 /分 × fire_seed **[未換算]**。燃えたことは煙と焼け跡の匂い(7.9)で感じ取れる
 - **耐火(厚い樹皮)** [未換算]: 遺伝子 fire_tol。炎の強さ × (1 − 0.65·fire_tol) の害を受け、エネルギーを失い、高さが縮む(下限 0.03)。焼けた組織の炭素は CO2 に、窒素は揮発する(帳簿の fire)。焼け死んだ株は高さ × 0.25 を炭として死骸に残し、窒素も同じ割合で残す。維持費 7.29e-4 /分 × fire_tol **[未換算]**
 - **土中の種子** [法則]+[未換算]: 遺伝子 seed_bank(0〜1)。種子は確率 seed_bank で土中に入り、2.86〜100 日(一様)待つ。待つ間は光合成も成長もせず、寒さや火でも死なない。8 分に一度まとめて、呼吸 3.4e-5 /分(CO2 になる)を払い、種子食者に見つかる率 1.17e-5 /分 **[未換算]** で死ぬ(1 回の判定の確率 1 − exp(−1.17e-5 /分 × 8 分))(体は死骸へ。種子食者は動物の個体ではなく、率として与えている)。待ち終えたとき土の水が 0.25 未満なら、3.43 日後にもう一度土を見る。土中の種子も上限 PLANT_MAX の数に入る
 - **食虫** [法則]+[未換算]: 遺伝子 carnivory(0〜1)。0.12 以上の株のいるマスで、潜っていない(深さ 0.2 未満の)動物は、動物の更新ごとに確率 carnivory × 7.33e-4 /分(を更新の間隔に換算) ÷ (1 + 1.5·体) で捕らえられる。最初に捕らえた株が、動物のエネルギーの 55% と脂肪の 40% を奪う。奪った量の 70% が株のエネルギーに、30% が消化の呼吸で CO2 になる。株は奪った量 × 0.09 の窒素を得る(貯えの上限まで)。**注意**: 動物は窒素の在庫を持たないので、この窒素は帳簿の外から入る量として帳簿の carn に付けている。捕らえられてエネルギーが尽きた動物は死ぬ。維持費 4.37e-4 /分 × carnivory **[未換算]**
 - 時間の換算: 寄生の奪う割合・地下茎の融通の割合・土中の種子の死ぬ確率は、1 分あたりの率 r と判定の間隔 n(4・10・8 分)から指数の形 1 − exp(−r·n·DT) で決める(「守り続けること」の換算の規則)
-- 寄生・食虫・つる・地下茎の遺伝子の閾値(0.35・0.30・0.45・0.50)は、画面の分類と要約にだけ使い、規則の入力には使わない。規則の中の閾値は上に書いたもの(食虫 0.12、地下茎 0.05)。寄生は閾値を持たず、投資 parasite に比例して奪う。火後発芽は閾値を持たず、種子ごとの確率 fire_seed で働く
+- 寄生・食虫・つる・地下茎の遺伝子の閾値(0.35・0.30・0.45・0.50)は、画面の分類と要約にだけ使い、規則の入力には使わない。規則の中の閾値は上に書いたもの(食虫 0.12)。地下茎は閾値を持たず、clonal に比例する通りやすさで融通する。寄生は閾値を持たず、投資 parasite に比例して奪う。火後発芽は閾値を持たず、種子ごとの確率 fire_seed で働く
 - **繁殖**: エネルギーが 8.0 を超え、休眠していなければ判定する。有性なら同じ lin の相手を探す(2.9 の注意)。種子の数 = 1 + brood·11。投資 = エネルギー × (0.20 + 0.55·繁殖に回す割合)。多産ほど一つあたりの構造に余分(0.22)がかかり、余分は呼吸で CO2 になる。芽生えの体は種子のエネルギーと親の窒素で作り、足りなければ朽ちる
 - **遺伝**: 有性なら各形質と各免疫の座位をどちらかの親から半々で受け取り、そのあと変異(7.13)を選んだ値に掛ける(変異率は母から受け取る)。種子の散らばり方(clonal・disperse・seed_bank・fire_seed)は母の体の性質として母の値で決める
 - **死**: エネルギーが尽きる、寿命、寒さ、火。体の炭素と窒素はすべて死骸に
@@ -351,6 +351,7 @@ PM と PMF を通った値が **[未換算]** に当たる。1 回の更新に�
 本文に出てくる文献。書誌の細部を確かめきれていないものは「(書誌は次の版で確かめる)」と記した。
 
 - Addo-Bediako, A., Chown, S. L., Gaston, K. J. (2002) Metabolic cold adaptation in insects: a large-scale perspective. Functional Ecology 16: 332–338
+- Alpert, P. (1996) Nutrient sharing in natural clonal fragments of Fragaria chiloensis. Journal of Ecology 84: 395–406
 - Amthor, J. S. (2000) The McCree–de Wit–Penning de Vries–Thornley respiration paradigms: 30 years later. Annals of Botany 86: 1–20
 - Anderson, D. J., Adolphs, R. (2014) A framework for studying emotions across species. Cell 157: 187–200
 - Anderson, H. E. (1982) Aids to determining fuel models for estimating fire behavior. USDA Forest Service General Technical Report INT-122
@@ -379,7 +380,6 @@ PM と PMF を通った値が **[未換算]** に当たる。1 回の更新に�
 - Grimm, V. et al. (2020) The ODD protocol for describing agent-based and other simulation models: a second update to improve clarity, replication, and structural realism. Journal of Artificial Societies and Social Simulation 23(2): 7
 - Gutenberg, B., Richter, C. F. (1944) Frequency of earthquakes in California. Bulletin of the Seismological Society of America 34: 185–188
 - Haldane, J. B. S. (1949) Disease and evolution. La Ricerca Scientifica 19 (Suppl.): 68–76
-- Press, M. C. & Phoenix, G. K. (2005) Impacts of parasitic plants on natural communities. New Phytologist 166: 737–751
 - Hamilton, W. D. (1980) Sex versus non-sex versus parasite. Oikos 35: 282–290
 - Hanks, T. C., Kanamori, H. (1979) A moment magnitude scale. Journal of Geophysical Research 84: 2348–2350
 - Harel, M.-A., Mudd, S. M., Attal, M. (2016) Global analysis of the stream power law parameters based on worldwide 10Be denudation rates. Geomorphology 268: 184–196
@@ -403,6 +403,8 @@ PM と PMF を通った値が **[未換算]** に当たる。1 回の更新に�
 - Penning de Vries, F. W. T., Brunsting, A. H. M., van Laar, H. H. (1974) Products, requirements and efficiency of biosynthesis: a quantitative approach. Journal of Theoretical Biology 45: 339–377
 - Penning de Vries, F. W. T. (1974) Substrate utilization and respiration in relation to growth and maintenance in higher plants. Netherlands Journal of Agricultural Science 22: 40–44
 - Petersen, W. A., Rutledge, S. A. (1998) On the relationship between cloud-to-ground lightning and convective rainfall. Journal of Geophysical Research 103: 14025–14040
+- Pitelka, L. F., Ashmun, J. W. (1985) Physiology and integration of ramets in clonal plants. In: Jackson, Buss, Cook (eds) Population Biology and Evolution of Clonal Organisms. Yale University Press, 399–435
+- Press, M. C. & Phoenix, G. K. (2005) Impacts of parasitic plants on natural communities. New Phytologist 166: 737–751
 - Prinn, R. G. et al. (2005) Evidence for variability of atmospheric hydroxyl radicals over the past quarter century. Geophysical Research Letters 32: L07809
 - Rawls, W. J., Brakensiek, D. L., Saxton, K. E. (1982) Estimation of soil water properties. Transactions of the ASAE 25: 1316–1320
 - Roering, J. J., Kirchner, J. W., Dietrich, W. E. (1999) Evidence for nonlinear, diffusive sediment transport on hillslopes and implications for landscape morphology. Water Resources Research 35: 853–870
