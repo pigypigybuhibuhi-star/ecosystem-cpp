@@ -118,7 +118,7 @@ void update_animals(){
                     break;
                 case 12: sig=sea[ri]?1.f:0.f; break;                 // 水際
                 case 13: sig=rel_humidity(ri); break;                // 湿度。触角の湿度受容器(雨雲の前触れ)
-                case 14: sig=clamp01(shake_g[ri]); break;            // 地面の揺れ。重力の加速度(1 g)で振り切れる
+                case 14: sig=clamp01(shake_felt(ri)); break;            // 地面の揺れ。重力の加速度(1 g)で振り切れる
                 // 嗅覚。濃さそのものを読む。遮蔽を越え、時間に残った跡も追える
                 default: sig=clamp01(odor[band-7][ri]/ODOR_SCALE); break;
                 }
