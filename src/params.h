@@ -598,7 +598,7 @@ const float MICROBE_VMAX = (float)(0.1/60.0/0.40);  // 1 分あたり、体の�
 // その比 3e7 の対数 17.3 を、最大比増殖速度の下端 0.1 /時(MICROBE_VMAX と同じ根拠)で割った 173 時間(約 7 日)を、定着の平均の時間とする。
 // 以前は、分裂のときにしか広がらず、最初の 3000 個体から離れた死骸(r6 の測定で死骸のあるマスの 99.9%)は分解されなかった。
 // 実際の土と落葉は、どこでも数日のうちに微生物に取りつかれる(Voříšková & Baldrian 2013)
-const float MICROBE_COLONIZE_LAG = (float)(17.3/0.1*60.0);   // [分] 173 時間
+const float MICROBE_COLONIZE_LAG = (float)(17.3/0.1*60.0*0.8);   // [分] 138 時間(感度の試験: 173 時間の −20%)
 const float MICROBE_COLONIZE = FRAC(1.0/MICROBE_COLONIZE_LAG,MICROBE_STRIDE);   // 1 回の確かめ(STRIDE tick)で定着する確率 [率 9.63e-05 /分]
 const float MICROBE_COLONY_E = 0.40f;   // 1 個体として数え始める群落の体の炭素(撒く初めの個体と同じ)
 const float STORE_DRAW      = FRAC(PMF(0.02f));   // 土の水が足りないとき、不足分のうち体の貯水から補う割合
