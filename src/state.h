@@ -106,6 +106,14 @@ inline int count_by_rate(double n0){
     if(f>0.0 && dist01(rng)<f) n++;
     return n;
 }
+// 上限(計算の安全のためだけ)に近いとき、空いた枠を繁殖できる個体に同じ確率で渡す(D-2026-10-28-3 (b))。
+// want に産もうとした子の数を足す。p は前の更新の「空き枠 ÷ 産もうとした子の数」。p が 1 以上なら乱数を引かない
+inline bool birth_slot(double& want,int nb,float p,int n,int cap){
+    want+=nb;
+    if(n>=cap) return false;
+    if(p<1.f && dist01(rng)>=p) return false;
+    return true;
+}
 inline float clampf(float v,float lo,float hi){ return v<lo?lo:(v>hi?hi:v); }
 inline float clamp01(float v){ return v<0.f?0.f:(v>1.f?1.f:v); }
 inline float mutate(float v,float lo,float hi){
