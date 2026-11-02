@@ -586,7 +586,7 @@ const float MICROBE_COLD_COST = LIN(PM(0.0015f));  // 体の炭素 MICROBE_REF �
 // 食った側の呼吸と、溶けた細胞を他の微生物が分解するぶんは、低温で死んだ細胞と同じく全量を CO2 として大気へ戻す
 // 入れ替わるのは活動している細胞だけ。基質の無い所で休眠している細胞や胞子は、食われにくく溶けにくく、
 // 何か月〜何年も生き残る(Blagodatskaya & Kuzyakov 2013、Lennon & Jones 2011)。基質のあるマスにいるときだけ死ぬ
-const float MICROBE_TURNOVER = FRAC(0.05/DAY_MIN,MICROBE_STRIDE);  // 1 回の更新(STRIDE tick)で死ぬ確率 1−exp(−r·STRIDE·DT) [率 3.47e-05 /分]
+const float MICROBE_TURNOVER = FRAC(0.06/DAY_MIN,MICROBE_STRIDE);  // 感度の試験(0.05 の +20%)。1 回の更新(STRIDE tick)で死ぬ確率 1−exp(−r·STRIDE·DT) [率 4.17e-05 /分]
 // 1 個体が 1 分に取り込める炭素の上限(体の炭素あたり)。取り込みは細胞の輸送と酵素の量で飽和する(Monod の Vmax)。
 // 土の微生物の最大比増殖速度は、基質を加えた呼吸の解析で 0.1〜0.4 /時(Blagodatsky et al. 2000、Panikov 1995)。
 // 下端の 0.1 /時を炭素利用効率 MICROBE_EFF で割り、取り込みの上限とする。以前は上限が無く、マスの死骸が多いほど際限なく取れた
