@@ -198,6 +198,10 @@ void update_plants(){
     static int pphase=0;
     pphase=(pphase+1)%PLANT_STRIDE;
     std::vector<Plant> babies;
+    // 空いた枠を、前の更新で作ろうとした種子の数で割った確率(D-2026-10-28-3 (b))
+    static double p_want_prev=0.0;
+    double p_want=0.0;
+    const float p_slot_p=(p_want_prev>0.0)?(float)std::max(0.0,(PLANT_MAX-(double)plants.size())/p_want_prev):1.f;
     int pidx=-1;
     for(auto& p:plants){
         pidx++;
@@ -362,8 +366,9 @@ void update_plants(){
             continue;
         }
         if(!p.dormant && p.energy>=PLANT_DIVIDE_TH
-           && (int)plants.size()+(int)babies.size() < PLANT_MAX
-           && count_by_rate(1.0)>0){      // 繁殖の判定は段階 3 より前の 1 回の更新に 1 回
+           && count_by_rate(1.0)>0
+           && birth_slot(p_want,1+(int)(p.brood*(MAX_BROOD-1)+0.5f),p_slot_p,
+                         (int)plants.size()+(int)babies.size(),PLANT_MAX)){      // 繁殖の判定は段階 3 より前の 1 回の更新に 1 回
             // 有性生殖を選ぶなら、まず相手を見つける必要がある
             const Plant* mate=nullptr;
             if(dist01(rng)<p.sexual){
@@ -477,6 +482,7 @@ void update_plants(){
             }
         }
     }
+    p_want_prev=p_want;
     for(auto& b:babies) plants.push_back(b);
     plant_inflow();
     // 死んだ株の貯水は、そのマスの土へ戻る(海のマスでは海へ)

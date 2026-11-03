@@ -51,6 +51,10 @@ void update_animals(){
     int n0=(int)animals.size();
     static int aphase=0;
     aphase=(aphase+1)%ANIMAL_STRIDE;
+    // 空いた枠を、前の更新で産もうとした子の数で割った確率(D-2026-10-28-3 (b))
+    static double a_want_prev=0.0;
+    double a_want=0.0;
+    const float a_slot_p=(a_want_prev>0.0)?(float)std::max(0.0,(ANIMAL_MAX-n0)/a_want_prev):1.f;
     // 2tickに分けて処理する。個体数が多いので走査自体を半分にする
     for(int i=aphase;i<n0;i+=ANIMAL_STRIDE){
         Animal& a=animals[i];
@@ -454,10 +458,11 @@ void update_animals(){
             corpses.push_back({a.x,a.y,a.body*CORPSE_RETURN+std::max(0.f,a.energy)+a.fat,1});
             continue;
         }
-        if((int)animals.size()+(int)babies.size() < ANIMAL_MAX
-           && a.energy>=A_DIVIDE_TH*(1.4f-0.6f*a.repro_alloc)
+        if(a.energy>=A_DIVIDE_TH*(1.4f-0.6f*a.repro_alloc)
            && a.body>=a.size*MATURE_FRAC
-           && count_by_rate(1.0)>0){      // 繁殖の判定は段階 3 より前の 1 回の更新に 1 回
+           && count_by_rate(1.0)>0
+           && birth_slot(a_want,1+(int)(a.brood*(MAX_BROOD-1)+0.5f),a_slot_p,
+                         (int)animals.size()+(int)babies.size(),ANIMAL_MAX)){      // 繁殖の判定は段階 3 より前の 1 回の更新に 1 回
             const Animal* mate=nullptr;
             if(dist01(rng)<a.sexual){
                 int r=(int)SEX_SEARCH;
@@ -574,6 +579,7 @@ void update_animals(){
             }
         }
     }
+    a_want_prev=a_want;
     for(auto& b:babies) animals.push_back(b);
     if(g_track_f||g_trig_f) for(const auto& a:animals) if(!a.alive) field_death(a,g_frame);
     animals.erase(std::remove_if(animals.begin(),animals.end(),
