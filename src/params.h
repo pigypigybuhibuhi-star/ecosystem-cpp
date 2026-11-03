@@ -397,7 +397,7 @@ const float A_EAT_LOSS      = 0.50f;   // 同化効率50%。若い葉や種子�
 const float FORCE_EXP       = 2.f/3.f; // 筋力は筋の断面積に比例し、相似な体では 体重^(2/3)(Hill 1950、Alexander 1985)
 const float PRED_EFF        = FRAC(PMF(0.85f,ANIMAL_STRIDE),ANIMAL_STRIDE);  // [率 0.00922 /分]
 const float SCAV_EFF        = 0.85f;   // 一回漁って死骸から取る割合。死骸は抵抗しないので取り分が大きい。時間は漁る回数の側が持つ(段階 3.5)
-const float MEAT_LOSS       = 0.30f;
+const float MEAT_LOSS       = 0.36f;   // 感度の試験: 0.30 の +20%
 const float DETRITUS_LOSS   = 0.80f;   // 分解物は栄養価が中間
 const float DETRITUS_COST   = LIN(PM(0.008f,ANIMAL_STRIDE),ANIMAL_STRIDE);  // 分解酵素の維持費 [1分あたり 3.89e-05]
 // 分解者。動かず、死骸だけを食い、炭素と窒素を土に返す
