@@ -163,7 +163,7 @@ int main(int argc,char** argv){
         int tries=0;
         do { m.x=frand(0.f,(float)GRID_W); m.y=frand(0.f,(float)GRID_H); }
         while(sea[idx((int)m.x,(int)m.y)] && ++tries<50);
-        m.energy=0.4f; m.alive=true; m.age=0;
+        m.energy=MICROBE_COLONY_E; m.alive=true; m.age=0;
         m.rate=0.3f; m.cold_tol=0.2f;
         m.id=next_microbe_id++;
         microbes.push_back(m);
@@ -377,7 +377,7 @@ int main(int argc,char** argv){
                             p.dorm_temp=-20.f; p.dormant=false;
                             p.store_cap=0.f; p.water_store=0.f;
                             p.fire_tol=0.f; p.climb=0.f; p.sexual=0.1f;
-                            p.brood=0.5f; p.n_fix=0.3f; p.n_store=1.0f;
+                            p.brood=0.5f; p.n_fix=0.3f; p.n_store=PLANT_C_SCALE*1.0f;
                             p.lifespan=0.05f; p.parasite=0.f; p.carnivory=0.f;
                             p.fire_seed=0.f; p.repro_alloc=0.6f; p.seed_bank=0.f;
                             p.def_const=0.5f; p.defense=0.f; p.seed_wait=0; p.buoyancy=1.0f;
@@ -884,11 +884,12 @@ int main(int argc,char** argv){
                   for(const auto& p:plants){ sfi+=p.fire_tol; scl2+=p.climb; sx+=p.sexual; }
                   double asx=0; for(const auto& a:animals) asx+=a.sexual;
                   // 燃料の湿りの陸の平均と、燃えうる(消炎含水率 FIRE_MX を下回り、燃料が下限を超える)陸の割合
-                  double fm=0; long nl=0, nburnable=0;
+                  double fm=0, fl=0, fmax=0; long nl=0, nburnable=0;
                   for(int i=0;i<GRID_W*GRID_H;i++){ if(sea[i]||fuel_moist[i]<0.f) continue;
-                      fm+=fuel_moist[i]; nl++; if(fuel_moist[i]<FIRE_MX && fuel[i]>=FIRE_FUEL_MIN) nburnable++; }
-                  printf("      fire:%.0f cells (%ld ignitions) | fuelM %.3f burnable %.1f%% | fireTol:%.3f climb:%.3f | sexual P:%.3f A:%.3f\n",
-                         fire_area,fire_events,nl?fm/nl:0.0,nl?100.0*nburnable/nl:0.0,n?sfi/n:0.0,n?scl2/n:0.0,
+                      fm+=fuel_moist[i]; nl++; fl+=fuel[i]; fmax=std::max(fmax,(double)fuel[i]);
+                      if(fuel_moist[i]<FIRE_MX && fuel[i]>=FIRE_FUEL_MIN) nburnable++; }
+                  printf("      fire:%.0f cells (%ld ignitions) | fuelM %.3f load %.2e (max %.3f) kg/m2 burnable %.1f%% | fireTol:%.3f climb:%.3f | sexual P:%.3f A:%.3f\n",
+                         fire_area,fire_events,nl?fm/nl:0.0,nl?fl/nl:0.0,fmax,nl?100.0*nburnable/nl:0.0,n?sfi/n:0.0,n?scl2/n:0.0,
                          n?sx/n:0.0,(int)animals.size()?asx/animals.size():0.0); }
                 { double sab=0,spe=0; int nup=0;
                   for(const auto& a:animals){ sab+=a.arboreal; spe+=a.perch;
@@ -1183,7 +1184,7 @@ int main(int argc,char** argv){
                                      (std::uint8_t)(40+60*t));
                 }
             } else if(view_mode==8){
-                float nv=clamp01(soil_n[i]/1.2f);
+                float nv=clamp01(soil_n[i]/(1.2f*PLANT_C_SCALE));
                 if(sea[i]){
                     if(upwell[i]) c=sf::Color(40,(std::uint8_t)(90+150*nv),160);
                     else c=sf::Color(12,(std::uint8_t)(24+120*nv),(std::uint8_t)(50+40*nv));
