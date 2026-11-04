@@ -1122,6 +1122,16 @@ int main(int argc,char** argv){
                 compute_averages();   // レーダー図に重ねる集団平均
                 printf("      deaths: starve %ld  cold %ld  preyed %ld  slide %ld\n",
                        d_starve,d_cold,d_preyed,d_slide);
+                { double cpE=0,cpA=0; for(const auto& cp:corpses){ cpE+=cp.energy; if(cp.origin) cpA+=cp.energy; }
+                  double bsum=0; for(const auto& an:animals) if(an.alive) bsum+=an.body;
+                  printf("      [probe] proc %.0f bodysum %.1f | eat plant %.2f detr %.2f meatc %.2f prey %.2f | take detr %.2f meatc %.2f | corpseE %.1f (animal %.1f) | dec mic %.2f rot %.2f end %.2f\n",
+                         g_a_proc,bsum,g_eat_plant,g_eat_detr,g_eat_meatc,g_eat_prey,g_take_detr,g_take_meatc,cpE,cpA,g_dec_mic,g_dec_rot,g_dec_end); }
+                { double n=std::max(1.0,g_a_proc), tc=std::max(1e-12,g_tc), dpu=(double)DAY_MIN/(ANIMAL_STRIDE*DT);
+                  printf("      [probe2] per tissueC per day: assim %.4f | smr %.4f trait %.4f move %.4f life %.4f resp %.4f | tc/ind %.3f energy/ind %.3f fat/ind %.3f divTH %.3f | want %.3f onPlant %.3f | bites/ind/day %.3f capped %.3f raw/got %.2f\n",
+                         (g_eat_plant+g_eat_detr+g_eat_meatc+g_eat_prey)/tc*dpu, g_sp_smr/tc*dpu, g_sp_trait/tc*dpu, g_sp_move/tc*dpu, g_sp_life/tc*dpu, g_sp_resp/tc*dpu,
+                         g_tc/n, g_en/n, g_fat/n, g_th/n, g_want/n, g_onp/n, g_bite_n/n*dpu, g_bite_cap/std::max(1.0,g_bite_n), g_bite_raw/std::max(1e-12,g_bite_got));
+                  g_tc=g_en=g_fat=g_th=g_want=g_onp=g_bite_n=g_bite_cap=g_bite_raw=g_bite_got=0; g_sp_smr=g_sp_trait=g_sp_move=g_sp_life=g_sp_resp=0;
+                  g_a_proc=0; g_eat_plant=g_eat_detr=g_eat_meatc=g_eat_prey=0; }
             }
         }
 

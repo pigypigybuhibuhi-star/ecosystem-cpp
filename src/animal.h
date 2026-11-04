@@ -60,6 +60,7 @@ void update_animals(){
         Animal& a=animals[i];
         if(!a.alive) continue;
         a.age+=ANIMAL_STRIDE;
+        g_a_proc+=1.0;
         // それぞれの感覚器が、自分の向いた方角に、自分の射程だけ探る
         float in[N_IN];
         float sensor_span=0.f;
@@ -272,6 +273,8 @@ void update_animals(){
             float gut_rate=A_RCR*a.body*CORPSE_RETURN;
             // 食べるかどうかは神経網の出力(want_eat)が決める。消化の能力は一口から得る量と費用だけを決め、
             // 能力の値で行動を打ち切る閾値は置かない(能力が 0 なら得るものも 0)
+            { bool onp=false; for(int t=pgrid.b(ci);t<pgrid.e(ci);t++){ const Plant& q=plants[pgrid.items[t]]; if(q.alive&&q.eff_height<=a.perch+a.reach){ onp=true; break; } }
+              if(onp) g_onp+=1.0; if(want_eat>ACT_THRESH) g_want+=1.0; }
             if(plant_dig>0.f && want_eat>ACT_THRESH){
                 // 摂食量は体格に比例する。大きい体は多く処理できる
                 int max_bites0=1+(int)(a.body*2.0f);   // 段階 3 より前の 1 回の更新あたり
@@ -287,6 +290,7 @@ void update_animals(){
                     // 一口が大きいほど速いが、噛み砕きが雑になって効率が落ちる
                     float bs=0.4f+1.2f*a.bite_size;
                     float bite=std::min(p.energy*A_BITE*bs*chew*act,gut_bite);
+                    g_bite_n+=1.0; g_bite_raw+=p.energy*A_BITE*bs*chew*act; g_bite_got+=bite; if(bite>=gut_bite) g_bite_cap+=1.0;
                     p.energy-=bite;
                     // 齧られれば葉を失う。光合成能力が落ち、回復に時間がかかる。
                     // これがあって初めて、その場が枯れ、探す必要が生まれる
@@ -295,7 +299,7 @@ void update_animals(){
                     float eff=(1.f-A_EAT_LOSS)*(0.6f+0.8f*a.digest)/std::max(0.5f,bs);
                     float gain=std::min(1.f,eff*plant_dig);   // 同化は食べた量を超えない
                     a_burn(co2.data(),o2.data(),ci,a_repay(a.energy,bite*gain));   // 登り降りの借りを返す(O2 を 1:1)
-                    a.energy+=bite*gain;
+                    a.energy+=bite*gain; g_eat_plant+=bite*gain;
                     // 同化しなかった分は糞に、落とした葉の組織(建設に GROW_COST を払った炭素)は落葉に
                     egest(ci,bite*(1.f-gain)+(h0-p.height)*GROW_COST,(h0-p.height)*N_PER_GROWTH);
                     odor[2][ci]+=ODOR_WOUND*bite;   // 傷ついた植物が匂いを放つ
@@ -323,6 +327,7 @@ void update_animals(){
                         corpses[pk].energy-=bite; corpses[pk].n-=bn;
                         a_burn(co2.data(),o2.data(),ci,a_repay(a.energy,bite*(1.f-loss)));
                         a.energy+=bite*(1.f-loss); a.eaten++;
+                        if(is_plant){ g_eat_detr+=bite*(1.f-loss); g_take_detr+=bite; } else { g_eat_meatc+=bite*(1.f-loss); g_take_meatc+=bite; }
                         egest(ci,bite*loss,bn);   // 同化しなかった分は糞。窒素は糞に
                     }
                 }
@@ -358,7 +363,7 @@ void update_animals(){
                     float tox=v.toxin*(1.f-a.tox_resist);
                     float gain=bite*(1.f-MEAT_LOSS)*(1.f-tox);
                     a_burn(co2.data(),o2.data(),ci,a_repay(a.energy,gain));
-                    a.energy+=gain;
+                    a.energy+=gain; g_eat_prey+=gain;
                     egest(ci,bite-gain);   // 同化しなかった分(毒で吸収できない分を含む)は糞
                     life_note(a.id,g_frame,"捕食",bite);
                     { float e=v.toxin*TOXIN_HARM*(1.f-a.tox_resist);   // 解毒に使うエネルギー
@@ -418,6 +423,10 @@ void update_animals(){
         // 基礎代謝と形質の維持費は組織の炭素に比例する。歩く費用は別に足す
         float maint=A_SMR*a.body*CORPSE_RETURN*(1.f+upkeep/A_TRAIT_REF);   // 体の維持費(1 回の更新)
         float metab=maint+sp*A_MOVE_COST;
+        { float sm=A_SMR*a.body*CORPSE_RETURN; float m0=metab; float sen0=senesce(a.age,a.lifespan,LIFE_MIN_A,LIFE_MAX_A);
+          g_sp_smr+=sm*(1.f+sen0); g_sp_trait+=(maint-sm)*(1.f+sen0); g_sp_move+=sp*A_MOVE_COST*(1.f+sen0);
+          g_sp_life+=LIFESPAN_COST*a.lifespan; g_sp_resp+=a.resp*RESP_COST; (void)m0;
+          g_tc+=a.body*CORPSE_RETURN; g_en+=a.energy; g_fat+=a.fat; g_th+=A_DIVIDE_TH*(1.4f-0.6f*a.repro_alloc); }
         float sen=senesce(a.age,a.lifespan,LIFE_MIN_A,LIFE_MAX_A);
         metab *= (1.f+sen);
         metab += LIFESPAN_COST*a.lifespan;
@@ -603,7 +612,7 @@ void update_animals(){
     // 分解: 死骸が朽ちると、炭素は大気へ戻る
     for(auto& cp:corpses){
         float rot = cp.energy*ROT_RATE;
-        cp.energy -= rot;
+        cp.energy -= rot; g_dec_rot+=rot;
         int gx=(int)cp.x, gy=(int)cp.y;
         if(gx>=0&&gx<GRID_W&&gy>=0&&gy<GRID_H){
             int ri=idx(gx,gy);
@@ -618,6 +627,7 @@ void update_animals(){
     // 小さくなった死骸は分解し尽くされたとみなし、残りの炭素を CO2 に出してから消す
     for(const auto& cp:corpses){
         if(cp.energy>=(cp.origin==0?CORPSE_MIN_P:CORPSE_MIN_A)) continue;
+        if(cp.energy>0.f) g_dec_end+=cp.energy;
         int gx=(int)cp.x, gy=(int)cp.y;
         if(gx>=0&&gx<GRID_W&&gy>=0&&gy<GRID_H){
             int ri=idx(gx,gy);
