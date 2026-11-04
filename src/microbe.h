@@ -51,7 +51,7 @@ void update_microbes(){
           a_burn(co2.data(),o2.data(),ci,std::min(spend,std::max(0.f,m.energy)));   // 維持の呼吸(O2 を 1:1)
           m.energy-=spend; }
         if(m.energy<=0.f){ m.alive=false; d_micro++; continue; }
-        if(m.energy>=MICROBE_DIV && (int)microbes.size()<800000){
+        if(m.energy>=MICROBE_DIV && (int)microbes.size()<MICROBE_MAX){
             m.energy*=0.5f;
             Microbe c=m;
             c.energy=m.energy;
@@ -82,7 +82,7 @@ void update_microbes(){
             int ci=idx(gx,gy);
             int cb=cgrid.b(ci), ce=cgrid.e(ci);
             if(cb>=ce || cgrid.items[cb]!=i || occ[ci]) continue;   // マスの最初の死骸でだけ、一度だけ確かめる
-            if((int)microbes.size()>=800000) break;
+            if((int)microbes.size()>=MICROBE_MAX) break;
             const Microbe& src=microbes[(size_t)frand(0.f,(float)n_src-0.001f)];
             float dT=(temper[ci]-(24.f-20.f*src.cold_tol))/22.f;
             if(temper[ci]<-8.f-30.f*src.cold_tol) continue;
@@ -116,7 +116,7 @@ void update_microbes(){
         for(int t=0;t<200;t++){
             const Corpse& cp=corpses[(size_t)frand(0.f,(float)corpses.size()-0.001f)];
             Microbe m; m.x=cp.x; m.y=cp.y;
-            m.energy=0.4f; m.alive=true; m.age=0;
+            m.energy=MICROBE_COLONY_E; m.alive=true; m.age=0;
             m.rate=frand(0.1f,0.8f); m.cold_tol=frand(0.f,0.6f);
             m.id=next_microbe_id++;
             microbes.push_back(m);
