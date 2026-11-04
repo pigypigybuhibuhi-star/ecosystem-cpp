@@ -8,7 +8,7 @@ void sea_plant_genes(Plant& p){
     p.store_cap=0.0f; p.water_store=0.0f; p.eff_height=0.05f;
     p.fire_tol=0.0f; p.climb=0.0f; p.sexual=0.2f;
     for(int k=0;k<N_IMMUNE;k++) p.im[k]=frand(0.f,1.f);
-    p.brood=0.1f; p.n_fix=0.0f; p.n_store=1.0f; p.lifespan=0.05f;
+    p.brood=0.1f; p.n_fix=0.0f; p.n_store=PLANT_C_SCALE*1.0f; p.lifespan=0.05f;
     p.parasite=0.f; p.carnivory=0.f; p.fire_seed=0.f; p.repro_alloc=0.5f;
     p.seed_bank=0.f; p.def_const=0.5f; p.defense=0.f; p.seed_wait=0; p.buoyancy=0.6f;
     p.mut_rate=0.3f;        p.mother=-1; p.father=-1; p.gen=0;
@@ -58,8 +58,7 @@ void update_plants(){
         if(!plants[i].alive||plants[i].seed_wait>0) continue;
         int gx=(int)plants[i].x, gy=(int)plants[i].y;
         if(gx<0||gx>=GRID_W||gy<0||gy>=GRID_H) continue;
-        pgrid.put(idx(gx,gy),i);
-        fuel[idx(gx,gy)]+=plants[i].height*1.2f;
+        pgrid.put(idx(gx,gy),i);   // 生きた株は燃料に数えない(params.h の FUEL_KG_M2)
     }
     std::fill(canopy_h.begin(),canopy_h.end(),0.f);
     auto t_a=std::chrono::steady_clock::now();
@@ -123,6 +122,7 @@ void update_plants(){
             { float w0=soil_water[ci];
               soil_water[ci] = std::max(0.f, soil_water[ci]-gain*0.010f);  // 蒸散
               if(!sea[ci]) w_transp_cell[ci]+=soil_water[ci]-w0; }
+            gain*=PLANT_C_SCALE;   // 蒸散した水 ÷ 蒸散比 = 取り込んだ炭素(params.h の PLANT_C_SCALE)
             // 炭素(リービッヒの最小律)
             float need=gain*CO2_PER_ENERGY;
             float avail=std::min(need,co2_at(ci));
@@ -258,10 +258,10 @@ void update_plants(){
             if(p.energy<=0.f){
                 p.alive=false;
                 // 炭として残るぶんは、体の窒素も同じ割合で残す。残りは揮発する
-                float nb=p.n_store+p.height*N_PER_GROWTH, kc=0.25f/GROW_COST;
-                corpses.push_back({p.x,p.y,p.height*0.25f,0,nb*kc});   // 炭として残るぶん
+                float nb=p.n_store+p.height*N_PER_GROWTH, kc=0.25f*PLANT_C_SCALE/GROW_COST;
+                corpses.push_back({p.x,p.y,p.height*0.25f*PLANT_C_SCALE,0,nb*kc});   // 炭として残るぶん
                 g_bud.n_fire-=nb*(1.f-kc);
-                burnt+=p.height*(GROW_COST-0.25f);              // 残りの体は燃える
+                burnt+=p.height*(GROW_COST-0.25f*PLANT_C_SCALE);              // 残りの体は燃える
             }
             co2_add(ci,burnt*CO2_PER_ENERGY);
             o2_add(ci,-std::min(burnt*FIRE_O2_USE,o2_at(ci)));
@@ -279,7 +279,7 @@ void update_plants(){
             take=std::min(take,std::max(0.f,N_STORE_MAX-p.n_store));
             soil_n[ci]-=take; p.n_store+=take;
         }
-        if(!p.dormant && daylit[ci]>0.3f && p.height<p.max_height && p.energy>0.5f){
+        if(!p.dormant && daylit[ci]>0.3f && p.height<p.max_height && p.energy>PLANT_C_SCALE*0.5f){
             float g=std::min(GROW_RATE*PLANT_STRIDE,p.max_height-p.height);
             float nn=g*N_PER_GROWTH;
             if(p.n_store<nn) g*=p.n_store/std::max(1e-6f,nn);   // 窒素が律速する
@@ -342,7 +342,7 @@ void update_plants(){
         upkeep *= (NIGHT_RESP+(1.f-NIGHT_RESP)*daylit[ci]);
         float sen=senesce(p.age,p.lifespan);
         upkeep *= (1.f+sen);
-        upkeep += LIFESPAN_COST*p.lifespan;
+        upkeep += PLANT_C_SCALE*LIFESPAN_COST*p.lifespan;   // 動物と共有する定数なので、植物の尺度はここで掛ける
         // 自己間引き。混み合うほど、光以外の要因でも消耗する
         {
             int nn=pgrid.n_at(ci);
@@ -352,7 +352,7 @@ void update_plants(){
         // 発病。この土地の病原体と型が合ってしまった個体が病む
         if(pload[ci]>0.02f){
             float inf=pload[ci]*immune_match(p.im,ci,pstrain);
-            upkeep+=inf*PATH_VIRULENCE;
+            upkeep+=PLANT_C_SCALE*inf*PATH_VIRULENCE;
             infect_p+=inf;
         }
         // 払った維持費の炭素は呼吸で CO2 になる(体に無いぶんは出せない)
