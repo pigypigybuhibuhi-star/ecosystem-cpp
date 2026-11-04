@@ -60,6 +60,7 @@ void update_animals(){
         Animal& a=animals[i];
         if(!a.alive) continue;
         a.age+=ANIMAL_STRIDE;
+        g_a_proc+=1.0;
         // それぞれの感覚器が、自分の向いた方角に、自分の射程だけ探る
         float in[N_IN];
         float sensor_span=0.f;
@@ -291,7 +292,7 @@ void update_animals(){
                     float eff=(1.f-A_EAT_LOSS)*(0.6f+0.8f*a.digest)/std::max(0.5f,bs);
                     float gain=std::min(1.f,eff*plant_dig);   // 同化は食べた量を超えない
                     a_burn(co2.data(),o2.data(),ci,a_repay(a.energy,bite*gain));   // 登り降りの借りを返す(O2 を 1:1)
-                    a.energy+=bite*gain;
+                    a.energy+=bite*gain; g_eat_plant+=bite*gain;
                     // 同化しなかった分は糞に、落とした葉の組織(建設に GROW_COST を払った炭素)は落葉に
                     egest(ci,bite*(1.f-gain)+(h0-p.height)*GROW_COST,(h0-p.height)*N_PER_GROWTH);
                     odor[2][ci]+=ODOR_WOUND*bite;   // 傷ついた植物が匂いを放つ
@@ -317,6 +318,7 @@ void update_animals(){
                         corpses[pk].energy-=bite; corpses[pk].n-=bn;
                         a_burn(co2.data(),o2.data(),ci,a_repay(a.energy,bite*(1.f-loss)));
                         a.energy+=bite*(1.f-loss); a.eaten++;
+                        if(is_plant){ g_eat_detr+=bite*(1.f-loss); g_take_detr+=bite; } else { g_eat_meatc+=bite*(1.f-loss); g_take_meatc+=bite; }
                         egest(ci,bite*loss,bn);   // 同化しなかった分は糞。窒素は糞に
                     }
                 }
@@ -352,7 +354,7 @@ void update_animals(){
                     float tox=v.toxin*(1.f-a.tox_resist);
                     float gain=bite*(1.f-MEAT_LOSS)*(1.f-tox);
                     a_burn(co2.data(),o2.data(),ci,a_repay(a.energy,gain));
-                    a.energy+=gain;
+                    a.energy+=gain; g_eat_prey+=gain;
                     egest(ci,bite-gain);   // 同化しなかった分(毒で吸収できない分を含む)は糞
                     life_note(a.id,g_frame,"捕食",bite);
                     { float e=v.toxin*TOXIN_HARM*(1.f-a.tox_resist);   // 解毒に使うエネルギー
@@ -597,7 +599,7 @@ void update_animals(){
     // 分解: 死骸が朽ちると、炭素は大気へ戻る
     for(auto& cp:corpses){
         float rot = cp.energy*ROT_RATE;
-        cp.energy -= rot;
+        cp.energy -= rot; g_dec_rot+=rot;
         int gx=(int)cp.x, gy=(int)cp.y;
         if(gx>=0&&gx<GRID_W&&gy>=0&&gy<GRID_H){
             int ri=idx(gx,gy);
@@ -612,6 +614,7 @@ void update_animals(){
     // 小さくなった死骸は分解し尽くされたとみなし、残りの炭素を CO2 に出してから消す
     for(const auto& cp:corpses){
         if(cp.energy>=0.02f) continue;
+        if(cp.energy>0.f) g_dec_end+=cp.energy;
         int gx=(int)cp.x, gy=(int)cp.y;
         if(gx>=0&&gx<GRID_W&&gy>=0&&gy<GRID_H){
             int ri=idx(gx,gy);

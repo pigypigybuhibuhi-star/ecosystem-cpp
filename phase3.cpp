@@ -1121,6 +1121,10 @@ int main(int argc,char** argv){
                 compute_averages();   // レーダー図に重ねる集団平均
                 printf("      deaths: starve %ld  cold %ld  preyed %ld  slide %ld\n",
                        d_starve,d_cold,d_preyed,d_slide);
+                { double cpE=0,cpA=0; for(const auto& cp:corpses){ cpE+=cp.energy; if(cp.origin) cpA+=cp.energy; }
+                  double bsum=0; for(const auto& an:animals) if(an.alive) bsum+=an.body;
+                  printf("      [probe] proc %.0f bodysum %.1f | eat plant %.2f detr %.2f meatc %.2f prey %.2f | take detr %.2f meatc %.2f | corpseE %.1f (animal %.1f) | dec mic %.2f rot %.2f end %.2f\n",
+                         g_a_proc,bsum,g_eat_plant,g_eat_detr,g_eat_meatc,g_eat_prey,g_take_detr,g_take_meatc,cpE,cpA,g_dec_mic,g_dec_rot,g_dec_end); }
             }
         }
 

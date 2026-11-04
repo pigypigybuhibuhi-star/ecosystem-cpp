@@ -40,7 +40,7 @@ void update_microbes(){
             // 分解した割合だけ、死骸の窒素も無機化して土へ出る
             float dn=corpses[pk].n*std::min(1.f,dec/std::max(1e-9f,corpses[pk].energy));
             corpses[pk].n-=dn;
-            corpses[pk].energy-=dec;
+            corpses[pk].energy-=dec; g_dec_mic+=dec;
             m.energy+=dec*MICROBE_EFF;
             // 残りは大気と土へ。体にしなかった分は呼吸で酸化されるので、炭素は全量が CO2 になる
             // 好気的な呼吸なので O2 を 1:1 で使う
@@ -97,7 +97,7 @@ void update_microbes(){
                 int pk=cgrid.items[t];
                 float dec=corpses[pk].energy*frac;
                 float dn=corpses[pk].n*std::min(1.f,frac);
-                corpses[pk].n-=dn; corpses[pk].energy-=dec;
+                corpses[pk].n-=dn; corpses[pk].energy-=dec; g_dec_mic+=dec;
                 a_burn(co2.data(),o2.data(),ci,dec*(1.f-MICROBE_EFF));
                 soil_n[ci]+=dn;
             }

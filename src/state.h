@@ -409,6 +409,11 @@ inline void prof_end(int k){
     prof[k]=prof[k]*0.92+ms*0.08;     // 移動平均で安定させる
 }
 long d_starve=0, d_cold=0, d_preyed=0, d_slide=0;
+// 計測だけ(claude/intake-probe。取り込まない): 動物が同化した量の内訳と、死骸から出ていく量の内訳。累計。世界には返さない
+double g_eat_plant=0,g_eat_detr=0,g_eat_meatc=0,g_eat_prey=0;   // 同化した量(エネルギー)
+double g_take_detr=0,g_take_meatc=0;                             // 動物が死骸から取った量(同化前)
+double g_dec_mic=0,g_dec_rot=0,g_dec_end=0;                      // 微生物の分解・光分解・小さくなって消えた分
+double g_a_proc=0;                                                // 処理した動物の数(1 件 = ANIMAL_STRIDE 分)
 // 植物の収支を測る。推測ではなく実測で判断するため
 double dbg_gain=0, dbg_cost=0; long dbg_n=0;
 double dbg_light=0, dbg_tf=0, dbg_wf=0, dbg_co2=0;
