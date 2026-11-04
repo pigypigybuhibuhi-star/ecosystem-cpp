@@ -139,8 +139,17 @@ const float WATER_RELAX     = FRAC(PMF(0.020f));  // 土壌水分が目標へ近
 const float RIVER_THRESHOLD = 260.f;   // 侵食後の地形に合わせて下げる
 const float RIVER_SUPPLY    = 0.60f;   // 河川が供給する水
 const float SOIL_W_INIT     = 0.35f;   // 起動時に降水を決めるための仮の陸の土壌水分(条件)
-const float DROUGHT_COST    = LIN(PM(0.055f));  // 耐乾装置の維持費 [1分あたり 0.000535]
-const float STORE_COST      = LIN(PM(0.030f));  // 貯水組織の維持費 [1分あたり 0.000292]
+// 植物の炭素の尺度(D-2026-10-30-1 (a)、D-2026-10-24-2 (a)、D-2026-10-26-3 (a))。
+// 光合成は、取り込み 1 単位(植物の古い単位)ごとに土の水を 0.010 使う。土の水 1.0 は 100 mm × 100 m² = 1e4 kg なので、0.010 は水 100 kg。
+// C3 の草の蒸散比は乾燥重量 1 g あたり水 約 500 g(Briggs & Shantz 1914)、乾燥重量の 45% が炭素なので、水 100 kg で炭素 90 g。
+// 炭素の単位は動物の尺度の 1 単位 = 6 mg C に一つ(D-2026-10-24-2 (a))なので、古い単位 1 は 90 g ÷ 6 mg = 1.5e4 単位にあたる。
+// 植物の体・蓄え・窒素(C:N を保つ)・植物の 1 株あたりの費用は、すべてこの比で単位を直す。1 株は株立ちの群落(D-2026-10-26-3 (a))
+const double TRANSP_RATIO   = 500.0;   // 蒸散比 [g 水 / g 乾燥重量](Briggs & Shantz 1914)
+const double DRY_C_FRAC     = 0.45;    // 乾燥重量の炭素の割合
+const double PHOTO_W        = 0.010;   // 古い単位の取り込み 1 あたりに使う土の水(土の水 1.0 = 1e4 kg)
+const float  PLANT_C_SCALE  = (float)(PHOTO_W*1e4/TRANSP_RATIO*1e3*DRY_C_FRAC/6e-3);   // [1.5e4]
+const float DROUGHT_COST    = PLANT_C_SCALE*(LIN(PM(0.055f)));  // 耐乾装置の維持費 [1分あたり 0.000535]
+const float STORE_COST      = PLANT_C_SCALE*(LIN(PM(0.030f)));  // 貯水組織の維持費 [1分あたり 0.000292]
 const float STORE_FILL      = LIN(PM(0.020f,PLANT_STRIDE),PLANT_STRIDE);  // 湿っているとき貯める速さ [1分あたり 6.48e-05]
 const float STORE_MAX       = 3.00f;   // 遺伝子が届く貯水量の上限
 
@@ -157,14 +166,14 @@ const double AIR_COL_UNITS  = AIR_MOL_M2*CELL_M*CELL_M/GAS_UNIT_MOL;   // 1 マ�
 const float CO2_COL         = (float)(AIR_COL_UNITS*420e-6);    // [6.0e5 単位]
 const float O2_COL          = (float)(AIR_COL_UNITS*0.2095);    // [3.0e8 単位]
 const float N2_COL          = (float)(AIR_COL_UNITS*0.7901);    // N2 と Ar [1.13e9 単位]。生き物は出し入れしない
-const float SOIL_N_BASE     = 0.35f;   // 土壌の窒素
-const float N_PER_GROWTH    = 0.055f;  // 体を作るのに要する窒素
-const float N_FIX_COST      = LIN(PM(0.006f));  // 純益0.048に対して現実的な負担に [1分あたり 5.83e-05]
-const float N_FIX_RATE      = LIN(PM(0.0180f));  // 共生菌は効率がよい [1分あたり 0.000175]
-const float N_STORE_MAX     = 1.5f;    // 植物が体内に貯められる窒素の上限
+const float SOIL_N_BASE     = PLANT_C_SCALE*(0.35f);   // 土壌の窒素
+const float N_PER_GROWTH    = PLANT_C_SCALE*(0.055f);  // 体を作るのに要する窒素
+const float N_FIX_COST      = PLANT_C_SCALE*(LIN(PM(0.006f)));  // 純益0.048に対して現実的な負担に [1分あたり 5.83e-05]
+const float N_FIX_RATE      = PLANT_C_SCALE*(LIN(PM(0.0180f)));  // 共生菌は効率がよい [1分あたり 0.000175]
+const float N_STORE_MAX     = PLANT_C_SCALE*(1.5f);    // 植物が体内に貯められる窒素の上限
 const float N_SINK          = FRAC(PMF(0.022f));  // 沈降。外洋を貧栄養にするが、枯渇させない [率 0.000216 /分]
-const float N_RUNOFF        = LIN(PM(0.045f));  // 河川が沿岸へ運ぶ栄養 [1分あたり 0.000437]
-const float N_UPWELL        = LIN(PM(0.040f));  // 湧昇。深層水が栄養を持ち上げる [1分あたり 0.000389]
+const float N_RUNOFF        = PLANT_C_SCALE*(LIN(PM(0.045f)));  // 河川が沿岸へ運ぶ栄養 [1分あたり 0.000437]
+const float N_UPWELL        = PLANT_C_SCALE*(LIN(PM(0.040f)));  // 湧昇。深層水が栄養を持ち上げる [1分あたり 0.000389]
 const int   SHELF_RANGE     = 6;
 
 // --- 海氷 ---
@@ -199,9 +208,13 @@ const float FIRE_MX         = 0.25f;   // 消炎含水率。Anderson (1982) の 
 const float FUEL_M_LAG      = FRAC(1.0/60.0);  // 1 時間燃料(細い枯れ草・小枝)の時定数 60 分(Fosberg & Deeming 1971)
 const float LAND_RH_MEAN    = 0.70f;   // 条件: 陸の地表の日平均の相対湿度(Dai 2006)。水蒸気圧は一日の中で変わらないとし、日変化は気温から出す
 const float FIRE_O2_USE     = CO2_PER_ENERGY;  // 燃焼が消費する酸素。CH2O + O2 → CO2 + H2O で CO2 と 1:1
-const float FIRE_TOL_COST   = LIN(PM(0.075f));  // 厚い樹皮は高くつく [1分あたり 0.000729]
-const float FIRE_DAMAGE     = LIN(PM(9.0f,PLANT_STRIDE),PLANT_STRIDE);  // 炎そのものの破壊力 [1分あたり 0.0292]
-const float FIRE_FUEL_MIN   = 1.5f;
+const float FIRE_TOL_COST   = PLANT_C_SCALE*(LIN(PM(0.075f)));  // 厚い樹皮は高くつく [1分あたり 0.000729]
+const float FIRE_DAMAGE     = PLANT_C_SCALE*(LIN(PM(9.0f,PLANT_STRIDE),PLANT_STRIDE));  // 炎そのものの破壊力 [1分あたり 0.0292]
+// 燃料の量。燃料は面積あたりの枯れた植物の乾燥質量 kg/m² で数える。炭素 1 単位 = 6 mg C = 13.3 mg 乾燥質量(炭素 45%)。
+// 生きた株は含水率が 30〜300% と高く(Rothermel 1972 の生きた燃料)、平衡含水率で湿りを決める枯れた燃料には入れない
+const float FUEL_KG_M2      = (float)(6e-6/DRY_C_FRAC/(CELL_M*CELL_M));   // マスの炭素 1 単位あたりの燃料 [1.33e-7 kg/m²]
+// 燃え広がりの下限。Anderson (1982) の 13 の標準燃料モデルで最も軽い燃料床(短い草、モデル 1)の 1 時間燃料 0.74 t/acre
+const float FIRE_FUEL_MIN   = 0.166f;  // [kg/m²]
 
 // --- 撹乱 ---
 const float SLIDE_SLOPE     = 0.58f;   // これ以上の勾配(30°)で崩れうる。表層崩壊の多くは 30° を超える斜面で起きる
@@ -317,29 +330,29 @@ const float MUT_RATE_COST   = LIN(PM(0.004f,ANIMAL_STRIDE),ANIMAL_STRIDE);  // �
 
 // --- 植物 ---
 const float GROW_RATE       = LIN(PM(0.02f));  // [1分あたり 0.000194]
-const float GROW_COST       = 3.00f;
+const float GROW_COST       = PLANT_C_SCALE*(3.00f);
 const float GROW_RESP       = 0.50f;   // 建設の呼吸。体にする炭素とは別に、その半分を糖の酸化で払う(建設に要るブドウ糖は体の約 1.5 倍、Penning de Vries 1974)
 // 体(茎と根)の維持の呼吸。高さ 1 の体は建設に GROW_COST の炭素を持つので、体の炭素に比例する。
 // 植物の組織の維持呼吸の実測は 20℃ で体の炭素あたり約 0.5〜3% /日(McCree 1974、Ryan 1991、Amthor 2000)。
 // 葉の暗呼吸は RESP_COEF の側が持つので、ここは茎と根の側の低め 1% /日 = 6.94e-6 /分をとる。
 // 以前は高さ 1 あたり 5.83e-4 /分(体の炭素あたり約 28% /日)で、実測の数十倍だった
 const float HEIGHT_COST     = LIN(GROW_COST*0.01/DAY_MIN);  // 1 分あたり、高さあたり [2.08e-05 /分]
-const float RESP_COEF       = LIN(PM(0.120f));  // 真の昼夜で取り込みが半減したぶんを補正 [1分あたり 0.00117]
-const float TOUGH_COST      = LIN(PM(0.070f));  // 防御を「今」張るための費用 [1分あたり 0.000681]
+const float RESP_COEF       = PLANT_C_SCALE*(LIN(PM(0.120f)));  // 真の昼夜で取り込みが半減したぶんを補正 [1分あたり 0.00117]
+const float TOUGH_COST      = PLANT_C_SCALE*(LIN(PM(0.070f)));  // 防御を「今」張るための費用 [1分あたり 0.000681]
 const float INDUCE_RATE     = FRAC(PMF(0.22f,PLANT_STRIDE),PLANT_STRIDE);  // 食害の匂いに応じて立ち上がる速さ [率 0.000805 /分]
 const float INDUCE_DECAY    = FRAC(PMF(0.020f,PLANT_STRIDE),PLANT_STRIDE);  // 攻撃がなければ緩む [率 6.55e-05 /分]
-const float CLONAL_COST     = LIN(PM(0.010f));  // 地下茎の維持費 [1分あたり 9.72e-05]
-const float CLIMB_COST      = LIN(PM(0.022f));  // つるの維持費(巻きひげと気根) [1分あたり 0.000214]
+const float CLONAL_COST     = PLANT_C_SCALE*(LIN(PM(0.010f)));  // 地下茎の維持費 [1分あたり 9.72e-05]
+const float CLIMB_COST      = PLANT_C_SCALE*(LIN(PM(0.022f)));  // つるの維持費(巻きひげと気根) [1分あたり 0.000214]
 const float CLIMB_GAIN      = 0.85f;   // 支えの高さをどれだけ利用できるか
 const float CLIMB_PENALTY   = 0.45f;
-const float COLD_COST_P     = LIN(PM(0.060f));  // [1分あたり 0.000583]
+const float COLD_COST_P     = PLANT_C_SCALE*(LIN(PM(0.060f)));  // [1分あたり 0.000583]
 const float DORM_UPKEEP     = 0.12f;   // 休眠中の維持費の割合
 const float DORM_HARDEN     = 30.0f;   // 休眠がもたらす耐凍性
 const float DORM_HYST       = 3.0f;    // 覚醒に要する余裕(ばたつき防止)
 const float GENET_SHARE_K   = (float)PMF(0.20f);  // 地下茎で同じ株の平均へ近づく 1 分あたりの率の基準(clonal を掛ける)[率 0.00217 /分]
 const float SEED_FAR        = 12.0f;
-const float PLANT_DIVIDE_TH = 8.0f;
-const float PLANT_INIT_E    = 6.0f;    // 立ち上がりの緩衝
+const float PLANT_DIVIDE_TH = PLANT_C_SCALE*(8.0f);
+const float PLANT_INIT_E    = PLANT_C_SCALE*(6.0f);    // 立ち上がりの緩衝
 const int   PLANT_INIT_N    = 400;
 const int   PLANT_INIT_LAND = 200;     // 始まりの条件: そのうち陸に置く株(D-2026-10-24-1 の作者の答え (b))
 const float PLANT_LAND_DORM = 5.0f;    // 始まりの条件: 陸の株の休眠の気温 [℃](温帯の草本の生育の基準温度。McMaster & Wilhelm 1997)
@@ -391,7 +404,11 @@ const float A_SIZE_COST     = LIN(PM(0.020f,ANIMAL_STRIDE),ANIMAL_STRIDE);  // [
 const float JAW_COST        = LIN(PM(0.012f,ANIMAL_STRIDE),ANIMAL_STRIDE);  // [1分あたり 5.83e-05]
 const float COLD_COST_A     = LIN(PM(0.050f,ANIMAL_STRIDE),ANIMAL_STRIDE);  // [1分あたり 0.000243]
 const float A_BITE          = 0.45f;   // 一口で植物から取る割合。時間は齧る回数の側が持つ(段階 3.5)
-const float GRAZE_DEFOLIATE = 0.18f;   // 採食が葉を奪う量。局所的な枯渇を生む
+// 摂食の速さの上限は餌ではなく食べる側の体が決める(消化管の容量。D-2026-10-30-1 (a))。
+// 植食性昆虫の相対摂食速度は乾燥重量で 0.2〜2 g/g/日(Scriber & Slansky 1981、Waldbauer 1968)。中ほどの 1 /日を炭素の比で使う。
+// 容量は構造(組織の炭素 = 体 × CORPSE_RETURN)で決まり、蓄えや脂肪では決まらない
+const float A_RCR           = (float)(1.0/DAY_MIN);  // 1 分あたり、組織の炭素 1 あたりに摂れる餌の炭素 [6.94e-04 /分]
+const float GRAZE_DEFOLIATE = 0.18f/PLANT_C_SCALE;   // 食べた炭素あたり。植物の体の尺度(GROW_COST)と同じ比で直す   // 採食が葉を奪う量。局所的な枯渇を生む
 const float A_DIVIDE_TH     = 6.0f;
 const float A_EAT_LOSS      = 0.50f;   // 同化効率50%。若い葉や種子は消化しやすい
 const float FORCE_EXP       = 2.f/3.f; // 筋力は筋の断面積に比例し、相似な体では 体重^(2/3)(Hill 1950、Alexander 1985)
@@ -408,7 +425,7 @@ const float MICROBE_COST    = LIN(1.7e-5);  // 1 分あたり、体の炭素あ�
 // 炭素利用効率(分解した炭素のうち体になる割合。残りは呼吸で CO2)。0.6 は熱力学の上限に近い。
 // 土や落葉の微生物の実測は 0.3〜0.55(Manzoni et al. 2012、Sinsabaugh et al. 2013)。その中ほど
 const float MICROBE_EFF     = 0.40f;
-const float MICROBE_DIV     = 1.40f;   // 分裂の閾値を上げ、個体数を抑える
+const float MICROBE_DIV     = PLANT_C_SCALE*1.40f;   // 群落の大きさも植物の尺度と同じ比(D-2026-10-30-1 (a))   // 分裂の閾値を上げ、個体数を抑える
 const float MICROBE_REF     = 0.75f*MICROBE_DIV;   // 分裂の周期の平均の体の炭素。低温の維持費の換算にだけ使う
 const float MICROBE_RETURN  = 0.55f;   // 分解して大気と土に返す割合
 // 胞子が飛ぶ距離の平均(マス)。地表から放たれた胞子は、落ちる速さで沈みながら風に運ばれる(Gregory 1973)。
@@ -424,6 +441,9 @@ const int   MICROBE_INIT    = 3000;
 const float BODY_GROW_RATE  = LIN(PM(0.010f,ANIMAL_STRIDE),ANIMAL_STRIDE);  // [1分あたり 4.86e-05]
 const float BODY_GROW_COST  = 4.00f;
 const float CORPSE_RETURN   = 2.50f;   // 体 1 あたりの組織が持つエネルギー(炭素)。死骸に残るのもこの量
+// 小さくなった死骸を分解し尽くされたとみなす大きさ(計算の打ち切り)。植物由来は植物の尺度で同じ比
+const float CORPSE_MIN_A    = 0.02f;
+const float CORPSE_MIN_P    = PLANT_C_SCALE*0.02f;
 // 動物がエネルギーを使えば、その炭素は酸化されて CO2 になる(O2 は 1:1)。
 // 体にある分(正のエネルギー)までしか出せない
 inline void co2_add(int c,float d);
@@ -474,13 +494,13 @@ const int   ANIMAL_INIT_N   = 500;
 
 // --- 水域と地形 ---
 const float WATER_ATTEN     = 3.0f;    // 水深による光の減衰
-const float BUOY_COST       = LIN(PM(0.030f));  // 浮くための組織の維持費 [1分あたり 0.000292]
+const float BUOY_COST       = PLANT_C_SCALE*(LIN(PM(0.030f)));  // 浮くための組織の維持費 [1分あたり 0.000292]
 // 水面に浮く物は、地上 10 m の風の約 3% の速さで風下へ流される(吹送流と波のストークス・ドリフトを合わせた表層の漂流。
 // Wu 1983、油の漂流の目安 3%)。浮く強さ(buoyancy)は水面から出ている割合として、この速さに掛ける
 const double SURF_DRIFT_FRAC = 0.03;
 const double SURF_DRIFT_CPM = SURF_DRIFT_FRAC*WIND_SURF_MS*60.0/CELL_M;   // 水面の漂流の速さ [1分あたり 0.54 マス]
 const float BUOY_DRIFT      = LIN(SURF_DRIFT_CPM,PLANT_STRIDE);  // 1 回の更新で流されるマス数 [1分あたり 0.54 マス]
-const float HABITAT_COST_P  = LIN(PM(0.35f));  // 生息環境の不適合(植物) [1分あたり 0.0034]
+const float HABITAT_COST_P  = PLANT_C_SCALE*(LIN(PM(0.35f)));  // 生息環境の不適合(植物) [1分あたり 0.0034]
 const float HABITAT_COST_A  = LIN(PM(0.10f,ANIMAL_STRIDE),ANIMAL_STRIDE);  // 生息環境の不適合(動物) [1分あたり 0.000486]
 const float SLOPE_COEF      = 0.50f;   // 勾配による減速。45°(勾配 1)で速さが 2/3。小さな昆虫は体重あたりの登坂の仕事が小さい
 const float WATER_SPEED     = 1.30f;   // 水生が水中で得る速度
@@ -523,7 +543,7 @@ const float ODOR_ANIMAL     = LIN(PM(0.035f,ODOR_INTERVAL),ODOR_INTERVAL);  // �
 const float ODOR_ESTRUS     = LIN(PM(0.055f,ODOR_INTERVAL),ODOR_INTERVAL);  // 発情 [1分あたり 0.000134]
 const float ODOR_SICK       = LIN(PM(0.045f,ODOR_INTERVAL),ODOR_INTERVAL);  // 病んだ個体 [1分あたり 0.000109]
 const float ODOR_ROT        = LIN(PM(0.008f,ODOR_INTERVAL),ODOR_INTERVAL);  // 死骸 [1分あたり 1.94e-05]
-const float ODOR_WOUND      = 0.90f;  // 食害を受けた植物
+const float ODOR_WOUND      = 0.90f/PLANT_C_SCALE;   // 食べた炭素あたり。株の尺度を直す前と同じ、古い単位の一口あたりの量  // 食害を受けた植物
 const float ODOR_SMOKE      = LIN(PM(0.45f,ODOR_INTERVAL),ODOR_INTERVAL);  // 煙 [1分あたり 0.00109]
 
 // --- 昼夜 ---
@@ -537,14 +557,14 @@ const float DIURNAL_LAND    = 9.0f;    // 陸の日較差(度)
 const float DIURNAL_SEA     = 1.2f;    // 海は熱容量が大きく、ほとんど振れない
 
 // --- 植物の新しい戦略 ---
-const float PARASITE_COST   = LIN(PM(0.030f));  // 吸器の維持費 [1分あたり 0.000292]
+const float PARASITE_COST   = PLANT_C_SCALE*(LIN(PM(0.030f)));  // 吸器の維持費 [1分あたり 0.000292]
 const float PARASITE_DRAIN_K = (float)PMF(0.055f);  // 宿主から奪う 1 分あたりの率の基準(貫く強さを掛ける)[率 0.00055 /分]
-const float CARNIVORY_COST  = LIN(PM(0.045f));  // 捕虫器の維持費 [1分あたり 0.000437]
+const float CARNIVORY_COST  = PLANT_C_SCALE*(LIN(PM(0.045f)));  // 捕虫器の維持費 [1分あたり 0.000437]
 const float CARNIVORY_CATCH = FRAC(PMF(0.14f,ANIMAL_STRIDE),ANIMAL_STRIDE);  // 捕獲率 [率 0.000733 /分]
 const float CARNIVORY_N     = 0.09f;   // 獲物から得る窒素
-const float FIRE_SEED_COST  = LIN(PM(0.012f));  // 休眠種子の維持費 [1分あたり 0.000117]
+const float FIRE_SEED_COST  = PLANT_C_SCALE*(LIN(PM(0.012f)));  // 休眠種子の維持費 [1分あたり 0.000117]
 const int   BURN_WINDOW     = (int)TICKS(900*DT0);  // [64.3 日]
-const float BANK_COST       = LIN(PM(0.0035f));  // 土中でも呼吸し、食われ、朽ちる [1分あたり 3.4e-05]
+const float BANK_COST       = PLANT_C_SCALE*(LIN(PM(0.0035f)));  // 土中でも呼吸し、食われ、朽ちる [1分あたり 3.4e-05]
 const float BANK_PREDATION  = FRAC(PMF(0.0012f),SEED_STRIDE);  // 種子食者に見つかる確率(SEED_STRIDE tick ごとの 1 回の判定あたり)[率 1.17e-05 /分]
 const int   BANK_MAX        = (int)TICKS(1400*DT0);  // 待てる上限 [100 日]
 
@@ -580,7 +600,7 @@ const float MICROBE_DECOMP_K = (float)PMF(0.10f);  // 微生物が死骸を分�
 // 低温に耐える酵素(不凍タンパク質・低温で働く酵素)の維持費。維持の呼吸は維持する細胞の量に比例する(Pirt 1965)。
 // 以前は 1 個体あたりの定数 1.46e-05 /分で、体の炭素が小さい細胞ほど割高だった(体の炭素 0.1 で基礎の維持費の約 9 倍)。
 // 分裂の周期の平均の体の炭素(分裂直後 0.7 から閾値 1.4 まで、平均 0.75·MICROBE_DIV = 1.05)で以前と同じ値になる比をとる
-const float MICROBE_COLD_COST = LIN(PM(0.0015f));  // 体の炭素 MICROBE_REF の細胞の値 [1分あたり 1.46e-05]
+const float MICROBE_COLD_COST = PLANT_C_SCALE*(LIN(PM(0.0015f)));  // 体の炭素 MICROBE_REF の細胞の値 [1分あたり 1.46e-05]
 // 微生物の入れ替わり。土の細菌や菌は原生生物・線虫に食われ、ウイルスに溶かされて、1 日あたり数 % ずつ死ぬ
 // (土の微生物バイオマスの回転時間は数日〜数十日。Rousk & Bååth 2011、Kuzyakov & Blagodatskaya 2015)。その中ほどの 0.05 /日
 // 食った側の呼吸と、溶けた細胞を他の微生物が分解するぶんは、低温で死んだ細胞と同じく全量を CO2 として大気へ戻す
@@ -598,14 +618,16 @@ const float MICROBE_VMAX = (float)(0.1/60.0/0.40);  // 1 分あたり、体の�
 // その比 3e7 の対数 17.3 を、最大比増殖速度の下端 0.1 /時(MICROBE_VMAX と同じ根拠)で割った 173 時間(約 7 日)を、定着の平均の時間とする。
 // 以前は、分裂のときにしか広がらず、最初の 3000 個体から離れた死骸(r6 の測定で死骸のあるマスの 99.9%)は分解されなかった。
 // 実際の土と落葉は、どこでも数日のうちに微生物に取りつかれる(Voříšková & Baldrian 2013)
-const float MICROBE_COLONIZE_LAG = (float)(17.3/0.1*60.0);   // [分] 173 時間
+// 群落を植物の尺度に合わせて 1.5e4 倍(約 36 g C の菌糸の広がり)にしたので、比は 3e7 × 1.5e4 = 4.5e11、対数は 26.8(268 時間)
+const float MICROBE_COLONIZE_LAG = (float)(std::log(3e7*(double)PLANT_C_SCALE)/0.1*60.0);   // [分] 268 時間
 const float MICROBE_COLONIZE = FRAC(1.0/MICROBE_COLONIZE_LAG,MICROBE_STRIDE);   // 1 回の確かめ(STRIDE tick)で定着する確率 [率 9.63e-05 /分]
-const float MICROBE_COLONY_E = 0.40f;   // 1 個体として数え始める群落の体の炭素(撒く初めの個体と同じ)
+const float MICROBE_COLONY_E = PLANT_C_SCALE*0.40f;
+const int   MICROBE_MAX      = 800000;   // 計算の安全のためだけの数の上限(以前はコードに直に 800000 と書かれていた。値は同じ)   // 1 個体として数え始める群落の体の炭素(撒く初めの個体と同じ)
 const float STORE_DRAW      = FRAC(PMF(0.02f));   // 土の水が足りないとき、不足分のうち体の貯水から補う割合
 const float STORE_SURPLUS   = FRAC(PMF(0.5f,PLANT_STRIDE),PLANT_STRIDE);   // 余った土の水のうち、1 回の更新で貯水に回せる割合
 const float FIRE_SHOOT_LOSS = LIN(PM(0.60f,PLANT_STRIDE),PLANT_STRIDE);  // 炎が幹と葉を焼く速さ(高さ/火勢)
-const float N_UPTAKE        = LIN(PM(0.010f));    // 根が土から窒素を吸う速さの上限(同じマスの株で分ける)
-const float CROWD_COST      = LIN(PM(0.020f));    // 自己間引き。混み合った株 1 本あたりの消耗
+const float N_UPTAKE        = PLANT_C_SCALE*(LIN(PM(0.010f)));    // 根が土から窒素を吸う速さの上限(同じマスの株で分ける)
+const float CROWD_COST      = PLANT_C_SCALE*(LIN(PM(0.020f)));    // 自己間引き。混み合った株 1 本あたりの消耗
 const float SAT_FLUX        = LIN(PM(1.0f));      // 光合成の飽和(saturation の値 1 が 1 tick に受けられる光)
 const float CLIMB_RATE0     = LIN(PM(0.08f,ANIMAL_STRIDE),ANIMAL_STRIDE);  // 登る速さ(高さ/更新)
 const float CLIMB_RATE1     = LIN(PM(0.25f,ANIMAL_STRIDE),ANIMAL_STRIDE);  // 登攀の巧さで足される速さ
