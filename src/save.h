@@ -30,7 +30,7 @@ Fld<T> FA(const std::string& n, M (T::*p)[N], size_t k, double d){
 std::vector<Fld<Plant>> plant_schema(){
     std::vector<Fld<Plant>> s={
         F("x",&Plant::x,0), F("y",&Plant::y,0),
-        F("energy",&Plant::energy,1), F("height",&Plant::height,0.05),
+        F("energy",&Plant::energy,PLANT_C_SCALE), F("height",&Plant::height,0.05),
         F("absorb",&Plant::absorb,0.9), F("max_height",&Plant::max_height,0.5),
         F("shade_tol",&Plant::shade_tol,0.1), F("tough",&Plant::tough,0),
         F("clonal",&Plant::clonal,0), F("disperse",&Plant::disperse,0.2),
@@ -106,7 +106,7 @@ std::vector<Fld<Animal>> animal_schema(){
 }
 std::vector<Fld<Microbe>> microbe_schema(){
     return { F("x",&Microbe::x,0), F("y",&Microbe::y,0),
-             F("energy",&Microbe::energy,0.4), F("rate",&Microbe::rate,0.3),
+             F("energy",&Microbe::energy,MICROBE_COLONY_E), F("rate",&Microbe::rate,0.3),
              F("cold_tol",&Microbe::cold_tol,0.2),
              F("id",&Microbe::id,0), F("age",&Microbe::age,0) };
 }

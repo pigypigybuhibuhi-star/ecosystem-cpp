@@ -106,7 +106,7 @@ void update_odor(){
     for(const auto& cp:corpses){
         int gx=(int)cp.x, gy=(int)cp.y;
         if(gx<0||gx>=GRID_W||gy<0||gy>=GRID_H) continue;
-        odor[1][idx(gx,gy)]+=ODOR_ROT*cp.energy;
+        odor[1][idx(gx,gy)]+=ODOR_ROT*cp.energy*(cp.origin==0?1.f/PLANT_C_SCALE:1.f);   // 植物由来は尺度を直す前と同じ量
     }
     for(int i=0;i<GRID_W*GRID_H;i++){
         if(fire[i]>0.05f)            odor[3][i]+=ODOR_SMOKE*fire[i];
