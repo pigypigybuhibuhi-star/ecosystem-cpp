@@ -454,7 +454,6 @@ const float SPORE_WIND      = 0.80f;   // 放つ高さの風 [m/s]
 const float SPORE_VSET      = 1.0e-3f; // 終端速度 [m/s]
 const float MICROBE_DISP    = SPORE_H*SPORE_WIND/SPORE_VSET/CELL_M;   // [4 マス = 40 m]
 const int   MICROBE_INIT    = 3000;
-const float BODY_GROW_RATE  = LIN(PM(0.010f,ANIMAL_STRIDE),ANIMAL_STRIDE);  // [1分あたり 4.86e-05]
 const float BODY_GROW_COST  = 4.00f;
 const float CORPSE_RETURN   = 2.50f;   // 体 1 あたりの組織が持つエネルギー(炭素)。死骸に残るのもこの量
 // 小さくなった死骸を分解し尽くされたとみなす大きさ(計算の打ち切り)。植物由来は植物の尺度で同じ比
@@ -600,7 +599,7 @@ constexpr double FAT_DAYS_MAX = 60.0;
 constexpr double GLYCO_DAYS   = 1.0;
 // 1 回の更新の維持費を 1 日分に直す倍率(動物は ANIMAL_STRIDE tick ごとに更新する)
 const float UPD_PER_DAY     = (float)(DAY_MIN/(ANIMAL_STRIDE*DT));
-const float FAT_RATE        = FRAC(PMF(0.12f,ANIMAL_STRIDE),ANIMAL_STRIDE);  // 余剰を脂肪に回す速さ [率 0.000621 /分]
+const float FAT_RATE        = FRAC(PMF(0.12f,ANIMAL_STRIDE),ANIMAL_STRIDE);  // 余剰を合成(成長と脂肪)に回す速さ [率 0.000621 /分]
 const float NOCTURNAL_COST  = LIN(PM(0.014f,ANIMAL_STRIDE),ANIMAL_STRIDE);  // 夜目の維持費 [1分あたり 6.81e-05]
 
 // --- 系統 ---
