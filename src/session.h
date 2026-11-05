@@ -54,6 +54,7 @@ void release_animals(int per_species,int frame){
             a.bite_size=g.bite_size; a.digest=g.digest;
             for(int k=0;k<N_IMMUNE;k++) a.im[k]=g.im[k];
             a.body=g.size*MATURE_FRAC;      // 成熟した状態で放つ
+            a.fat=release_fat(a);           // 脂肪は遺伝子 store_fat の目指す量まで貯えた体で放す(条件)
             a.id=next_animal_id++; a.lin=g.lin;
             for(int k=0;k<N_W;k++) a.w[k]=g.w[k];
             for(int k=0;k<N_NODE;k++) a.ngain[k]=g.ngain[k];

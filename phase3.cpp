@@ -668,7 +668,8 @@ int main(int argc,char** argv){
                     a.toxin=0.f; a.tox_resist=0.f; a.burrow=0.f;
                     a.nocturnal=0.f; a.store_fat=0.2f; a.repro_alloc=0.5f; a.grow_alloc=0.5f;
                     a.estrus=0.2f;   // 始まりの条件: 前の規則で sexual 0.2 の個体が出していた量と同じ
-                    a.fat=0.f; a.depth=0.f;
+                    a.depth=0.f;
+                    a.fat=release_fat(a);   // 脂肪は遺伝子 store_fat の目指す量まで貯えた体で放す(条件)
                     a.id=next_animal_id++; a.lin=-1;
                     for(int k=0;k<N_W;k++) a.w[k]=0.f;
                     // 動く神経網を種として置く。

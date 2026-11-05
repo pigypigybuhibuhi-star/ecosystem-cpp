@@ -249,6 +249,11 @@ void life_note(int id,int tick,const char* kind,float v=0.f){
 // 性フェロモンを出す状態か。体が成熟し、繁殖に回せる貯えがあるとき(匂いの放出と、その合成の費用で同じ判定を使う)
 // 繁殖の閾値の基準(組織の炭素に比例。繁殖に回す割合の項を掛ける前)
 inline float a_divide_base(const Animal& a){ return A_DIVIDE_RATIO*a.body*CORPSE_RETURN; }
+// 外から放す個体の脂肪(条件)。羽化して食べ終えた成体として、その個体の遺伝子 store_fat が目指す量まで貯えた体で放す。
+// 日数は基礎代謝で数える(形質の維持費は神経網と感覚器が動き出すまで決まらないので含めない)。足りない分は放した後に遺伝子の規則で満たす
+inline float release_fat(const Animal& a){
+    return a.store_fat*(float)FAT_DAYS_MAX*A_SMR*a.body*CORPSE_RETURN*allo_k(a.body)*UPD_PER_DAY;
+}
 inline bool estrus_ready(const Animal& a){
     return a.body>=a.size*MATURE_FRAC && a.energy>a_divide_base(a)*0.7f;
 }
