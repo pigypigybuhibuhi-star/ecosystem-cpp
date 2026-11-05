@@ -129,7 +129,7 @@ void update_animals(){
                 if(sig>0.02f){ in[k]=sig*(1.f-d/range); break; }
             }
         }
-        in[N_SENSOR+0]=std::min(1.f,a.energy/A_DIVIDE_TH);
+        in[N_SENSOR+0]=std::min(1.f,a.energy/a_divide_base(a));
         in[N_SENSOR+1]=clamp01((temper[sci]+30.f)/70.f);
         in[N_SENSOR+2]=soil_water[sci];
         in[N_SENSOR+3]=std::min(1.f,a.body/3.f);   // 自分の体格。戦うか逃げるかを分ける
@@ -158,7 +158,8 @@ void update_animals(){
 
         int hci=idx(std::max(0,std::min(GRID_W-1,(int)a.x)),
                     std::max(0,std::min(GRID_H-1,(int)a.y)));
-        if(a.body<a.size && a.energy>1.0f){
+        // 育つのは、糖の貯え(基礎代謝の GLYCO_DAYS 日分。組織の炭素に比例)を超えた分から
+        if(a.body<a.size && a.energy>(float)GLYCO_DAYS*A_SMR*a.body*CORPSE_RETURN*allo_k(a.body)*UPD_PER_DAY){
             float g=std::min(BODY_GROW_RATE,a.size-a.body);
             a.body+=g; a.energy-=g*BODY_GROW_COST;
             // 組織に残るのは CORPSE_RETURN ぶん。残りは合成の呼吸で CO2 になる
@@ -269,7 +270,7 @@ void update_animals(){
             float meat_dig  = a.diet;
             // 1 回の行為で摂れる量の上限 = 摂食速度 × 組織の炭素 × その行為が受け持つ時間
             // (1 回の更新 ANIMAL_STRIDE·DT 分を、更新あたりの期待回数で割った時間)
-            float gut_rate=A_RCR*a.body*CORPSE_RETURN;
+            float gut_rate=A_RCR*a.body*CORPSE_RETURN*allo_k(a.body);
             // 食べるかどうかは神経網の出力(want_eat)が決める。消化の能力は一口から得る量と費用だけを決め、
             // 能力の値で行動を打ち切る閾値は置かない(能力が 0 なら得るものも 0)
             if(plant_dig>0.f && want_eat>ACT_THRESH){
@@ -414,13 +415,14 @@ void update_animals(){
                    +a.digest*DIGEST_COST                   // 長い腸は重い
                    +a.toxin*TOXIN_COST+a.tox_resist*TOXRES_COST
                    +a.burrow*BURROW_COST+a.nocturnal*NOCTURNAL_COST
-                   +a.fat*FAT_COST;
+                   +a.fat*FAT_COST
+                   // 長命な体の修復と呼吸器の維持も、組織の量に比例する形質の維持費として測る(以前は 1 個体あたりの定数)
+                   +a.lifespan*LIFESPAN_COST+a.resp*RESP_COST;
         // 基礎代謝と形質の維持費は組織の炭素に比例する。歩く費用は別に足す
-        float maint=A_SMR*a.body*CORPSE_RETURN*(1.f+upkeep/A_TRAIT_REF);   // 体の維持費(1 回の更新)
-        float metab=maint+sp*A_MOVE_COST;
+        float maint=A_SMR*a.body*CORPSE_RETURN*allo_k(a.body)*(1.f+upkeep/A_TRAIT_REF);   // 体の維持費(1 回の更新)
+        float metab=maint+sp*A_MOVE_COST*std::pow(std::max(a.body,1e-6f),A_MOVE_EXP);
         float sen=senesce(a.age,a.lifespan,LIFE_MIN_A,LIFE_MAX_A);
         metab *= (1.f+sen);
-        metab += LIFESPAN_COST*a.lifespan;
         if(estrus_ready(a)) metab += ESTRUS_COST*a.estrus*a.body;   // 性フェロモンの合成
         // 発病
         if(aload[ci]>0.02f){
@@ -436,7 +438,7 @@ void update_animals(){
         // 使ったエネルギーは糖の酸化(または発酵)でまかなう。体にある分だけが燃料になる。
         // 好気呼吸は CH2O + O2 → CO2 + H2O(呼吸商 1)なので、CO2 に出る炭素と同じ量の O2 を使う。
         // マスの O2 で足りない分は発酵で、炭素は乳酸などの有機物のまま体の外(糞)に出る
-        { float spent=metab/eff + a.resp*RESP_COST;
+        { float spent=metab/eff;
           float fc=std::min(spent,std::max(0.f,a.energy))*CO2_PER_ENERGY;
           float ox=std::min(fc,std::max(0.f,o2_at(ci)));
           o2_add(ci,-ox); co2_add(ci,ox);
@@ -464,7 +466,7 @@ void update_animals(){
             corpses.push_back({a.x,a.y,a.body*CORPSE_RETURN+std::max(0.f,a.energy)+a.fat,1});
             continue;
         }
-        if(a.energy>=A_DIVIDE_TH*(1.4f-0.6f*a.repro_alloc)
+        if(a.energy>=a_divide_base(a)*(1.4f-0.6f*a.repro_alloc)
            && a.body>=a.size*MATURE_FRAC
            && count_by_rate(1.0)>0
            && birth_slot(a_want,1+(int)(a.brood*(MAX_BROOD-1)+0.5f),a_slot_p,
@@ -501,12 +503,17 @@ void update_animals(){
               float c=invest*(1.f-nb*share)*CO2_PER_ENERGY;
               o2_add(bi0,-std::min(c,o2_at(bi0))); co2_add(bi0,c); }
             for(int bi=0;bi<nb;bi++){
-            // 子の体 0.10 を作る費用は子の取り分から払う。足りない卵は育たずに死骸になる
-            float cE=invest*share, body0=0.10f*BODY_GROW_COST;
-            if(cE<=body0){ corpses.push_back({a.x,a.y,cE,1}); continue; }
+            // 子の体は親の投資 ÷ 産む数(取り分 cE)から決める。取り分を、体を作る費用と、
+            // その体の糖の貯え(基礎代謝の GLYCO_DAYS 日分)に分ける。母の大きさ(size)を超える分は貯えに残す。
+            // 体が A_BODY_MIN に届かない卵は育たずに死骸になる
+            float cE=invest*share;
+            float res_per_body=(float)GLYCO_DAYS*A_SMR*CORPSE_RETURN*UPD_PER_DAY;
+            float cb=std::min(a.size,cE/(BODY_GROW_COST+res_per_body));
+            if(cb<A_BODY_MIN){ corpses.push_back({a.x,a.y,cE,1}); continue; }
+            float body0=cb*BODY_GROW_COST;
             { int bx=(int)a.x, by=(int)a.y;
               int bi0=(bx>=0&&bx<GRID_W&&by>=0&&by<GRID_H)?idx(bx,by):0;
-              a_burn(co2.data(),o2.data(),bi0,0.10f*(BODY_GROW_COST-CORPSE_RETURN)); }
+              a_burn(co2.data(),o2.data(),bi0,cb*(BODY_GROW_COST-CORPSE_RETURN)); }
             Animal c=a;
             c.energy=cE-body0;
             if(mate){
@@ -531,7 +538,7 @@ void update_animals(){
             if(c.x<0.f) c.x=0.f;     if(c.x>=GRID_W) c.x=GRID_W-1.f;
             if(c.y<0.f) c.y=0.f;     if(c.y>=GRID_H) c.y=GRID_H-1.f;
             c.dir=frand(0.f,6.2832f); c.age=0; c.eaten=0;
-            c.body=0.10f; c.lin=a.lin;
+            c.body=cb; c.lin=a.lin;
             c.id=next_animal_id++;
             // 変異は、組み換えで両親から選んだ値に掛ける
             c.speed   =mutate(c.speed,   0.0f,1.0f);

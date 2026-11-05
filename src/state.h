@@ -246,8 +246,10 @@ void life_note(int id,int tick,const char* kind,float v=0.f){
 // 選択勾配を測るための遺伝子ベクトル。
 // 繁殖した親と集団全体で平均を比べれば、どちらへ押されているかが分かる
 // 性フェロモンを出す状態か。体が成熟し、繁殖に回せる貯えがあるとき(匂いの放出と、その合成の費用で同じ判定を使う)
+// 繁殖の閾値の基準(組織の炭素に比例。繁殖に回す割合の項を掛ける前)
+inline float a_divide_base(const Animal& a){ return A_DIVIDE_RATIO*a.body*CORPSE_RETURN; }
 inline bool estrus_ready(const Animal& a){
-    return a.body>=a.size*MATURE_FRAC && a.energy>A_DIVIDE_TH*0.7f;
+    return a.body>=a.size*MATURE_FRAC && a.energy>a_divide_base(a)*0.7f;
 }
 inline void sg_vec_a(const Animal& a,double* v){
     v[0]=a.diet;  v[1]=a.detritus; v[2]=a.reach;    v[3]=a.size;

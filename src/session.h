@@ -39,7 +39,7 @@ void release_animals(int per_species,int frame){
             Animal a{};   // 脂肪・潜り具合などの状態は 0 から始める
             a.x=bx+frand(0.f,1.f); a.y=by+frand(0.f,1.f);
             a.dir=frand(0.f,6.2832f);
-            a.energy=A_DIVIDE_TH*0.7f; a.alive=true; a.age=0; a.eaten=0;
+            a.energy=A_DIVIDE_RATIO*g.size*MATURE_FRAC*CORPSE_RETURN*0.7f; a.alive=true; a.age=0; a.eaten=0;
             a.speed=g.speed; a.turn=g.turn; a.reach=g.reach; a.size=g.size;
             a.diet=g.diet;   a.jaw=g.jaw;   a.cold_tol=g.cold_tol;
             a.aquatic=g.aquatic; a.resp=g.resp; a.detritus=g.detritus;

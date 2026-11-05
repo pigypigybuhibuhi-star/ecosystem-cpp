@@ -394,11 +394,20 @@ const float A_MAX_SPEED     = LIN(PM(0.20f,ANIMAL_STRIDE),ANIMAL_STRIDE);  // [1
 // 呼吸商 1 で 0.3 ml CO2 = 1.34e-5 mol C = 1.6e-4 g C /g/時。生重 1 g の炭素は約 0.15 g(乾燥 30%、その半分が炭素)なので、
 // 組織の炭素あたり 1.07e-3 /時 = 1.8e-5 /分(約 2.6% /日)。代謝は体の量に比例して増える
 const float A_SMR           = LIN(1.8e-5,ANIMAL_STRIDE);
+// 上の値は体 1(生重 100 mg)のもの。代謝の速さは体の重さの 0.75 乗に比例するので(Kleiber 則。昆虫でも
+// 種の間で 0.75〜0.82、Chown et al. 2007。育つ途中でも同じ程度、Greenlee & Harrison 2005)、組織あたりの代謝は M^-0.25。
+// 消化管を通り抜ける時間も M^0.25 なので、組織あたりの摂食の上限(A_RCR)にも同じ係数を掛ける
+const float A_ALLO_EXP      = -0.25f;
+inline float allo_k(float body){ return std::pow(std::max(body,1e-6f),A_ALLO_EXP); }
 // 形質の維持費(顎・射程・耐寒・感覚器・脳など)は、維持する組織の代謝の上乗せ分。組織の量に比例する。
 // 以前は 1 個体あたりの定数で、旧い基礎代謝 A_METAB(1 個体あたり 1.94e-4 /分)と並べて置かれていた。
 // 形質どうしの費用の比はそのまま残し、旧い基礎代謝に対する比を、今の基礎代謝(組織の炭素あたり)への上乗せの比として使う
 const float A_TRAIT_REF     = LIN(PM(0.040f,ANIMAL_STRIDE),ANIMAL_STRIDE);  // 形質の費用を測る基準(旧い A_METAB) [1分あたり 0.000194]
-const float A_MOVE_COST     = 0.060f;
+const float A_MOVE_COST     = 0.060f;   // 体 1 の個体の、距離あたりの歩く費用
+// 一匹が距離あたりに使う量は体の重さの 0.68 乗に比例する(正味の移動の費用は体重あたり M^-0.32。Full & Tu 1991、
+// Lighton et al. 1987、Taylor et al. 1982)。以前は体の大きさによらない 1 個体あたりの定数で、生重 4 mg の子も体 1 と同じ費用を払っていた。
+// 体 1 での値と、速さの上限(A_MAX_SPEED)はそのまま(速さと距離あたりの費用は、実際の値から互いに逆向きにずれて打ち消し合っている。報告書)
+const float A_MOVE_EXP      = 0.68f;
 const float A_REACH_COST    = LIN(PM(0.018f,ANIMAL_STRIDE),ANIMAL_STRIDE);  // [1分あたり 8.75e-05]
 const float A_SIZE_COST     = LIN(PM(0.020f,ANIMAL_STRIDE),ANIMAL_STRIDE);  // [1分あたり 9.72e-05]
 const float JAW_COST        = LIN(PM(0.012f,ANIMAL_STRIDE),ANIMAL_STRIDE);  // [1分あたり 5.83e-05]
@@ -409,7 +418,14 @@ const float A_BITE          = 0.45f;   // 一口で植物から取る割合。�
 // 容量は構造(組織の炭素 = 体 × CORPSE_RETURN)で決まり、蓄えや脂肪では決まらない
 const float A_RCR           = (float)(1.0/DAY_MIN);  // 1 分あたり、組織の炭素 1 あたりに摂れる餌の炭素 [6.94e-04 /分]
 const float GRAZE_DEFOLIATE = 0.18f/PLANT_C_SCALE;   // 食べた炭素あたり。植物の体の尺度(GROW_COST)と同じ比で直す   // 採食が葉を奪う量。局所的な枯渇を生む
-const float A_DIVIDE_TH     = 6.0f;
+// 繁殖の閾値は組織の炭素に比例する(移行の段階 5 の作者の判断)。比は、昆虫の一回の産卵の量が雌の体の重さの約 0.3 であること
+// (Honěk 1993 の多くの種の中ほど)から、繁殖に回す割合 0.5 の個体が閾値ちょうどで産むとき、投資 = 0.3 × 組織の炭素 となるように置く。
+// 投資 = エネルギー × (0.20 + 0.55·r)、閾値 = 比 × 組織の炭素 × (1.4 − 0.6·r)
+const float CLUTCH_FRAC     = 0.30f;   // 一回の産卵の量 ÷ 体の重さ(Honěk 1993)
+const float A_DIVIDE_RATIO  = CLUTCH_FRAC/((1.4f-0.6f*0.5f)*(0.20f+0.55f*0.5f));   // [0.574]
+// 卵・孵った子が育ちうる最小の体。体 1 = 生重 100 mg なので 1e-4 は 10 µg(ショウジョウバエの卵の重さの桁。
+// 地表を歩く昆虫の卵は 10 µg〜1 mg。Berrigan 1991)。これより小さい取り分の卵は育たずに死骸になる
+const float A_BODY_MIN      = 1.0e-4f;
 const float A_EAT_LOSS      = 0.50f;   // 同化効率50%。若い葉や種子は消化しやすい
 const float FORCE_EXP       = 2.f/3.f; // 筋力は筋の断面積に比例し、相似な体では 体重^(2/3)(Hill 1950、Alexander 1985)
 const float PRED_EFF        = FRAC(PMF(0.85f,ANIMAL_STRIDE),ANIMAL_STRIDE);  // [率 0.00922 /分]

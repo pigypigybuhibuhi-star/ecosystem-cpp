@@ -652,11 +652,13 @@ int main(int argc,char** argv){
                     if(!sea[idx(gx,gy)]) continue;
         if(depthn(idx(gx,gy))>0.12f) continue;
         if(shelf[idx(gx,gy)]<0.5f) continue;   // 岸のそばに置く
-                    a.dir=frand(0.f,6.2832f); a.energy=3.0f; a.alive=true;
+                    a.dir=frand(0.f,6.2832f); a.alive=true;
                     a.age=0; a.eaten=0;
                     a.speed=0.5f; a.turn=0.2f; a.reach=0.7f;
                     a.size=0.5f; a.diet=0.0f; a.jaw=1.0f; a.cold_tol=0.3f;
-                    a.body=0.10f; a.aquatic=1.0f; a.salt_tol=1.0f; a.resp=0.3f; a.detritus=0.0f;
+                    a.body=a.size;   // 放す個体は育ち切った体で放す(条件)
+                    a.energy=A_DIVIDE_RATIO*a.body*CORPSE_RETURN*0.7f;   // 貯えは繁殖の閾値の基準の 0.7(後から放す個体と同じ)
+                    a.aquatic=1.0f; a.salt_tol=1.0f; a.resp=0.3f; a.detritus=0.0f;
                     a.sexual=0.2f; a.arboreal=0.0f; a.perch=0.0f; a.aerobic=1.0f;
                     a.mut_rate=0.3f; a.bite_size=0.5f; a.digest=0.5f;                    a.mother=-1; a.father=-1; a.gen=0;
                     a.lesion=false;
@@ -1434,8 +1436,8 @@ int main(int argc,char** argv){
                     else      snprintf(b,120,"動物 #%d",sa->id);
                     sf::Text ttl(font,jp(b),14); ttl.setPosition({PX+10.f,by});
                     ttl.setFillColor(sf::Color(255,200,120)); window.draw(ttl); by+=lh+2;
-                    lab(by,"体力"); snprintf(b,120,"%.2f / %.1f",sa->energy,A_DIVIDE_TH);
-                    bar(by,sa->energy/A_DIVIDE_TH,sf::Color(0,200,80),b); by+=lh+6;
+                    lab(by,"体力"); snprintf(b,120,"%.2f / %.2f",sa->energy,a_divide_base(*sa));
+                    bar(by,sa->energy/a_divide_base(*sa),sf::Color(0,200,80),b); by+=lh+6;
                     {
                         static const char* AN[13]={"肉食","体格","届く高さ","速度",
                                                    "顎","耐寒","水生","分解",
