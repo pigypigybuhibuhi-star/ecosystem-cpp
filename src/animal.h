@@ -158,13 +158,16 @@ void update_animals(){
 
         int hci=idx(std::max(0,std::min(GRID_W-1,(int)a.x)),
                     std::max(0,std::min(GRID_H-1,(int)a.y)));
-        // 育つのは、糖の貯え(基礎代謝の GLYCO_DAYS 日分。組織の炭素に比例)を超えた分から
-        if(a.body<a.size && a.energy>(float)GLYCO_DAYS*A_SMR*a.body*CORPSE_RETURN*allo_k(a.body)*UPD_PER_DAY){
-            float g=std::min(BODY_GROW_RATE,a.size-a.body);
+        // 育つのは、糖の貯え(基礎代謝の GLYCO_DAYS 日分。組織の炭素に比例)を超えた余剰から。
+        // 余剰を合成に回す速さ FAT_RATE のうち、遺伝子 grow_alloc の割合を体の合成に、残りを脂肪に回す。
+        // 速さの上限は置かない。体の合成の費用と、余剰を生む摂食(消化管の容量)が決める
+        { float glyco_g=(float)GLYCO_DAYS*A_SMR*a.body*CORPSE_RETURN*allo_k(a.body)*UPD_PER_DAY;
+          if(a.body<a.size && a.energy>glyco_g){
+            float g=std::min(a.grow_alloc*FAT_RATE*(a.energy-glyco_g)/BODY_GROW_COST,a.size-a.body);
             a.body+=g; a.energy-=g*BODY_GROW_COST;
             // 組織に残るのは CORPSE_RETURN ぶん。残りは合成の呼吸で CO2 になる
             a_burn(co2.data(),o2.data(),hci,g*(BODY_GROW_COST-CORPSE_RETURN));
-        }
+          } }
 
         // 枝が支えられる高さ。重い体は高くまで登れない
         float bearable = canopy_h[hci]*BRANCH_SUPPORT/std::max(0.15f,a.body);
@@ -450,7 +453,9 @@ void update_animals(){
         float glyco=(float)GLYCO_DAYS*day_cost;
         float fat_goal=a.store_fat*(float)FAT_DAYS_MAX*day_cost;
         if(a.energy>glyco && a.fat<fat_goal){
-            float put=std::min((a.energy-glyco)*FAT_RATE,
+            // 育つ間は、合成に回す余剰のうち grow_alloc の分を成長が取り、脂肪には残りの (1 − grow_alloc) を回す
+            float to_fat=(a.body<a.size)? (1.f-a.grow_alloc) : 1.f;
+            float put=std::min((a.energy-glyco)*FAT_RATE*to_fat,
                                fat_goal-a.fat);
             a.energy-=put; a.fat+=put*0.85f;
             a_burn(co2.data(),o2.data(),ci,put*0.15f);   // 脂肪の合成の呼吸
@@ -522,7 +527,7 @@ void update_animals(){
                 PICK(jaw); PICK(cold_tol); PICK(aquatic); PICK(salt_tol); PICK(resp);
                 PICK(detritus); PICK(sexual); PICK(arboreal); PICK(brood);
                 PICK(lifespan); PICK(toxin); PICK(tox_resist);
-                PICK(burrow); PICK(nocturnal); PICK(store_fat); PICK(repro_alloc);
+                PICK(burrow); PICK(nocturnal); PICK(store_fat); PICK(repro_alloc); PICK(grow_alloc);
                 PICK(estrus);
                 #undef PICK
                 for(int k=0;k<N_W;k++)
@@ -574,6 +579,7 @@ void update_animals(){
             c.nocturnal  =mutate(c.nocturnal,  0.0f,1.0f);
             c.store_fat  =mutate(c.store_fat,  0.0f,1.0f);
             c.repro_alloc=mutate(c.repro_alloc,0.0f,1.0f);
+            c.grow_alloc =mutate(c.grow_alloc, 0.0f,1.0f);
             c.estrus     =mutate(c.estrus,     0.0f,1.0f);
             c.fat=0.f; c.depth=0.f;
             for(int k=0;k<N_W;k++) c.w[k]=mutate(c.w[k],-3.0f,3.0f);
