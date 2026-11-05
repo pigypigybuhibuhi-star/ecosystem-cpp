@@ -49,7 +49,7 @@ void release_animals(int per_species,int frame){
             for(int k=0;k<N_REC;k++) a.rec[k]=0.f;
             a.brood=g.brood;     a.lifespan=g.lifespan;
             a.toxin=g.toxin;     a.tox_resist=g.tox_resist; a.burrow=g.burrow;
-            a.nocturnal=g.nocturnal; a.store_fat=g.store_fat; a.repro_alloc=g.repro_alloc;
+            a.nocturnal=g.nocturnal; a.store_fat=g.store_fat; a.repro_alloc=g.repro_alloc; a.grow_alloc=g.grow_alloc;
             a.estrus=g.estrus;
             a.bite_size=g.bite_size; a.digest=g.digest;
             for(int k=0;k<N_IMMUNE;k++) a.im[k]=g.im[k];
