@@ -578,7 +578,7 @@ const float MICROBE_DECOMP_K = (float)PMF(0.10f);  // 微生物が動物由来�
 // 植物由来の死骸(落葉・枯れた株)はリグニンとセルロースが多く、分解がずっと遅い(Melillo et al. 1982)。
 // 落葉の分解の一次の率は温帯の草地・森林で 0.2〜1.0 /年(LIDET、Gholz et al. 2000、Parton et al. 2007)。
 // 最適の気温(act = 1)、分解の速さ rate = 0.5 の群落一つで 1.0 /年 になるよう、rate 1 あたり 2.0 /年 とする
-const float MICROBE_DECOMP_K_P = (float)(2.0/YEAR_MIN);  // [率 3.81e-06 /分]
+const float MICROBE_DECOMP_K_P = (float)(1.6/YEAR_MIN);  // 感度の試験 −20%(基準 2.0 /年)[率 3.04e-06 /分]
 // 間引いて MICROBE_STRIDE tick に 1 回しか処理しないぶんは、その間に分解される割合 1−exp(−k·STRIDE·DT) で取り戻す。
 // 以前はこれに加えて BOOST=2(「間引いたぶん」)を掛けていたが、間引きの換算は STRIDE で済んでいるので二重だった
 // 低温に耐える酵素(不凍タンパク質・低温で働く酵素)の維持費。維持の呼吸は維持する細胞の量に比例する(Pirt 1965)。
