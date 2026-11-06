@@ -45,7 +45,9 @@ void plant_inflow(){
         g_bud.n_immig+=p.n_store+p.height*N_PER_GROWTH;
     }
 }
-void update_plants(){
+// 植物の索引を今の並びから作る。植物の更新の終わりに死んだ株が除かれて添字がずれるので、
+// 索引を読む系(動物の摂食・感覚、植物の更新)の直前に毎回作り直す(CLAUDE.md「索引は使う直前に作り直す」)
+void build_pgrid(){
     pgrid.reset();
     for(const auto& p:plants){
         if(!p.alive||p.seed_wait>0) continue;   // 種子は光も遮らず、食われもしない
@@ -59,6 +61,14 @@ void update_plants(){
         int gx=(int)plants[i].x, gy=(int)plants[i].y;
         if(gx<0||gx>=GRID_W||gy<0||gy>=GRID_H) continue;
         pgrid.put(idx(gx,gy),i);
+    }
+}
+void update_plants(){
+    build_pgrid();
+    for(int i=0;i<(int)plants.size();i++){
+        if(!plants[i].alive||plants[i].seed_wait>0) continue;
+        int gx=(int)plants[i].x, gy=(int)plants[i].y;
+        if(gx<0||gx>=GRID_W||gy<0||gy>=GRID_H) continue;
         fuel[idx(gx,gy)]+=plants[i].height*1.2f;
     }
     std::fill(canopy_h.begin(),canopy_h.end(),0.f);

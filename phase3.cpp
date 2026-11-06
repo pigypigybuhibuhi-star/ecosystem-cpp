@@ -586,7 +586,7 @@ int main(int argc,char** argv){
             if(frame%PRECIP_INTERVAL==0){ compute_precip(); classify_climate(); }
                                                                       prof_end(1);
             prof_begin(); update_water(frame); update_groundwater(frame); prof_end(2);
-            prof_begin(); update_animals();                           prof_end(3);
+            prof_begin(); build_pgrid(); update_animals();            prof_end(3);
             prof_begin();
             if(frame%PATH_INTERVAL==0) update_pathogens();
             update_plants();
