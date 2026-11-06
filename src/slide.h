@@ -1,9 +1,28 @@
 // 崖崩れ(phase3.cpp から分けた。phase3.cpp が順に #include する)
 // 崖崩れ。急斜面の表土が滑り、その場の生物を巻き込んで斜面の下へ運ぶ
 // 崩土は最も急な下りを伝って流れ、出発点からの見通し角が H/L を下回るところで止まる(少なくとも一つ下のマスまでは動く)
+// 崖崩れが使う植物の索引。植物の更新の終わりに死んだ株が配列から除かれるので、植物の更新で作った pgrid の添字は
+// ここではずれている。崩れが起きる tick にだけ、使う直前に作り直す(pgrid は書き換えない)
+Grid sgrid; bool sgrid_ok=false;
+void rebuild_sgrid(){
+    sgrid.reset();
+    for(const auto& p:plants){
+        if(!p.alive||p.seed_wait>0) continue;
+        int gx=(int)p.x, gy=(int)p.y;
+        if(gx<0||gx>=GRID_W||gy<0||gy>=GRID_H) continue;
+        sgrid.count(idx(gx,gy));
+    }
+    sgrid.finalize();
+    for(int i=0;i<(int)plants.size();i++){
+        const Plant& p=plants[i];
+        if(!p.alive||p.seed_wait>0) continue;
+        int gx=(int)p.x, gy=(int)p.y;
+        if(gx<0||gx>=GRID_W||gy<0||gy>=GRID_H) continue;
+        sgrid.put(idx(gx,gy),i);
+    }
+    sgrid_ok=true;
+}
 void slide_at(int ci){
-    slide_events++;
-    ev_record(EV_SLIDE,ci%GRID_W,ci/GRID_W,slope[ci]);
     // 到達点を決める
     float z0=elev[ci];
     int cur=ci; float run=0.f;
@@ -21,9 +40,14 @@ void slide_at(int ci){
         cur=lo; run=r2;
         if(sea[cur]) break;                           // 海に入ったらそこで沈む
     }
+    // 下りが無ければ土砂は動けない。滑りは起きず、生き物も地形も変わらない
+    if(cur==ci) return;
+    slide_events++;
+    ev_record(EV_SLIDE,ci%GRID_W,ci/GRID_W,slope[ci]);
+    if(!sgrid_ok) rebuild_sgrid();
     float dep_x=(cur%GRID_W)+0.5f, dep_y=(cur/GRID_W)+0.5f;
-    for(int t=pgrid.b(ci);t<pgrid.e(ci);t++){
-        Plant& p=plants[pgrid.items[t]];
+    for(int t=sgrid.b(ci);t<sgrid.e(ci);t++){
+        Plant& p=plants[sgrid.items[t]];
         if(!p.alive) continue;
         p.alive=false;
         // 体の炭素(建設に払った GROW_COST ぶん)と残りのエネルギーは死骸として崩土と一緒に運ばれる
@@ -38,7 +62,6 @@ void slide_at(int ci){
         life_note(a.id,g_frame,"崖崩れ",(float)a.age);
         corpses.push_back({dep_x,dep_y,a.body*CORPSE_RETURN+std::max(0.f,a.energy)+a.fat,1});
     }
-    if(cur==ci) return;                               // 動けない(下りが無い)なら地形も表土も変わらない
     // 表土の窒素と土砂を到達点へ運ぶ。崩れた跡は SLIDE_DEPTH_M だけ低くなり、傾斜が緩む
     float moved=soil_n[ci]*0.65f;
     soil_n[ci]-=moved; soil_n[cur]+=moved;
