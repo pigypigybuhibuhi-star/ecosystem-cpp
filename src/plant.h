@@ -70,7 +70,7 @@ void update_plants(){
     double t_gain=0,t_light=0,t_tf=0,t_wf=0,t_co2=0; long t_n=0;
     for(int ci=cs;ci<cee;ci++){
         int b0=pgrid.start[ci], e0=pgrid.start[ci+1];
-        if(b0==e0) continue;
+        if(b0==e0){ if(solar[ci]>0.f) ground_frac[ci]=1.f; continue; }
         const int* use=&pgrid.items[b0];
         int cnt=e0-b0;
         // このマスで最も高い株。つるはこれを支えにして登る
@@ -133,6 +133,8 @@ void update_plants(){
             t_light+=got; t_tf+=tf; t_wf+=wf;
             t_co2+=(need>1e-9f? avail/need : 1.f);
         }
+        // 林冠を抜けて地面に届く光の割合(土からの蒸発が使う)。夜は前の昼の値のまま
+        if(solar[ci]>0.f) ground_frac[ci]=clamp01(remaining/solar[ci]);
     }
     // 各スレッドの集計を、最後に一度だけ足し合わせる
     { static std::mutex dbg_mx;

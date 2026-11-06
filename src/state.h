@@ -26,6 +26,8 @@ std::vector<float> gbuf(GRID_W*GRID_H, 0.f);
 std::vector<float> wind(GRID_H, 0.f);
 std::vector<float> slope(GRID_W*GRID_H, 0.f);
 std::vector<float> precip(GRID_W*GRID_H, 0.f);
+double precip_land_mean=0;             // 降水の場の陸の平均(背景の降水を mm に結びつけるため)
+std::vector<float> ground_frac(GRID_W*GRID_H, 1.f);   // 植物の林冠を抜けて地面に届く光の割合(光合成の計算が毎 tick 書く。昼だけ)
 std::vector<float> soil_water(GRID_W*GRID_H, 0.f);
 std::vector<float> soil_n(GRID_W*GRID_H, SOIL_N_BASE);
 std::vector<float> gw_h(GRID_W*GRID_H, 0.f);   // 陸の帯水層の飽和した厚さ(m、0〜GW_DEPTH_M)。海のマスは使わない
@@ -43,7 +45,8 @@ struct Budget {
     double n_fix=0;                  // 大気の N2 からの窒素固定(大気の N2 は帳簿の外)
     double n_fire=0;                 // 燃えた組織の窒素は揮発して大気へ出る(N2・NOx。大気は帳簿の外)
     double n_carn=0;                 // 食虫植物が獲物から得る窒素(動物は窒素の在庫を持たないので、帳簿の外から入る)
-    double w_relax=0;                // 陸の土壌水: 降水・河川・流出による目標への緩和(上下限込み)
+    double w_rain=0;                 // 背景の降水のうち陸の土と地下水に染み込んだ分(雨の水は大気の水蒸気から来る。大気は帳簿の外。染み込めず流れ去った分は数えない)
+    double w_evap=0;                 // 陸の土からの蒸発(負。大気の水蒸気は帳簿の外)
     double w_transp=0;               // 蒸散: 陸の土の水と植物の貯水から大気へ出る水(大気の水蒸気は帳簿の外)
     double w_sea=0;                  // 海のマスの植物と海との水のやりとり(海の水は帳簿の外)
     double w_storm=0;                // 雨雲から陸の土と地下水に染み込んだ雨(雲の水は大気の水蒸気から来る。大気は帳簿の外)

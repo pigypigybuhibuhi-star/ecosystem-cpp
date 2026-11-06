@@ -139,18 +139,8 @@ void update_storms(){
                     if(r2>=R*R) continue;
                     // 浸透の上限を超える強さの分は地表を流れ去る(流れた水は帳簿の外)
                     float inf=std::min(wc*std::exp(-r2/(2.f*sr*sr)),GW_KS_MM*(float)DT/SOIL_W_MM);
-                    float add=std::min(inf,std::max(0.f,FIELD_CAP-soil_water[i]));
-                    soil_water[i]+=add;
-                    // 根の層を満たした残りは下へ染みて地下水になる。帯水層が満ちていれば流れ去る
-                    float perc=std::max(0.f,std::min((inf-add)/GW_W,GW_DEPTH_M-gw_h[i]));
-                    gw_h[i]+=perc;
-                    // 染みていく水は根の層の水と混ざり、その濃さの塩を地下へ運ぶ(塩の洗い出し)
-                    if(perc>0.f && salt_soil[i]>0.f){
-                        float pw=perc*GW_W;
-                        float sl=salt_soil[i]*pw/(soil_water[i]+pw);
-                        salt_soil[i]-=sl; salt_gw[i]+=sl;
-                    }
-                    wsum+=add+perc*GW_W;
+                    // 根の層を満たし、残りは地下水へ。帯水層が満ちていれば流れ去る(water.h の infiltrate。背景の雨と同じ仕組み)
+                    wsum+=infiltrate(i,inf);
                 }
                 row_w[y]+=wsum;
             }
