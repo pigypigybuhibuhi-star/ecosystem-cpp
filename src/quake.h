@@ -67,6 +67,7 @@ void quake_at(float mag,float ex,bool main){
            g_frame,mag,main?"main":"after",ex,a,slide_events-s0);
 }
 void update_quakes(){
+    sgrid_ok=false;                    // 植物はこの tick に生まれ死んだ。崩れの索引は使うときに作り直す(崩れは揺れと update_slides の両方から起きる)
     if(g_replay){                      // 再生中は記録の各件だけ。再生した揺れからは崩れを起こさない(崩れは記録の各件で再生する)
         // 揺れそのもの(感覚の物理)は通常通り起こし、動物が感じ取れるようにする
         ev_replay_due(EV_QUAKE,[](const EnvEvent& e){ quake_events++; quake_shake(e.strength,e.x+0.5f,false); },false);
