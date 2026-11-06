@@ -135,9 +135,26 @@ const int   PRECIP_INTERVAL = 300;     // 降水場を計算し直す間隔
 const float ARID_COEF       = 0.0010f; // 乾燥限界の係数
 const float ARID_SOFT       = 1.20f;   // 大きいほど乾湿の差がなだらかになる
 const float FIELD_CAP       = 1.00f;   // 土壌が保持できる上限
-const float WATER_RELAX     = FRAC(PMF(0.020f));  // 土壌水分が目標へ近づく速さ [率 0.000196 /分]
+// 土の水の流れ(D-2026-10-28-2 の作者の答え (a))。土の水 = 前の値 + 染み込んだ雨 − 土からの蒸発 − 蒸散。根の層に収まらない分は地下水へ
+// 背景の降水(雨雲ではない、大きな規模の前線などの雨)の陸の年平均は条件。北緯 40° の陸の帯状平均でおよそ 1.6〜1.8 mm/日
+// (GPCP、Adler et al. 2003)。場所ごとの分け方と季節は、降水の場(水蒸気の運び・地形性降雨)と wet が決める
+const double P_BG_ANN_MM    = 600.0;   // mm/年(条件)
+// 土からの蒸発は Priestley–Taylor(1972)の可能蒸発 × 土の湿りの係数 × 地面に届く光の割合。
+// α = 1.26。正味放射は FAO-56(Allen et al. 1998)の式: 短波は晴天の透過率 0.75 × 太陽定数 1361 W/m² × 太陽高度の正弦、
+// アルベド 0.23、長波の正味の放出 σT⁴(0.34 − 0.14√e_a)(1.35 Rs/Rso − 0.35)。
+// 雲で地表の短波が晴天の何割になるか(Rs/Rso)は条件: 世界平均の地表の短波 全天 185 W/m²・晴天 244 W/m² の比 0.76(Wild et al. 2013)。
+// 雨雲の下でも同じ値を使う(雨雲の影はまだ放射に入れていない)
+const float CLOUD_SW_RATIO  = 0.76f;
+const float PT_ALPHA        = 1.26f;
+const float SOLAR_S0        = 1361.f;  // W/m²
+const float CLEAR_SKY_TAU   = 0.75f;
+const float SURF_ALBEDO     = 0.23f;
+const float SB_SIGMA        = 5.67e-8f;
+const float LATENT_VAP      = 2.45e6f; // J/kg
+// 土の湿りの係数 β = min(1, W / (0.75 × 圃場容水量))(バケツ模型、Manabe 1969)
+const float EVAP_BETA_FRAC  = 0.75f;
 const float RIVER_THRESHOLD = 260.f;   // 侵食後の地形に合わせて下げる
-const float RIVER_SUPPLY    = 0.60f;   // 河川が供給する水
+const float RIVER_SUPPLY    = 0.60f;   // 起動時の土の水の値(条件)を決めるときだけ使う。動いている間の川のマスは雨と湧き水だけを受ける
 const float SOIL_W_INIT     = 0.35f;   // 起動時に降水を決めるための仮の陸の土壌水分(条件)
 const float DROUGHT_COST    = LIN(PM(0.055f));  // 耐乾装置の維持費 [1分あたり 0.000535]
 const float STORE_COST      = LIN(PM(0.030f));  // 貯水組織の維持費 [1分あたり 0.000292]

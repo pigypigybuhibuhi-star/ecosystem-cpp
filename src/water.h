@@ -41,6 +41,9 @@ void compute_precip(){
     }
     // 降水は数十キロの範囲に広がる。行ごとの独立計算による筋も、これで消える
     box_blur(precip,PRECIP_BLUR,2);
+    double sp=0; long nl=0;
+    for(int i=0;i<GRID_W*GRID_H;i++) if(!sea[i]){ sp+=precip[i]; nl++; }
+    precip_land_mean=nl?sp/nl:0.0;
 }
 
 // 陸の土壌水分の目標(update_water の緩和の釣り合いの値)。乾燥指数も記録する
@@ -54,37 +57,90 @@ inline float water_target(int i,float wet){
     return target;
 }
 
-// 水収支: AW = [(1-RO)*AW + P - ET]+
-// ケッペンの乾燥指数にもとづいて土壌水分の目標を決め、そこへ緩やかに近づける
+// 雨が地面に染み込む。inf は染み込む量(土の水の単位。浸透の上限で切った後)。
+// まず根の層を圃場容水量まで満たし、残りは重力で下へ染みて地下水になる。帯水層が満ちていれば染み込めず地表を流れ去る(帳簿の外へ出る)。
+// 染みていく水は根の層の水と混ざり、その濃さの塩を地下へ運ぶ(塩の洗い出し)。雨雲の雨と背景の雨が同じ仕組みを通る。
+// 返す値は土と地下水に入った水(土の水の単位)
+inline float infiltrate(int i,float inf){
+    float add=std::min(inf,std::max(0.f,FIELD_CAP-soil_water[i]));
+    soil_water[i]+=add;
+    float perc=std::max(0.f,std::min((inf-add)/GW_W,GW_DEPTH_M-gw_h[i]));
+    gw_h[i]+=perc;
+    if(perc>0.f && salt_soil[i]>0.f){
+        float pw=perc*GW_W;
+        float sl=salt_soil[i]*pw/(soil_water[i]+pw);
+        salt_soil[i]-=sl; salt_gw[i]+=sl;
+    }
+    return add+perc*GW_W;
+}
+
+inline float rel_humidity(int i);   // weather_fire.h
+
+// 水収支(D-2026-10-28-2 の作者の答え (a)): 土の水 = 前の値 + 染み込んだ雨 − 土からの蒸発(蒸散は光合成の側で引く)。
+// 根の層に収まらない分は地下水へ、帯水層からも溢れれば流れ去る。目標への緩和は置かない
 void update_water(int frame){
     float ph=std::sin(2.f*3.14159265f*frame/SEASON_PERIOD);
     for(int y=0;y<GRID_H;y++){
-        float wet=1.f+0.45f*LAT_N*ph;             // 雨季と乾季(北半球)
-        if(wet<0.f) wet=0.f;
         for(int x=0;x<GRID_W;x++){
             int i=idx(x,y);
-            if(sea[i]){
-                soil_water[i]=FIELD_CAP;
-                // 有機物が沈降して栄養が抜ける。沿岸と湧昇域だけが補われる
-                // 帳簿は更新の前後の差で測る。式を分けると FMA の丸めが変わり結果がずれるため、更新の式は元のまま
-                float n0=soil_n[i];
-                soil_n[i]-=soil_n[i]*N_SINK;
-                float n1=soil_n[i];
-                soil_n[i]+=N_RUNOFF*shelf[i]*shelf[i];
-                g_bud.n_sink+=n1-n0; g_bud.n_runoff+=soil_n[i]-n1;
-                if(upwell[i]){ float n2=soil_n[i]; soil_n[i]+=N_UPWELL; g_bud.n_upwell+=soil_n[i]-n2; }
-                float pre=soil_n[i];
-                if(soil_n[i]<0.f) soil_n[i]=0.f;
-                g_bud.n_clamp+=soil_n[i]-pre;
-                continue;
-            }
-            float target=water_target(i,wet);
-            float w0=soil_water[i];
-            soil_water[i]+=(target-soil_water[i])*WATER_RELAX;
-            soil_water[i]=clamp01(soil_water[i]);
-            g_bud.w_relax+=soil_water[i]-w0;
+            if(!sea[i]) continue;
+            soil_water[i]=FIELD_CAP;
+            // 有機物が沈降して栄養が抜ける。沿岸と湧昇域だけが補われる
+            // 帳簿は更新の前後の差で測る。式を分けると FMA の丸めが変わり結果がずれるため、更新の式は元のまま
+            float n0=soil_n[i];
+            soil_n[i]-=soil_n[i]*N_SINK;
+            float n1=soil_n[i];
+            soil_n[i]+=N_RUNOFF*shelf[i]*shelf[i];
+            g_bud.n_sink+=n1-n0; g_bud.n_runoff+=soil_n[i]-n1;
+            if(upwell[i]){ float n2=soil_n[i]; soil_n[i]+=N_UPWELL; g_bud.n_upwell+=soil_n[i]-n2; }
+            float pre=soil_n[i];
+            if(soil_n[i]<0.f) soil_n[i]=0.f;
+            g_bud.n_clamp+=soil_n[i]-pre;
         }
     }
+    // 背景の降水: 降水の場の陸の平均を、条件の年降水量 P_BG_ANN_MM に結びつける(場所ごとの比は降水の場が決める)
+    const float pscale=precip_land_mean>0.0
+        ? (float)(P_BG_ANN_MM/YEAR_MIN*DT/SOIL_W_MM/precip_land_mean) : 0.f;
+    const float ks=GW_KS_MM*(float)DT/SOIL_W_MM;           // 浸透の上限(1 tick)
+    const float rs=SOLAR_S0*CLEAR_SKY_TAU*CLOUD_SW_RATIO*g_sun;   // 地表の短波 W/m²(晴天 × 雲の比)
+    const float lw_cloud=1.35f*CLOUD_SW_RATIO-0.35f;             // FAO-56 の長波の雲の係数
+    const bool  day=g_sun>0.f;
+    // 可能蒸発 kg/m²/s を 1 tick の土の水の単位へ(1 kg/m² = 1 mm)
+    const float e_unit=60.f*(float)DT/SOIL_W_MM;
+    static std::vector<double> r_rain(GRID_H), r_evap(GRID_H);
+    parallel_for(0,GRID_H,[&](int ya,int yb){
+        for(int y=ya;y<yb;y++){
+            float wet=1.f+0.45f*LAT_N*ph;             // 雨季と乾季(北半球)
+            if(wet<0.f) wet=0.f;
+            double wr=0, we=0;
+            for(int x=0;x<GRID_W;x++){
+                int i=idx(x,y);
+                if(sea[i]) continue;
+                float inf=std::min(precip[i]*wet*pscale,ks);
+                if(inf>0.f) wr+=infiltrate(i,inf);
+                if(!day || soil_water[i]<=0.f) continue;
+                // Priestley–Taylor。飽和水蒸気圧はテテンの式、Δ はその傾き、乾湿計定数は標高の気圧から(FAO-56)
+                float T=temper[i];
+                float es=0.6108f*std::exp(17.27f*T/(T+237.3f));         // kPa
+                float del=4098.f*es/((T+237.3f)*(T+237.3f));
+                float z=altitude(i)*ELEV_M;
+                float pk=101.3f*std::pow((293.f-0.0065f*z)/293.f,5.26f);
+                float gam=0.000665f*pk;
+                float ea=rel_humidity(i)*es;
+                float tk=T+273.16f;
+                float rnl=SB_SIGMA*tk*tk*tk*tk*(0.34f-0.14f*std::sqrt(std::max(0.f,ea)))*lw_cloud;
+                float rn=(1.f-SURF_ALBEDO)*rs-rnl;
+                if(rn<=0.f) continue;                  // 正味放射が負なら蒸発しない(露は置かない)
+                float pet=PT_ALPHA*del/(del+gam)*rn/LATENT_VAP*e_unit;
+                float beta=std::min(1.f,soil_water[i]/(EVAP_BETA_FRAC*FIELD_CAP));
+                float e=std::min(soil_water[i],pet*beta*ground_frac[i]);
+                soil_water[i]-=e;
+                we-=e;
+            }
+            r_rain[y]=wr; r_evap[y]=we;
+        }
+    });
+    for(int y=0;y<GRID_H;y++){ g_bud.w_rain+=r_rain[y]; g_bud.w_evap+=r_evap[y]; }   // 足す順を固定する
 }
 
 // 地下水の流れ(ダルシーの式、ブシネスクの近似)。水頭 = 岩盤の高さ + 飽和した厚さ。
