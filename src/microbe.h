@@ -26,16 +26,20 @@ void update_microbes(){
         if(cb<ce && frand(0.f,1.f)<MICROBE_TURNOVER){ a_burn(co2.data(),o2.data(),ci,std::max(0.f,m.energy)); m.alive=false; d_micro++; continue; }
         // 分解の速さは基質の量に比例する(一次反応)。マスにある死骸のすべてに同じ割合で取りつく
         // 1 回の更新(STRIDE tick)で分解される割合は、指数の形で換算する
-        float dfrac=(cb<ce)? -std::expm1(-MICROBE_DECOMP_K*m.rate*act*(float)(MICROBE_STRIDE*DT)) : 0.f;
+        // 率は基質で違う: 動物由来は MICROBE_DECOMP_K、植物由来(リグニンとセルロース)は MICROBE_DECOMP_K_P
+        float dfa=(cb<ce)? -std::expm1(-MICROBE_DECOMP_K*m.rate*act*(float)(MICROBE_STRIDE*DT)) : 0.f;
+        float dfp=(cb<ce)? -std::expm1(-MICROBE_DECOMP_K_P*m.rate*act*(float)(MICROBE_STRIDE*DT)) : 0.f;
         // 取り込みの上限。マスの死骸から取れる量が上限を超えるときは、すべての死骸から取る割合を同じ比で下げる
+        float capf=1.f;
         if(cb<ce){
-            float avail=0.f; for(int t=cb;t<ce;t++) avail+=corpses[cgrid.items[t]].energy;
+            float want=0.f; for(int t=cb;t<ce;t++){ const Corpse& c=corpses[cgrid.items[t]]; want+=c.energy*(c.origin==0?dfp:dfa); }
             float vcap=MICROBE_VMAX*act*std::max(0.f,m.energy)*(float)(MICROBE_STRIDE*DT);
             g_mic_upd++;
-            if(avail*dfrac>vcap){ dfrac=vcap/avail; g_mic_cap++; }
+            if(want>vcap){ capf=vcap/want; g_mic_cap++; }
         }
         for(int t=cb;t<ce;t++){
             int pk=cgrid.items[t];
+            float dfrac=(corpses[pk].origin==0?dfp:dfa)*capf;
             float dec=corpses[pk].energy*dfrac;
             // 分解した割合だけ、死骸の窒素も無機化して土へ出る
             float dn=corpses[pk].n*std::min(1.f,dec/std::max(1e-9f,corpses[pk].energy));
