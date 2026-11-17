@@ -17,4 +17,5 @@ git -C "$R" rev-parse "$commit" > commit.txt
 clang++ -std=c++17 -O2 phase3.cpp -o phase3 $(pkg-config --cflags --libs sfml-graphics) -framework IOKit -framework CoreFoundation > build.log 2>&1 \
   || { echo "$(date '+%F %T') fail(build) | $name" >> "$DONE"; exit 1; }
 read -ra A <<< "$args"
-nohup sh -c 'caffeinate -i ./phase3 "$@" > run.log 2>&1; echo "exit=$? $(date)" > done.txt' sh "${A[@]}" < /dev/null > /dev/null 2>&1 &
+# 終わったら tools/compact_run.sh で小さくする(一番新しいセーブだけ圧縮して残す。作者が 2026-11-17 に追加)
+R="$R" nohup sh -c 'caffeinate -i ./phase3 "$@" > run.log 2>&1; echo "exit=$? $(date)" > done.txt; "$R/tools/compact_run.sh" "$PWD" >> done.txt 2>&1' sh "${A[@]}" < /dev/null > /dev/null 2>&1 &
