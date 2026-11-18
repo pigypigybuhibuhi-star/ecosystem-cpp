@@ -65,6 +65,32 @@ void slide_at(int ci){
     // 表土の窒素と土砂を到達点へ運ぶ。崩れた跡は SLIDE_DEPTH_M だけ低くなり、傾斜が緩む
     float moved=soil_n[ci]*0.65f;
     soil_n[ci]-=moved; soil_n[cur]+=moved;
+    // 崩れた層(地表から SLIDE_DEPTH_M)の間隙に飽和していた地下水は、土砂と一緒に到達点へ運ばれる(保存則。塩も同じ割合で)
+    // 崩れた跡の帯水層は崩れる層の下までになり、同じ水で同じ場所が崩れ続けることはない
+    {
+        float wet=GW_DEPTH_M-SLIDE_DEPTH_M;
+        float ex=gw_h[ci]-wet;
+        if(ex>0.f){
+            float sx=gw_h[ci]>0.f? salt_gw[ci]*(ex/gw_h[ci]) : 0.f;
+            gw_h[ci]=wet; salt_gw[ci]-=sx;
+            if(salt_gw[ci]<0.f){ g_bud.s_clamp-=salt_gw[ci]; salt_gw[ci]=0.f; }
+            if(sea[cur]){                             // 海に入った土砂の水は海へ出る(海の水と塩は帳簿の外)
+                g_bud.w_gw_sea-=(double)ex*GW_W; g_bud.s_sea-=sx;
+            } else {
+                float put=std::min(ex,std::max(0.f,GW_DEPTH_M-gw_h[cur]));
+                gw_h[cur]+=put;
+                float sput=ex>0.f? sx*(put/ex) : 0.f;
+                salt_gw[cur]+=sput;
+                // 帯水層に入りきらない分は、湧き出しと同じく根の層を満たし、残りは地表を流れ去る
+                float rest=(ex-put)*GW_W, srest=sx-sput;
+                float add=std::min(rest,std::max(0.f,FIELD_CAP-soil_water[cur]));
+                soil_water[cur]+=add;
+                float sadd=rest>0.f? srest*(add/rest) : 0.f;
+                salt_soil[cur]+=sadd;
+                g_bud.w_gw_out-=(double)(rest-add); g_bud.s_out-=(double)(srest-sadd);
+            }
+        }
+    }
     float dz=SLIDE_DEPTH_M/ELEV_M;
     elev[ci]-=dz;
     if(sea[cur]) elev[cur]=std::min(elev[cur]+dz,SEA_LEVEL-1e-6f);  // 海底に沈む。海面より上に出る分は沖へ散る(土砂は帳簿の量ではない)
