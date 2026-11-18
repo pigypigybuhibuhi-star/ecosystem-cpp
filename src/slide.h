@@ -23,6 +23,10 @@ void rebuild_sgrid(){
     sgrid_ok=true;
 }
 void slide_at(int ci){
+    // 崩れる厚さは風化層の厚さを超えない(岩盤は崩れない)。風化層が無ければ崩れない
+    // (崩れの判定と地震は厚さ SLIDE_DEPTH_M 以上の所でしか呼ばない。薄い所に来るのは再生の記録の件だけ)
+    const float sd=std::min(SLIDE_DEPTH_M,regolith[ci]);
+    if(sd<=0.f) return;
     // 到達点を決める
     float z0=elev[ci];
     int cur=ci; float run=0.f;
@@ -66,9 +70,10 @@ void slide_at(int ci){
     float moved=soil_n[ci]*0.65f;
     soil_n[ci]-=moved; soil_n[cur]+=moved;
     // 崩れた層(地表から SLIDE_DEPTH_M)の間隙に飽和していた地下水は、土砂と一緒に到達点へ運ばれる(保存則。塩も同じ割合で)
-    // 崩れた跡の帯水層は崩れる層の下までになり、同じ水で同じ場所が崩れ続けることはない
+    // 岩盤の高さは崩れで変わらない。崩れた跡の風化層は SLIDE_DEPTH_M だけ薄くなり、崩土が積もった所は同じだけ厚くなる。
+    // 積もった所の地下水面の高さ(標高)は崩土が乗っても変わらず、地表からの深さが増す(崩土の間隙は、運ばれてきた水の分だけ満ちる)
     {
-        float wet=GW_DEPTH_M-SLIDE_DEPTH_M;
+        float wet=regolith[ci]-sd;
         float ex=gw_h[ci]-wet;
         if(ex>0.f){
             float sx=gw_h[ci]>0.f? salt_gw[ci]*(ex/gw_h[ci]) : 0.f;
@@ -77,7 +82,7 @@ void slide_at(int ci){
             if(sea[cur]){                             // 海に入った土砂の水は海へ出る(海の水と塩は帳簿の外)
                 g_bud.w_gw_sea-=(double)ex*GW_W; g_bud.s_sea-=sx;
             } else {
-                float put=std::min(ex,std::max(0.f,GW_DEPTH_M-gw_h[cur]));
+                float put=std::min(ex,std::max(0.f,regolith[cur]+sd-gw_h[cur]));
                 gw_h[cur]+=put;
                 float sput=ex>0.f? sx*(put/ex) : 0.f;
                 salt_gw[cur]+=sput;
@@ -91,7 +96,9 @@ void slide_at(int ci){
             }
         }
     }
-    float dz=SLIDE_DEPTH_M/ELEV_M;
+    regolith[ci]-=sd;
+    if(!sea[cur]) regolith[cur]+=sd;
+    float dz=sd/ELEV_M;
     elev[ci]-=dz;
     if(sea[cur]) elev[cur]=std::min(elev[cur]+dz,SEA_LEVEL-1e-6f);  // 海底に沈む。海面より上に出る分は沖へ散る(土砂は帳簿の量ではない)
     else         elev[cur]+=dz;
@@ -99,11 +106,11 @@ void slide_at(int ci){
     slope_around(ci); slope_around(cur);
 }
 // 無限斜面の安全率 FS = c'/(γ z sinα cosα) + (1 − m γw/γ) tanφ'/tanα。m は崩れる厚さのうち地下水で飽和した割合
-// (帯水層は地表から GW_DEPTH_M の厚さで、飽和した厚さ gw_h が GW_DEPTH_M − SLIDE_DEPTH_M を超えた分が崩れる層に入る)
+// (帯水層は地表から風化層の厚さ regolith まで。飽和した厚さ gw_h が regolith − SLIDE_DEPTH_M を超えた分が崩れる層に入る)
 inline double slope_fs(int ci){
     double s=slope[ci];
     double h=std::sqrt(1.0+s*s), sa=s/h, ca=1.0/h;
-    double m=std::min(1.0,std::max(0.0,(double)(gw_h[ci]-(GW_DEPTH_M-SLIDE_DEPTH_M))/SLIDE_DEPTH_M));
+    double m=std::min(1.0,std::max(0.0,(double)(gw_h[ci]-(regolith[ci]-SLIDE_DEPTH_M))/SLIDE_DEPTH_M));
     return SLOPE_C_KPA/(SLOPE_GAMMA*SLIDE_DEPTH_M)/(sa*ca)+(1.0-m*WATER_GAMMA/SLOPE_GAMMA)*REPOSE_SLOPE/s;
 }
 void update_slides(){
@@ -112,9 +119,10 @@ void update_slides(){
         ev_replay_due(EV_SLIDE,[](const EnvEvent& e){ slide_at(idx(e.x,e.y)); });
         return;
     }
-    const float wet=GW_DEPTH_M-SLIDE_DEPTH_M;
     for(int ci=0;ci<GRID_W*GRID_H;ci++){
-        if(sea[ci]||gw_h[ci]<=wet||slope[ci]<=0.f) continue;   // 乾いた斜面は FS > 1(粘着力と摩擦だけで立つ)
+        // 風化層が崩れる厚さより薄い所は岩盤が出ており、表層崩壊は起きない
+        if(sea[ci]||regolith[ci]<SLIDE_DEPTH_M||slope[ci]<=0.f) continue;
+        if(gw_h[ci]<=regolith[ci]-SLIDE_DEPTH_M) continue;   // 乾いた斜面は FS > 1(粘着力と摩擦だけで立つ)
         if(slope_fs(ci)>=1.0) continue;
         slide_at(ci);
     }

@@ -938,7 +938,7 @@ int main(int argc,char** argv){
                            slide_events, quake_events); }
                   { int nl=0, nsat=0, ngs=0, nss=0; float cold=0.f; double sh=0, smax=0;
                     for(int i=0;i<GRID_W*GRID_H;i++){ if(sea[i]) continue; nl++; cold=std::min(cold,storm_dT[i]);
-                        sh+=gw_h[i]; if(gw_h[i]>=GW_DEPTH_M*0.999f) nsat++;
+                        sh+=gw_h[i]; if(gw_h[i]>=regolith[i]*0.999f) nsat++;
                         if(gw_h[i]>0.f && salt_gw[i]/(gw_h[i]*GW_W)>1.f) ngs++;   // 1 g/kg を超えると淡水ではない(汽水)
                         float ss=soil_salinity(i); if(ss>1.f) nss++; smax=std::max(smax,(double)ss); }
                     printf("      groundwater: saturated thickness land mean %.3f m | water table at surface %d cells\n",

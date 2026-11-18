@@ -64,7 +64,7 @@ inline float water_target(int i,float wet){
 inline float infiltrate(int i,float inf){
     float add=std::min(inf,std::max(0.f,FIELD_CAP-soil_water[i]));
     soil_water[i]+=add;
-    float perc=std::max(0.f,std::min((inf-add)/GW_W,GW_DEPTH_M-gw_h[i]));
+    float perc=std::max(0.f,std::min((inf-add)/GW_W,regolith[i]-gw_h[i]));
     gw_h[i]+=perc;
     if(perc>0.f && salt_soil[i]>0.f){
         float pw=perc*GW_W;
@@ -160,7 +160,7 @@ void update_groundwater(int frame){
     static std::vector<double> rs_sea(GRID_H), rs_edge(GRID_H), rs_out(GRID_H), rs_clamp(GRID_H);
     parallel_for(0,GRID_H,[&](int ya,int yb){
         for(int i=ya*GRID_W;i<yb*GRID_W;i++){
-            head[i]=sea[i]?0.f:(elev[i]-SEA_LEVEL)*ELEV_M-GW_DEPTH_M+gw_h[i];
+            head[i]=sea[i]?0.f:(elev[i]-SEA_LEVEL)*ELEV_M-regolith[i]+gw_h[i];
             // 帯水層の水の塩分(g/kg)。水が無ければ 0
             conc[i]=sea[i]?SEA_SALT:(gw_h[i]>0.f?salt_gw[i]/(gw_h[i]*GW_W):0.f);
         } });
@@ -208,8 +208,8 @@ void update_groundwater(int frame){
                 if(h<0.f){ cl-=h*GW_W; h=0.f; }
                 if(h<=0.f){ scl-=sg; sg=0.f; }          // 水が無くなったマスに残る塩は、水の切り捨てと一緒に消える(0 であるべき)
                 else if(sg<0.f){ scl-=sg; sg=0.f; }
-                if(h>GW_DEPTH_M){
-                    float ex=(h-GW_DEPTH_M)*GW_W;      // 湧き出す水(土の水の単位)
+                if(h>regolith[i]){
+                    float ex=(h-regolith[i])*GW_W;      // 湧き出す水(土の水の単位)
                     float cs=sg/(h*GW_W);              // 湧く水の塩分
                     float add=std::min(ex,std::max(0.f,FIELD_CAP-soil_water[i]));
                     soil_water[i]+=add;
@@ -219,7 +219,7 @@ void update_groundwater(int frame){
                     sout-=s_ex-s_add;
                     sg-=s_ex;
                     if(sg<0.f){ scl-=sg; sg=0.f; }
-                    h=GW_DEPTH_M;
+                    h=regolith[i];
                 }
                 gw_h[i]=h; salt_gw[i]=sg;
             }

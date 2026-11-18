@@ -30,7 +30,9 @@ double precip_land_mean=0;             // 降水の場の陸の平均(背景の�
 std::vector<float> ground_frac(GRID_W*GRID_H, 1.f);   // 植物の林冠を抜けて地面に届く光の割合(光合成の計算が毎 tick 書く。昼だけ)
 std::vector<float> soil_water(GRID_W*GRID_H, 0.f);
 std::vector<float> soil_n(GRID_W*GRID_H, SOIL_N_BASE);
-std::vector<float> gw_h(GRID_W*GRID_H, 0.f);   // 陸の帯水層の飽和した厚さ(m、0〜GW_DEPTH_M)。海のマスは使わない
+std::vector<float> gw_h(GRID_W*GRID_H, 0.f);   // 陸の帯水層の飽和した厚さ(m、0〜regolith)。海のマスは使わない
+// 岩盤の上の風化層(帯水層)の厚さ(m)。始まりは条件 GW_DEPTH_M。崖崩れで崩れた跡は薄く、崩土が積もった所は厚くなる(岩盤の高さは崩れで変わらない)
+std::vector<float> regolith(GRID_W*GRID_H, GW_DEPTH_M);
 // 塩の在庫(陸のマスだけ。海は塩分 SEA_SALT で一定の外の溜め)。単位は「g/kg × 土の水の単位」で、水の量で割ると濃さ g/kg になる
 std::vector<float> salt_soil(GRID_W*GRID_H, 0.f);   // 根の層の土の水に溶けた塩(と、飽和を超えて結晶になった塩)
 std::vector<float> salt_gw(GRID_W*GRID_H, 0.f);     // 帯水層の水に溶けた塩

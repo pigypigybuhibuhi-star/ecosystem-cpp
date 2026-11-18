@@ -300,7 +300,7 @@ const float STORM_I_MEAN    = 30.0f;   // mm/h
 const float STORM_I_MAX     = 150.0f;  // 観測される最大級の降水強度(計算の安全のため)
 // 土の水 1.0 が何 mm にあたるか。根の届く層の有効水分量(50〜200 mm)の中ほど
 const float SOIL_W_MM       = 100.0f;
-// 地下水(D-2026-10-26-2 の答え (a))。岩盤の上の風化した土と砂礫の層を、一定の厚さの帯水層として置く(条件)。
+// 地下水(D-2026-10-26-2 の答え (a))。岩盤の上の風化した土と砂礫の層を帯水層として置く。始まりの厚さはどこも GW_DEPTH_M(条件)で、崖崩れが土砂を動かすと変わる(state.h の regolith)。
 // 斜面の風化層の厚さは 1〜5 m(Heimsath et al. 1997)。比産出率(重力で抜ける間隙の割合)は砂質の土で 0.1〜0.3(Johnson 1967)
 const float GW_DEPTH_M      = 3.0f;
 const float GW_SY           = 0.2f;

@@ -45,6 +45,7 @@ float quake_shake(float mag,float ex,bool slides=true){
         if(!slides) continue;
         double s=slope[ci];
         if(sea[ci]||s<=0.0) continue;
+        if(regolith[ci]<SLIDE_DEPTH_M) continue;   // 岩盤が出ている所は表層崩壊が起きない(乱数を引かない)
         double sa=s/std::sqrt(1.0+s*s);
         double fs=slope_fs(ci), ac=(fs-1.0)*sa;
         if(A<=ac) continue;                         // 限界加速度に届かない斜面は動かない(乱数を引かない)
