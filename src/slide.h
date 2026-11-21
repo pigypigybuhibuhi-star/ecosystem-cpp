@@ -28,24 +28,33 @@ void slide_at(int ci){
     const float sd=std::min(SLIDE_DEPTH_M,regolith[ci]);
     if(sd<=0.f) return;
     // 到達点を決める
+    // 区画の端の外は開いた境界。東西南北の端の外の地表は、端のマスと一つ内側のマスの傾きがそのまま続くとし
+    // (地下水の端と同じ外挿)、そこが最も急な下りなら土砂は区画の外へ出る(土砂・地下水・塩・窒素・巻き込まれた生き物は帳簿の端の出口に数える)
     float z0=elev[ci];
-    int cur=ci; float run=0.f;
+    int cur=ci; float run=0.f; bool out=false;
     for(int st=0;st<SLIDE_RUN_MAX;st++){
-        int x=cur%GRID_W, y=cur/GRID_W, lo=-1; float le=elev[cur], ld=0.f;
+        int x=cur%GRID_W, y=cur/GRID_W, lo=-1; float le=elev[cur], ld=0.f; bool lo_out=false;
         for(int dy=-1;dy<=1;dy++) for(int dx=-1;dx<=1;dx++){
             if(!dx&&!dy) continue;
             int nx=x+dx, ny=y+dy;
-            if(nx<0||nx>=GRID_W) continue;
-            if(ny<0||ny>=GRID_H) continue;
-            int j=idx(nx,ny); if(elev[j]<le){ le=elev[j]; lo=j; ld=(dx&&dy)?1.41421356f:1.f; } }
+            if(nx<0||nx>=GRID_W||ny<0||ny>=GRID_H){
+                if(dx&&dy) continue;                  // 斜めの外は、東西南北の外挿で代表させる
+                int ox=x-dx, oy=y-dy;
+                if(ox<0||ox>=GRID_W||oy<0||oy>=GRID_H) continue;
+                float eo=2.f*elev[cur]-elev[idx(ox,oy)];
+                if(eo<le){ le=eo; lo=cur; ld=1.f; lo_out=true; }
+                continue;
+            }
+            int j=idx(nx,ny); if(elev[j]<le){ le=elev[j]; lo=j; ld=(dx&&dy)?1.41421356f:1.f; lo_out=false; } }
         if(lo<0) break;                               // 窪地。ここに溜まる
         float r2=run+ld*CELL_M;
         if(st>0 && (z0-le)*ELEV_M<SLIDE_HL*r2) break; // 見通し角が H/L を下回る
+        if(lo_out){ out=true; run=r2; break; }        // 端の外へ出る
         cur=lo; run=r2;
         if(sea[cur]) break;                           // 海に入ったらそこで沈む
     }
     // 下りが無ければ土砂は動けない。滑りは起きず、生き物も地形も変わらない
-    if(cur==ci) return;
+    if(cur==ci && !out) return;
     slide_events++;
     ev_record(EV_SLIDE,ci%GRID_W,ci/GRID_W,slope[ci]);
     if(!sgrid_ok) rebuild_sgrid();
@@ -55,7 +64,12 @@ void slide_at(int ci){
         if(!p.alive) continue;
         p.alive=false;
         // 体の炭素(建設に払った GROW_COST ぶん)と残りのエネルギーは死骸として崩土と一緒に運ばれる
-        corpses.push_back({dep_x,dep_y,std::max(0.f,p.energy)+p.height*GROW_COST,0,p.n_store+p.height*N_PER_GROWTH});
+        float pe=std::max(0.f,p.energy)+p.height*GROW_COST, pn=p.n_store+p.height*N_PER_GROWTH;
+        if(out){                                      // 区画の外へ出た死骸は土地の外との出入り(負)
+            g_bud.c_immig-=(p.energy+p.height*GROW_COST)*CO2_PER_ENERGY; g_bud.n_immig-=pn;
+            continue;
+        }
+        corpses.push_back({dep_x,dep_y,pe,0,pn});
     }
     // 巻き込まれた動物は埋まって死ぬ(潜っていても、木の上にいても、立っている表土ごと流される)
     for(auto& a:animals){
@@ -64,11 +78,13 @@ void slide_at(int ci){
         if(gx<0||gx>=GRID_W||gy<0||gy>=GRID_H||idx(gx,gy)!=ci) continue;
         a.alive=false; d_slide++;
         life_note(a.id,g_frame,"崖崩れ",(float)a.age);
+        if(out){ g_bud.c_immig-=(a.energy+a.fat+a.body*CORPSE_RETURN)*CO2_PER_ENERGY; continue; }
         corpses.push_back({dep_x,dep_y,a.body*CORPSE_RETURN+std::max(0.f,a.energy)+a.fat,1});
     }
     // 表土の窒素と土砂を到達点へ運ぶ。崩れた跡は SLIDE_DEPTH_M だけ低くなり、傾斜が緩む
     float moved=soil_n[ci]*0.65f;
-    soil_n[ci]-=moved; soil_n[cur]+=moved;
+    soil_n[ci]-=moved;
+    if(out) g_bud.n_edge-=moved; else soil_n[cur]+=moved;
     // 崩れた層(地表から SLIDE_DEPTH_M)の間隙に飽和していた地下水は、土砂と一緒に到達点へ運ばれる(保存則。塩も同じ割合で)
     // 岩盤の高さは崩れで変わらない。崩れた跡の風化層は SLIDE_DEPTH_M だけ薄くなり、崩土が積もった所は同じだけ厚くなる。
     // 積もった所の地下水面の高さ(標高)は崩土が乗っても変わらず、地表からの深さが増す(崩土の間隙は、運ばれてきた水の分だけ満ちる)
@@ -79,7 +95,9 @@ void slide_at(int ci){
             float sx=gw_h[ci]>0.f? salt_gw[ci]*(ex/gw_h[ci]) : 0.f;
             gw_h[ci]=wet; salt_gw[ci]-=sx;
             if(salt_gw[ci]<0.f){ g_bud.s_clamp-=salt_gw[ci]; salt_gw[ci]=0.f; }
-            if(sea[cur]){                             // 海に入った土砂の水は海へ出る(海の水と塩は帳簿の外)
+            if(out){                                  // 区画の外へ出た土砂の水と塩は端の出口に数える
+                g_bud.w_gw_edge-=(double)ex*GW_W; g_bud.s_edge-=sx;
+            } else if(sea[cur]){                      // 海に入った土砂の水は海へ出る(海の水と塩は帳簿の外)
                 g_bud.w_gw_sea-=(double)ex*GW_W; g_bud.s_sea-=sx;
             } else {
                 float put=std::min(ex,std::max(0.f,regolith[cur]+sd-gw_h[cur]));
@@ -97,13 +115,15 @@ void slide_at(int ci){
         }
     }
     regolith[ci]-=sd;
-    if(!sea[cur]) regolith[cur]+=sd;
     float dz=sd/ELEV_M;
     elev[ci]-=dz;
-    if(sea[cur]) elev[cur]=std::min(elev[cur]+dz,SEA_LEVEL-1e-6f);  // 海底に沈む。海面より上に出る分は沖へ散る(土砂は帳簿の量ではない)
-    else         elev[cur]+=dz;
+    if(!out){                                         // 区画の外へ出た土砂は外に積もる(土砂は帳簿の量ではない)
+        if(!sea[cur]) regolith[cur]+=sd;
+        if(sea[cur]) elev[cur]=std::min(elev[cur]+dz,SEA_LEVEL-1e-6f);  // 海底に沈む。海面より上に出る分は沖へ散る(土砂は帳簿の量ではない)
+        else         elev[cur]+=dz;
+    }
     if(!sea[ci] && elev[ci]<SEA_LEVEL) elev[ci]=SEA_LEVEL;           // 陸のまま(海の判定は起動時の地形で決まる)
-    slope_around(ci); slope_around(cur);
+    slope_around(ci); if(cur!=ci) slope_around(cur);
 }
 // 無限斜面の安全率 FS = c'/(γ z sinα cosα) + (1 − m γw/γ) tanφ'/tanα。m は崩れる厚さのうち地下水で飽和した割合
 // (帯水層は地表から風化層の厚さ regolith まで。飽和した厚さ gw_h が regolith − SLIDE_DEPTH_M を超えた分が崩れる層に入る)
@@ -119,13 +139,18 @@ void update_slides(){
         ev_replay_due(EV_SLIDE,[](const EnvEvent& e){ slide_at(idx(e.x,e.y)); });
         return;
     }
+    // 崩れるかどうかは、その tick の初めの地形と地下水で全部のマスを一斉に判定してから崩す(同時の更新)。
+    // 調べる順に崩れの結果を書き換えながら判定すると、崩れが 1 分の中で添字の順の向きにだけ隣へ伝わるため
+    static std::vector<int> due;
+    due.clear();
     for(int ci=0;ci<GRID_W*GRID_H;ci++){
         // 風化層が崩れる厚さより薄い所は岩盤が出ており、表層崩壊は起きない
         if(sea[ci]||regolith[ci]<SLIDE_DEPTH_M||slope[ci]<=0.f) continue;
         if(gw_h[ci]<=regolith[ci]-SLIDE_DEPTH_M) continue;   // 乾いた斜面は FS > 1(粘着力と摩擦だけで立つ)
         if(slope_fs(ci)>=1.0) continue;
-        slide_at(ci);
+        due.push_back(ci);
     }
+    for(int ci:due) slide_at(ci);
 }
 
 // 索引は、生物が生まれたり死んだりするたびに古くなる。

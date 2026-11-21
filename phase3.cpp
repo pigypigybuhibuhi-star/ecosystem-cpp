@@ -855,7 +855,7 @@ int main(int argc,char** argv){
                     static bool have=false; static double pc=0,po=0,pn=0,pw=0,pcb=0,pst=0;
                     if(have){
                         double cext=g_bud.c_relax+g_bud.c_edge+g_bud.c_trans+g_bud.c_immig;
-                        double next=g_bud.n_sink+g_bud.n_runoff+g_bud.n_upwell+g_bud.n_clamp+g_bud.n_fix+g_bud.n_fire+g_bud.n_carn+g_bud.n_immig;
+                        double next=g_bud.n_sink+g_bud.n_runoff+g_bud.n_upwell+g_bud.n_clamp+g_bud.n_fix+g_bud.n_fire+g_bud.n_carn+g_bud.n_immig+g_bud.n_edge;
                         printf("      budget C: atm(dev) %.1f bio %.1f (P %.1f A %.1f dead %.1f mic %.1f) | dC %+.2f = ext %+.2f (relax %+.2f edge %+.2f trans %+.3f immig %+.2f) + internal %+.2f\n",
                                catm,cbio,ep*CO2_PER_ENERGY,ea*CO2_PER_ENERGY,ec*CO2_PER_ENERGY,em*CO2_PER_ENERGY,
                                ctot-pc,cext,g_bud.c_relax,g_bud.c_edge,g_bud.c_trans,g_bud.c_immig,ctot-pc-cext);
@@ -865,8 +865,8 @@ int main(int argc,char** argv){
                         double oint=oatm-po-g_bud.o_relax-g_bud.o_edge-g_bud.o_trans;
                         printf("      budget O2: atm(dev) %.1f | dO2 %+.2f = relax %+.2f edge %+.2f trans %+.3f + internal %+.2f (dCbio %+.2f, redox %+.2f)\n",
                                oatm,oatm-po,g_bud.o_relax,g_bud.o_edge,g_bud.o_trans,oint,cbio-pcb-g_bud.c_immig,oint-(cbio-pcb-g_bud.c_immig));
-                        printf("      budget N: soil land %.1f sea %.1f plant %.1f dead %.1f | dN %+.2f = sink %+.2f runoff %+.2f upwell %+.2f clamp %+.3f fix %+.2f fire %+.3f carn %+.3f immig %+.3f + internal %+.2f\n",
-                               nl,ns,np,nc,ntot-pn,g_bud.n_sink,g_bud.n_runoff,g_bud.n_upwell,g_bud.n_clamp,g_bud.n_fix,g_bud.n_fire,g_bud.n_carn,g_bud.n_immig,ntot-pn-next);
+                        printf("      budget N: soil land %.1f sea %.1f plant %.1f dead %.1f | dN %+.2f = sink %+.2f runoff %+.2f upwell %+.2f clamp %+.3f fix %+.2f fire %+.3f carn %+.3f immig %+.3f edge %+.3f + internal %+.2f\n",
+                               nl,ns,np,nc,ntot-pn,g_bud.n_sink,g_bud.n_runoff,g_bud.n_upwell,g_bud.n_clamp,g_bud.n_fix,g_bud.n_fire,g_bud.n_carn,g_bud.n_immig,g_bud.n_edge,ntot-pn-next);
                         double wext=g_bud.w_rain+g_bud.w_evap+g_bud.w_transp+g_bud.w_sea+g_bud.w_storm
                                    +g_bud.w_gw_sea+g_bud.w_gw_edge+g_bud.w_gw_out+g_bud.w_gw_clamp;
                         printf("      budget W: soil land %.1f plant %.1f ground %.1f | dW %+.2f = rain %+.2f evap %+.2f transp %+.2f sea %+.3f storm %+.2f gwSea %+.2f gwEdge %+.2f gwOut %+.2f gwClamp %+.3f + internal %+.2f\n",
