@@ -22,6 +22,9 @@ void rebuild_sgrid(){
     }
     sgrid_ok=true;
 }
+// 計測だけ(取り込まない): 崩れの各件を slide_probe.csv に書く。世界には返さない
+static FILE* g_sprobe=nullptr;
+static std::vector<int> g_sp_n, g_sp_dep, g_sp_last;
 void slide_at(int ci){
     // 崩れる厚さは風化層の厚さを超えない(岩盤は崩れない)。風化層が無ければ崩れない
     // (崩れの判定と地震は厚さ SLIDE_DEPTH_M 以上の所でしか呼ばない。薄い所に来るのは再生の記録の件だけ)
@@ -47,6 +50,22 @@ void slide_at(int ci){
     // 下りが無ければ土砂は動けない。滑りは起きず、生き物も地形も変わらない
     if(cur==ci) return;
     slide_events++;
+    {
+        const int NC=GRID_W*GRID_H;
+        if(!g_sprobe){ g_sprobe=fopen("slide_probe.csv","w"); fprintf(g_sprobe,"t,x,y,cur_x,cur_y,run_m,slope,regolith,gw_h,m,nprev,ndep,nb_recent,nb_upslope_recent,replay\n");
+            g_sp_n.assign(NC,0); g_sp_dep.assign(NC,0); g_sp_last.assign(NC,-1000000); }
+        int x=ci%GRID_W, y=ci/GRID_W, nbr=0, nbu=0;
+        for(int dy=-1;dy<=1;dy++) for(int dx=-1;dx<=1;dx++){
+            if(!dx&&!dy) continue; int nx=x+dx, ny=y+dy;
+            if(nx<0||nx>=GRID_W||ny<0||ny>=GRID_H) continue;
+            int j=idx(nx,ny);
+            if(g_frame-g_sp_last[j]<=60){ nbr++; if(elev[j]<elev[ci]) nbu++; }  // 下側の隣が直前に崩れた(上へ遡る)
+        }
+        double m=std::min(1.0,std::max(0.0,(double)(gw_h[ci]-(regolith[ci]-SLIDE_DEPTH_M))/SLIDE_DEPTH_M));
+        fprintf(g_sprobe,"%d,%d,%d,%d,%d,%.1f,%.4f,%.3f,%.3f,%.3f,%d,%d,%d,%d,%d\n",g_frame,x,y,cur%GRID_W,cur/GRID_W,run,slope[ci],regolith[ci],gw_h[ci],m,g_sp_n[ci],g_sp_dep[ci],nbr,nbu,(int)g_replay);
+        g_sp_n[ci]++; g_sp_dep[cur]++; g_sp_last[ci]=(int)g_frame;
+        if(slide_events%200==0) fflush(g_sprobe);
+    }
     ev_record(EV_SLIDE,ci%GRID_W,ci/GRID_W,slope[ci]);
     if(!sgrid_ok) rebuild_sgrid();
     float dep_x=(cur%GRID_W)+0.5f, dep_y=(cur/GRID_W)+0.5f;
